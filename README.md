@@ -4,6 +4,8 @@ Command-line interface for the Inspire HPC training platform.
 
 > **Access Restricted**: This tool is only available to Inspire platform members.
 
+> **Note**: This project was 99% vibe-coded with [Claude Code](https://claude.com/claude-code). Initial version by [@SII-Kazusa](https://github.com/SII-Kazusa).
+
 ## Installation
 
 ```bash
