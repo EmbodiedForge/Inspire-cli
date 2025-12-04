@@ -97,6 +97,11 @@ class Config:
     log_cache_dir: str = "~/.inspire/logs"
     remote_timeout: int = 90
 
+    # Sync settings
+    default_remote: str = "origin"
+    sync_workflow: str = "sync_code.yml"
+    sync_target_dir: Optional[str] = None
+
     @classmethod
     def from_env(cls, require_target_dir: bool = False) -> "Config":
         """Create configuration from environment variables.
@@ -180,6 +185,51 @@ class Config:
             github_workflow=os.getenv("INSP_GITHUB_WORKFLOW", "retrieve_job_log.yml"),
             github_token=os.getenv("INSP_GITHUB_TOKEN"),
             log_cache_dir=os.getenv("INSP_LOG_CACHE_DIR", "~/.inspire/logs"),
+            remote_timeout=_parse_remote_timeout(os.getenv("INSP_REMOTE_TIMEOUT", "90")),
+            default_remote=os.getenv("INSPIRE_DEFAULT_REMOTE", "origin"),
+            sync_workflow=os.getenv("INSPIRE_SYNC_WORKFLOW", "sync_code.yml"),
+            sync_target_dir=os.getenv("INSPIRE_SYNC_TARGET_DIR"),
+        )
+
+    @classmethod
+    def from_env_for_sync(cls) -> "Config":
+        """Create configuration for sync command (doesn't require platform credentials).
+
+        The sync command only needs GitHub access and sync settings, not Inspire
+        platform credentials.
+
+        Returns:
+            Config instance with sync-related settings
+
+        Raises:
+            ConfigError: If required environment variables are missing
+        """
+        # Check for sync target dir
+        sync_target_dir = os.getenv("INSPIRE_SYNC_TARGET_DIR")
+        if not sync_target_dir:
+            raise ConfigError(
+                "Missing INSPIRE_SYNC_TARGET_DIR environment variable.\n"
+                "This specifies the target directory on the Bridge where code will be synced.\n"
+                "Set it with: export INSPIRE_SYNC_TARGET_DIR='/path/to/shared/code/directory'"
+            )
+
+        # Check for GitHub repo
+        github_repo = os.getenv("INSP_GITHUB_REPO")
+        if not github_repo:
+            raise ConfigError(
+                "Missing INSP_GITHUB_REPO environment variable.\n"
+                "Set it with: export INSP_GITHUB_REPO='owner/repo'"
+            )
+
+        return cls(
+            # Use placeholder values for platform credentials since sync doesn't need them
+            username="",
+            password="",
+            github_repo=github_repo,
+            github_token=os.getenv("INSP_GITHUB_TOKEN"),
+            default_remote=os.getenv("INSPIRE_DEFAULT_REMOTE", "origin"),
+            sync_workflow=os.getenv("INSPIRE_SYNC_WORKFLOW", "sync_code.yml"),
+            sync_target_dir=sync_target_dir,
             remote_timeout=_parse_remote_timeout(os.getenv("INSP_REMOTE_TIMEOUT", "90")),
         )
 

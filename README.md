@@ -43,6 +43,10 @@ inspire --help
 # Check configuration and authentication
 inspire config check
 
+# Sync code to Bridge (before launching training)
+inspire sync                    # Sync current branch via origin
+inspire sync --remote upstream  # Sync via upstream remote
+
 # List available resources
 inspire resources list
 
@@ -63,6 +67,13 @@ inspire job logs <job-id> --tail 100
 ```
 
 ## Command Reference
+
+### Code Sync
+
+| Command | Description |
+|---------|-------------|
+| `inspire sync` | Sync local branch to Bridge shared filesystem |
+| `inspire sync --force` | Force sync, discarding any local changes on Bridge |
 
 ### Job Management
 
@@ -229,6 +240,94 @@ watch -n 30 "inspire job logs <job-id> --tail 100 --refresh"
 ```
 
 Logs are cached locally at `~/.inspire/logs/` and reused on subsequent calls.
+
+## Code Sync
+
+The `inspire sync` command pushes your local branch to GitHub and triggers a workflow on the Bridge runner to sync the code to the shared filesystem. This replaces the old PR-based workflow for launching training.
+
+### Setup
+
+1. **Copy the workflow file** to your repository:
+   ```bash
+   cp workflows/sync_code.yml YOUR_REPO/.github/workflows/
+   ```
+
+2. **Set local environment variables:**
+   ```bash
+   export INSP_GITHUB_REPO="owner/repo"           # Your GitHub repo
+   export INSPIRE_SYNC_TARGET_DIR="/path/to/dir"  # Target directory on Bridge
+   export INSPIRE_DEFAULT_REMOTE="origin"         # Optional, defaults to origin
+   ```
+
+### Usage
+
+```bash
+# Sync current branch to origin, then to Bridge
+inspire sync
+
+# Sync to a different remote
+inspire sync --remote upstream
+
+# Sync a specific branch
+inspire sync --branch feature/new-model
+
+# Force sync (discard local changes on Bridge)
+inspire sync --force
+
+# Don't wait for completion
+inspire sync --no-wait
+```
+
+### Typical Workflow
+
+```bash
+# 1. Make changes and commit
+git add . && git commit -m "feat: improve model"
+
+# 2. Sync to Bridge
+inspire sync
+# Output: ✓ Synced branch 'my-branch' (abc1234) to /shared/EBM_dev
+
+# 3. Launch training
+inspire job create --name "test-improve" --resource "4xH200" --command "bash train.sh"
+
+# 4. Monitor logs
+inspire job logs <job-id> --tail 100
+```
+
+### How It Works
+
+```
+Laptop (inspire sync)
+    ↓
+Git push to remote
+    ↓
+GitHub API (triggers sync_code.yml)
+    ↓
+Self-hosted Runner:
+    - cd to target directory
+    - git fetch && checkout branch
+    - git pull (or git reset --hard if --force)
+    ↓
+Returns commit SHA to confirm sync
+```
+
+### Handling Sync Errors
+
+If the Bridge has local changes or the branch has diverged, the sync will fail:
+
+```
+✗ Sync failed: failure
+  See: https://github.com/owner/repo/actions/runs/123456
+```
+
+To resolve, use `--force` to discard local changes on Bridge:
+
+```bash
+inspire sync --force
+```
+
+**Warning:** `--force` will run `git reset --hard` on the Bridge, discarding any uncommitted changes there.
 
 ### "Authentication failed"
 
