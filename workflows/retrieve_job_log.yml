@@ -1,0 +1,65 @@
+# Retrieve Job Log from Shared Filesystem
+#
+# This workflow runs on the Bridge self-hosted runner. It is triggered
+# manually via the GitHub Actions API (workflow_dispatch) by the
+# `inspire job logs` command running on a laptop. It reads a training
+# log file from the shared filesystem (the same mount used for
+# INSP_TARGET_DIR) and uploads it as an artifact.
+
+name: Retrieve Job Log
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: 'Inspire job ID'
+        required: true
+        type: string
+      remote_log_path:
+        description: 'Absolute path to training log on shared filesystem'
+        required: true
+        type: string
+      request_id:
+        description: 'Unique request id used to name the artifact'
+        required: true
+        type: string
+
+jobs:
+  retrieve-log:
+    runs-on: [self-hosted, qizhi-self-hosted]
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: Validate log path
+        run: |
+          LOG_PATH="${{ inputs.remote_log_path }}"
+
+          echo "Checking log path: $LOG_PATH"
+
+          if [ -z "$LOG_PATH" ]; then
+            echo "remote_log_path input is empty" >&2
+            exit 1
+          fi
+
+          if [ ! -f "$LOG_PATH" ]; then
+            echo "Log file not found at: $LOG_PATH" >&2
+            exit 1
+          fi
+
+      - name: Copy log into workspace
+        run: |
+          LOG_PATH="${{ inputs.remote_log_path }}"
+          JOB_ID="${{ inputs.job_id }}"
+
+          mkdir -p logs
+          cp "$LOG_PATH" "logs/job-${JOB_ID}.log"
+
+      - name: Upload log artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: job-${{ inputs.job_id }}-log-${{ inputs.request_id }}
+          path: logs/job-${{ inputs.job_id }}.log
+          retention-days: 1

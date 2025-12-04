@@ -6,26 +6,8 @@ Command-line interface for the Inspire HPC training platform.
 
 ## Installation
 
-### Option 1: Install from Private GitHub Repository
-
 ```bash
-# Using HTTPS
-pip install git+https://github.com/cyteena/inspire-cli-template.git
-```
-
-### Option 2: Clone and Install Locally
-
-```bash
-git clone https://github.com/cyteena/inspire-cli-template.git
-cd inspire-cli-template
-pip install .
-```
-
-### Option 3: Install Specific Version
-
-```bash
-# Install a specific tag/release
-pip install git+https://github.com/cyteena/inspire-cli-template.git@v0.2.0
+pip install git+https://github.com/cyteena/inspire-cli.git
 ```
 
 ## Configuration
@@ -188,10 +170,63 @@ export INSPIRE_PASSWORD="your_password"
 
 ### "Missing INSP_TARGET_DIR environment variable"
 
-This is required for log operations. Set the shared filesystem path:
+This is required for **local** log operations (when you have access to the shared filesystem):
 ```bash
 export INSP_TARGET_DIR="/inspire/hdd/global_user/..."
 ```
+
+For **remote** log retrieval (from a laptop), see [Remote Log Retrieval](#remote-log-retrieval) below.
+
+## Remote Log Retrieval
+
+If you're running `inspire job logs` from a machine **without** access to the shared filesystem (e.g., your laptop), the CLI can fetch logs via GitHub Actions.
+
+### Setup
+
+1. **Copy the workflow file** to your repository:
+   ```bash
+   # Copy from this repo's workflows/ directory
+   cp workflows/retrieve_job_log.yml YOUR_REPO/.github/workflows/
+   ```
+
+   Or copy it from: [`workflows/retrieve_job_log.yml`](workflows/retrieve_job_log.yml)
+
+2. **Set environment variables:**
+   ```bash
+   export INSP_GITHUB_REPO="owner/repo"      # Your GitHub repo
+   export INSP_GITHUB_TOKEN="ghp_..."        # GitHub PAT (or use: gh auth login)
+   ```
+
+3. **Ensure your repo has a self-hosted runner** with access to the shared filesystem and label `qizhi-self-hosted`.
+
+### How It Works
+
+```
+Laptop (inspire job logs)
+    ↓
+GitHub API (triggers workflow)
+    ↓
+Self-hosted Runner (reads log from shared filesystem)
+    ↓
+GitHub Artifact (uploads log)
+    ↓
+Laptop (downloads and caches locally)
+```
+
+### Usage
+
+```bash
+# Fetch log (first time: ~20-30 seconds, cached after)
+inspire job logs <job-id>
+
+# Force refresh while job is running
+inspire job logs <job-id> --tail 100 --refresh
+
+# Monitor continuously
+watch -n 30 "inspire job logs <job-id> --tail 100 --refresh"
+```
+
+Logs are cached locally at `~/.inspire/logs/` and reused on subsequent calls.
 
 ### "Authentication failed"
 
