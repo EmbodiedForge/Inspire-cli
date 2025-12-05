@@ -24,7 +24,7 @@ from inspire.cli.context import (
     EXIT_LOG_NOT_FOUND,
     EXIT_JOB_NOT_FOUND,
 )
-from inspire.cli.commands import job, resources, nodes, config, sync
+from inspire.cli.commands import job, resources, nodes, config, sync, bridge
 
 
 @click.group()
@@ -69,6 +69,7 @@ main.add_command(resources)
 main.add_command(nodes)
 main.add_command(config)
 main.add_command(sync)
+main.add_command(bridge)
 
 
 def cli() -> None:

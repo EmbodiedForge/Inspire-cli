@@ -443,22 +443,11 @@ def fetch_remote_log_via_bridge(
     cache_path: Path,
     refresh: bool = False,
 ) -> Path:
-    """High-level helper to ensure a local cached copy of a remote log.
-
-    If `refresh` is False and the cache file already exists, it is
-    returned immediately. Otherwise this triggers the Bridge workflow
-    and waits for the corresponding artifact, then writes the log into
-    `cache_path` (overwriting any existing file).
-
-    After a successful download, automatically prunes log files older
-    than 7 days from the cache directory.
-    """
+    """High-level helper to ensure a local cached copy of a remote log."""
 
     if cache_path.exists() and not refresh:
         return cache_path
 
-    # Generate a simple request ID to make the artifact name unique.
-    # Use seconds since epoch plus the process ID for low collision risk.
     request_id = f"{int(time.time())}-{os.getpid()}"
 
     trigger_log_retrieval_workflow(
@@ -475,8 +464,195 @@ def fetch_remote_log_via_bridge(
         cache_path=cache_path,
     )
 
-    # Prune old logs after successful download
     cache_dir = cache_path.parent
     _prune_old_logs(cache_dir, max_age_days=7)
 
     return cache_path
+
+
+def trigger_bridge_action_workflow(
+    config: Config,
+    raw_command: str,
+    artifact_paths: list[str],
+    request_id: str,
+    denylist: Optional[list[str]] = None,
+) -> None:
+    """Trigger the Bridge action workflow for arbitrary command exec."""
+
+    repo = _get_repo(config)
+    client = _get_client(config)
+
+    url = (
+        f"https://api.github.com/repos/{repo}/actions/workflows/"
+        f"{config.bridge_action_workflow}/dispatches"
+    )
+
+    denylist_str = "\n".join(denylist or [])
+    artifact_paths_str = "\n".join(artifact_paths)
+
+    data = {
+        "ref": "main",
+        "inputs": {
+            "raw_command": raw_command,
+            "denylist": denylist_str,
+            "target_dir": config.target_dir or "",
+            "artifact_paths": artifact_paths_str,
+            "request_id": request_id,
+        },
+    }
+
+    try:
+        client.request_json("POST", url, data=data)
+    except GitHubError as e:
+        raise GitHubError(f"Failed to trigger bridge action workflow: {e}")
+
+
+def wait_for_bridge_action_completion(
+    config: Config,
+    request_id: str,
+    timeout: Optional[int] = None,
+) -> dict:
+    """Poll for bridge action workflow completion."""
+
+    repo = _get_repo(config)
+    client = _get_client(config)
+    timeout_seconds = timeout or config.bridge_action_timeout or 300
+    deadline = time.time() + max(5, int(timeout_seconds))
+
+    runs_url = (
+        f"https://api.github.com/repos/{repo}/actions/workflows/"
+        f"{config.bridge_action_workflow}/runs?per_page=20"
+    )
+    run_name = f"Bridge action {request_id}"
+
+    while True:
+        if time.time() > deadline:
+            raise TimeoutError(
+                f"Bridge action timed out after {timeout_seconds} seconds. "
+                "Check GitHub Actions for status."
+            )
+
+        payload = client.request_json("GET", runs_url)
+        runs = payload.get("workflow_runs", []) or []
+
+        for run in runs:
+            if run.get("name") != run_name:
+                continue
+            status = run.get("status")
+            conclusion = run.get("conclusion")
+            if status == "completed":
+                return {
+                    "status": status,
+                    "conclusion": conclusion,
+                    "run_id": run.get("id"),
+                    "html_url": run.get("html_url", ""),
+                }
+        time.sleep(3)
+
+
+def download_bridge_artifact(
+    config: Config,
+    request_id: str,
+    local_path: Path,
+) -> None:
+    """Download artifact for a bridge action run."""
+
+    repo = _get_repo(config)
+    client = _get_client(config)
+
+    artifact_name = f"bridge-action-{request_id}"
+    artifact = _find_artifact_by_name(client, repo, artifact_name)
+    if artifact is None:
+        raise GitHubError(f"Artifact not found: {artifact_name}")
+
+    artifact_id = artifact.get("id")
+    if not artifact_id:
+        raise GitHubError(f"Artifact {artifact_name} missing id field")
+
+    data: Optional[bytes] = None
+
+    if config.github_token is None:
+        try:
+            proc = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{repo}/actions/artifacts/{artifact_id}/zip",
+                    "--method",
+                    "GET",
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            data = proc.stdout
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pass
+
+    if data is None:
+        download_url = (
+            f"https://api.github.com/repos/{repo}/actions/artifacts/"
+            f"{artifact_id}/zip"
+        )
+        data = client.request_bytes("GET", download_url)
+
+    local_path.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(BytesIO(data)) as zf:
+        zf.extractall(local_path)
+
+
+def fetch_bridge_output_log(
+    config: Config,
+    request_id: str,
+) -> Optional[str]:
+    """Fetch the output.log from a bridge action artifact.
+
+    Returns the log content as a string, or None if not found.
+    """
+    repo = _get_repo(config)
+    client = _get_client(config)
+
+    artifact_name = f"bridge-action-{request_id}"
+    artifact = _find_artifact_by_name(client, repo, artifact_name)
+    if artifact is None:
+        return None
+
+    artifact_id = artifact.get("id")
+    if not artifact_id:
+        return None
+
+    data: Optional[bytes] = None
+
+    if config.github_token is None:
+        try:
+            proc = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{repo}/actions/artifacts/{artifact_id}/zip",
+                    "--method",
+                    "GET",
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            data = proc.stdout
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pass
+
+    if data is None:
+        download_url = (
+            f"https://api.github.com/repos/{repo}/actions/artifacts/"
+            f"{artifact_id}/zip"
+        )
+        data = client.request_bytes("GET", download_url)
+
+    # Extract output.log from the zip
+    with zipfile.ZipFile(BytesIO(data)) as zf:
+        for member in zf.infolist():
+            if member.filename == "output.log" or member.filename.endswith("/output.log"):
+                with zf.open(member) as f:
+                    return f.read().decode("utf-8", errors="replace")
+
+    return None

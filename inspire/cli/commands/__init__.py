@@ -5,5 +5,6 @@ from inspire.cli.commands.resources import resources
 from inspire.cli.commands.nodes import nodes
 from inspire.cli.commands.config import config
 from inspire.cli.commands.sync import sync
+from inspire.cli.commands.bridge import bridge
 
-__all__ = ["job", "resources", "nodes", "config", "sync"]
+__all__ = ["job", "resources", "nodes", "config", "sync", "bridge"]

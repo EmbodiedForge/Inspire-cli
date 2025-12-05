@@ -245,7 +245,49 @@ Logs are cached locally at `~/.inspire/logs/` and reused on subsequent calls.
 
 The `inspire sync` command pushes your local branch to GitHub and triggers a workflow on the Bridge runner to sync the code to the shared filesystem. This replaces the old PR-based workflow for launching training.
 
+## Bridge Exec
+
+Run shell commands on the Bridge self-hosted runner (in `INSPIRE_TARGET_DIR`), with optional denylist and artifact download.
+
 ### Setup
+- Copy `workflows/run_bridge_action.yml` into your repo (e.g., `.github/workflows/`).
+- Env vars:
+  - `INSP_GITHUB_REPO` (owner/repo)
+  - `INSPIRE_TARGET_DIR` (target dir on Bridge — shared with sync and logs)
+  - Optional: `INSPIRE_BRIDGE_ACTION_WORKFLOW` (default `run_bridge_action.yml`)
+  - Optional: `INSPIRE_BRIDGE_ACTION_TIMEOUT` (seconds, default 300)
+  - Optional: `INSPIRE_BRIDGE_DENYLIST` (comma/newline glob patterns for blocking commands)
+
+### Usage
+```bash
+# Run a command (output is displayed in terminal)
+inspire bridge exec "uv venv .venv && ./.venv/bin/pip install torch"
+
+# With denylist to block dangerous patterns
+inspire bridge exec "pip install numpy" \
+  --denylist "rm*" --denylist "*sudo*"
+
+# Download files created by the command
+inspire bridge exec "uv venv .venv" \
+  --artifact-path .venv --download ./local-venv
+
+# Fire-and-forget (don't wait for completion)
+inspire bridge exec "python train.py" --no-wait
+```
+
+Notes:
+- **Command output is displayed** in your terminal after the command completes
+- Denylist is optional (warning if none). Patterns use **glob-style** matching (like `.gitignore`):
+  | Pattern | Matches |
+  |---------|---------|
+  | `rm` | exact command `rm` only |
+  | `rm*` | `rm`, `rm -rf /`, `rmdir foo` |
+  | `*sudo*` | any command containing `sudo` |
+  | `*rm -rf*` | any command containing `rm -rf` |
+- All commands run under `bash -lc` with `set -euo pipefail` and `cd $INSPIRE_TARGET_DIR`.
+- To download files, specify `--artifact-path` relative to `INSPIRE_TARGET_DIR`, then `--download` local dir.
+
+## Code Sync Setup
 
 1. **Copy the workflow file** to your repository:
    ```bash
@@ -254,12 +296,12 @@ The `inspire sync` command pushes your local branch to GitHub and triggers a wor
 
 2. **Set local environment variables:**
    ```bash
-   export INSP_GITHUB_REPO="owner/repo"           # Your GitHub repo
-   export INSPIRE_SYNC_TARGET_DIR="/path/to/dir"  # Target directory on Bridge
-   export INSPIRE_DEFAULT_REMOTE="origin"         # Optional, defaults to origin
+   export INSP_GITHUB_REPO="owner/repo"        # Your GitHub repo
+   export INSPIRE_TARGET_DIR="/path/to/dir"    # Target directory on Bridge
+   export INSPIRE_DEFAULT_REMOTE="origin"      # Optional, defaults to origin
    ```
 
-### Usage
+### Sync Usage
 
 ```bash
 # Sync current branch to origin, then to Bridge

@@ -132,7 +132,7 @@ def _trigger_sync_workflow(
             "branch": branch,
             "commit_sha": commit_sha,
             "force": str(force).lower(),
-            "target_dir": config.sync_target_dir,
+            "target_dir": config.target_dir,
         },
     }
 
@@ -336,11 +336,11 @@ def sync(
                     "commit": commit_sha[:7],
                     "commit_full": commit_sha,
                     "message": commit_msg,
-                    "target_dir": config.sync_target_dir,
+                    "target_dir": config.target_dir,
                     "workflow_url": result.get("html_url", ""),
                 }))
             else:
-                click.echo(click.style("✓", fg="green") + f" Synced branch '{branch}' ({commit_sha[:7]}) to {config.sync_target_dir}")
+                click.echo(click.style("✓", fg="green") + f" Synced branch '{branch}' ({commit_sha[:7]}) to {config.target_dir}")
                 click.echo(f"  Commit: {commit_msg}")
                 click.echo(f"  Remote: {remote}")
         elif result["status"] == "timeout":
