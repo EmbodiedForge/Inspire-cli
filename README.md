@@ -21,8 +21,12 @@ Set the required environment variables:
 export INSPIRE_USERNAME="your_username"
 export INSPIRE_PASSWORD="your_password"
 
-# Required for log operations
-export INSP_TARGET_DIR="/path/to/shared/filesystem"
+# Required for sync/bridge/log operations (shared filesystem root)
+export INSPIRE_TARGET_DIR="/path/to/shared/filesystem"
+
+# GitHub bridge (required for sync/bridge exec/remote logs)
+export INSP_GITHUB_REPO="owner/repo"
+export INSP_GITHUB_TOKEN="ghp_..."   # or set via `gh auth login`
 
 # Optional
 export INSPIRE_BASE_URL="https://qz.sii.edu.cn"  # default
@@ -50,11 +54,13 @@ inspire sync --remote upstream  # Sync via upstream remote
 # List available resources
 inspire resources list
 
-# Create a training job
+# Create a training job (minimal)
 inspire job create \
   --name "my-experiment" \
   --resource "4xH200" \
   --command "bash train.sh"
+
+Defaults: `--framework` (pytorch), `--priority` (8), `--max-time` (100 hours). `--location` and `--image` are optional.
 
 # Check job status
 inspire job status <job-id>
@@ -65,6 +71,8 @@ inspire job wait <job-id> --timeout 7200
 # View logs
 inspire job logs <job-id> --tail 100
 ```
+
+Logs written during job execution (when `INSPIRE_TARGET_DIR` is set) are stored under `INSPIRE_TARGET_DIR/.inspire/` with pattern `training_master_*.log` and fetched via the GitHub bridge.
 
 ## Command Reference
 
@@ -79,7 +87,7 @@ inspire job logs <job-id> --tail 100
 
 | Command | Description |
 |---------|-------------|
-| `inspire job create` | Create a new training job |
+| `inspire job create` | Create a new training job (options: `--name`, `--resource`, `--command`, `--framework`, `--priority`, `--max-time`, `--location`, `--image`) |
 | `inspire job status <id>` | Check job status |
 | `inspire job stop <id>` | Stop a running job |
 | `inspire job wait <id>` | Wait for job completion |
@@ -181,11 +189,11 @@ export INSPIRE_USERNAME="your_username"
 export INSPIRE_PASSWORD="your_password"
 ```
 
-### "Missing INSP_TARGET_DIR environment variable"
+### "Missing INSPIRE_TARGET_DIR environment variable"
 
 This is required for **local** log operations (when you have access to the shared filesystem):
 ```bash
-export INSP_TARGET_DIR="/inspire/hdd/global_user/..."
+export INSPIRE_TARGET_DIR="/inspire/hdd/global_user/..."
 ```
 
 For **remote** log retrieval (from a laptop), see [Remote Log Retrieval](#remote-log-retrieval) below.
