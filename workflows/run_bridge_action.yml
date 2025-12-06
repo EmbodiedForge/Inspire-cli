@@ -125,9 +125,7 @@ jobs:
             dest_dir="/tmp/bridge-artifacts/$(dirname "$relpath")"
             mkdir -p "$dest_dir"
             cp -a "$src" "$dest_dir/"
-          done <<'EOF'
-${ARTIFACT_PATHS}
-EOF
+          done <<< "$ARTIFACT_PATHS"
 
       - name: Upload artifact
         if: always()
