@@ -99,7 +99,6 @@ Logs written during job execution (when `INSPIRE_TARGET_DIR` is set) are stored 
 | Command | Description |
 |---------|-------------|
 | `inspire resources list` | List available GPU configurations |
-| `inspire resources check <type>` | Check GPU availability (H200, H100) |
 | `inspire nodes list` | List cluster nodes |
 
 ### Configuration

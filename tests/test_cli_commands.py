@@ -19,7 +19,7 @@ from inspire.cli.context import (
 from inspire.cli.utils import config as config_module
 from inspire.cli.utils import auth as auth_module
 from inspire.cli.utils.config import ConfigError
-from inspire.inspire_api_control import ResourceManager, GPUType
+from inspire.inspire_api_control import ResourceManager
 
 
 def make_test_config(tmp_path: Path) -> config_module.Config:
@@ -436,44 +436,6 @@ def test_job_logs_missing_file_sets_exit_code(monkeypatch: pytest.MonkeyPatch, t
 # ---------------------------------------------------------------------------
 # Resources / nodes / config commands
 # ---------------------------------------------------------------------------
-
-
-def test_resources_check_json_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    api = patch_config_and_auth(monkeypatch, tmp_path)
-
-    # Use a simplified resource manager to ensure deterministic config
-    rm = ResourceManager()
-
-    def fake_get_recommended_config(resource_str: str, prefer_location: Optional[str] = None):  # noqa: ARG002
-        # Always return a valid group with same GPU type
-        return rm.resource_specs[0].spec_id, rm.compute_groups[0].compute_group_id
-
-    rm.get_recommended_config = fake_get_recommended_config  # type: ignore[assignment]
-    api.resource_manager = rm
-
-    runner = CliRunner()
-    result = runner.invoke(cli_main, ["--json", "resources", "check", "H200"])
-
-    assert result.exit_code == 0
-    data = json.loads(result.output)
-    assert data["data"]["gpu_type"] == GPUType.H200.value
-    assert data["data"]["available_specs"]
-
-
-def test_resources_check_validation_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    api = patch_config_and_auth(monkeypatch, tmp_path)
-
-    class FailingRM(ResourceManager):
-        def get_recommended_config(self, resource_str: str, prefer_location: Optional[str] = None):  # noqa: ARG002
-            raise ValueError("invalid resource")
-
-    api.resource_manager = FailingRM()
-
-    runner = CliRunner()
-    result = runner.invoke(cli_main, ["resources", "check", "bad"])
-
-    assert result.exit_code == EXIT_API_ERROR
-    assert "invalid resource" in result.output
 
 
 def test_nodes_list_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):

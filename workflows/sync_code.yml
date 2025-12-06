@@ -39,7 +39,9 @@ jobs:
       SYNC_TARGET_DIR: ${{ inputs.target_dir }}
 
     steps:
-      - name: Validate configuration
+      - name: Prepare target directory
+        env:
+          REPO_URL: "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
         run: |
           if [ -z "$SYNC_TARGET_DIR" ]; then
             echo "Error: target_dir input is required" >&2
@@ -47,8 +49,22 @@ jobs:
           fi
 
           if [ ! -d "$SYNC_TARGET_DIR" ]; then
-            echo "Error: Target directory does not exist: $SYNC_TARGET_DIR" >&2
-            exit 1
+            echo "Target directory does not exist: $SYNC_TARGET_DIR"
+            echo "Creating target directory..."
+            mkdir -p "$SYNC_TARGET_DIR"
+            echo "Created: $SYNC_TARGET_DIR"
+          fi
+
+          if [ ! -d "$SYNC_TARGET_DIR/.git" ]; then
+            echo "No git repository found in $SYNC_TARGET_DIR"
+
+            if [ -n "$(ls -A "$SYNC_TARGET_DIR")" ]; then
+              echo "Directory is not empty; cannot initialize repository automatically." >&2
+              exit 1
+            fi
+
+            echo "Cloning ${{ github.repository }} into $SYNC_TARGET_DIR..."
+            git clone "$REPO_URL" "$SYNC_TARGET_DIR"
           fi
 
           echo "Target directory: $SYNC_TARGET_DIR"
