@@ -254,7 +254,7 @@ def sync(
     Environment variables:
         INSPIRE_DEFAULT_REMOTE    Default git remote (default: origin)
         INSPIRE_SYNC_WORKFLOW     Workflow filename (default: sync_code.yml)
-        INSPIRE_SYNC_TARGET_DIR   Target directory on Bridge (required)
+        INSPIRE_TARGET_DIR        Target directory on Bridge (required)
     """
     try:
         # Load config - we need GitHub settings but not Inspire API credentials

@@ -103,7 +103,7 @@ def patch_config_and_auth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Du
 
     def fake_from_env(cls, require_target_dir: bool = False) -> config_module.Config:  # type: ignore[override]
         if require_target_dir and not config.target_dir:
-            raise ConfigError("Missing INSP_TARGET_DIR")
+            raise ConfigError("Missing INSPIRE_TARGET_DIR")
         return config
 
     monkeypatch.setattr(config_module.Config, "from_env", classmethod(fake_from_env))
