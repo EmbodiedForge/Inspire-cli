@@ -28,6 +28,7 @@ from inspire.cli.context import (
     EXIT_LOG_NOT_FOUND,
     EXIT_JOB_NOT_FOUND,
 )
+from inspire.inspire_api_control import _validate_job_id_format
 from inspire.cli.utils.config import Config, ConfigError
 from inspire.cli.utils.auth import AuthManager, AuthenticationError
 from inspire.cli.utils.job_cache import JobCache
@@ -186,8 +187,14 @@ def status(ctx: Context, job_id: str):
 
     \b
     Example:
-        inspire job status job-abc-123-def-456
+        inspire job status job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf
     """
+    # Validate job ID format early (before auth/API calls)
+    format_error = _validate_job_id_format(job_id)
+    if format_error:
+        _handle_error(ctx, "InvalidJobID", format_error, EXIT_JOB_NOT_FOUND)
+        return
+
     try:
         config = Config.from_env()
         api = AuthManager.get_api(config)
@@ -211,8 +218,8 @@ def status(ctx: Context, job_id: str):
     except AuthenticationError as e:
         _handle_error(ctx, "AuthenticationError", str(e), EXIT_AUTH_ERROR)
     except Exception as e:
-        if "not found" in str(e).lower():
-            _handle_error(ctx, "JobNotFound", f"Job not found: {job_id}", EXIT_JOB_NOT_FOUND)
+        if "not found" in str(e).lower() or "invalid job id" in str(e).lower():
+            _handle_error(ctx, "JobNotFound", str(e), EXIT_JOB_NOT_FOUND)
         else:
             _handle_error(ctx, "APIError", str(e), EXIT_API_ERROR)
 
@@ -226,9 +233,15 @@ def stop(ctx: Context, job_id: str, force: bool):
 
     \b
     Example:
-        inspire job stop job-abc-123-def-456
-        inspire job stop job-abc-123-def-456 --force
+        inspire job stop job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf
+        inspire job stop job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf --force
     """
+    # Validate job ID format early (before auth/API calls)
+    format_error = _validate_job_id_format(job_id)
+    if format_error:
+        _handle_error(ctx, "InvalidJobID", format_error, EXIT_JOB_NOT_FOUND)
+        return
+
     if not force:
         click.confirm(f"Stop job {job_id}?", abort=True)
 
@@ -253,7 +266,10 @@ def stop(ctx: Context, job_id: str, force: bool):
     except AuthenticationError as e:
         _handle_error(ctx, "AuthenticationError", str(e), EXIT_AUTH_ERROR)
     except Exception as e:
-        _handle_error(ctx, "APIError", str(e), EXIT_API_ERROR)
+        if "not found" in str(e).lower() or "invalid job id" in str(e).lower():
+            _handle_error(ctx, "JobNotFound", str(e), EXIT_JOB_NOT_FOUND)
+        else:
+            _handle_error(ctx, "APIError", str(e), EXIT_API_ERROR)
 
 
 @job.command("wait")
@@ -269,8 +285,14 @@ def wait(ctx: Context, job_id: str, timeout: int, interval: int):
 
     \b
     Example:
-        inspire job wait job-abc-123 --timeout 7200
+        inspire job wait job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf --timeout 7200
     """
+    # Validate job ID format early (before auth/API calls)
+    format_error = _validate_job_id_format(job_id)
+    if format_error:
+        _handle_error(ctx, "InvalidJobID", format_error, EXIT_JOB_NOT_FOUND)
+        return
+
     try:
         config = Config.from_env()
         api = AuthManager.get_api(config)
@@ -398,11 +420,17 @@ def logs(ctx: Context, job_id: str, tail: int, path: bool, refresh: bool):
 
     \b
     Examples:
-        inspire job logs job-abc-123
-        inspire job logs job-abc-123 --tail 100
-        inspire job logs job-abc-123 --path
-        inspire job logs job-abc-123 --refresh
+        inspire job logs job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf
+        inspire job logs job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf --tail 100
+        inspire job logs job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf --path
+        inspire job logs job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf --refresh
     """
+    # Validate job ID format early
+    format_error = _validate_job_id_format(job_id)
+    if format_error:
+        _handle_error(ctx, "InvalidJobID", format_error, EXIT_JOB_NOT_FOUND)
+        return
+
     try:
         config = Config.from_env(require_target_dir=False)
         cache = JobCache(config.get_expanded_cache_path())

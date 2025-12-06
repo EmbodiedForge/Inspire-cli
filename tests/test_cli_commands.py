@@ -21,6 +21,11 @@ from inspire.cli.utils import auth as auth_module
 from inspire.cli.utils.config import ConfigError
 from inspire.inspire_api_control import ResourceManager
 
+# Valid test job IDs (must match the format: job-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
+TEST_JOB_ID = "job-12345678-1234-1234-1234-123456789abc"
+TEST_JOB_ID_2 = "job-abcdef12-3456-7890-abcd-ef1234567890"
+TEST_JOB_ID_3 = "job-11111111-2222-3333-4444-555555555555"
+
 
 def make_test_config(tmp_path: Path) -> config_module.Config:
     return config_module.Config(
@@ -43,7 +48,7 @@ class DummyAPI:
     # Job-related methods -------------------------------------------------
     def create_training_job_smart(self, **kwargs: Any) -> Dict[str, Any]:
         self.calls["create_training_job_smart"] = kwargs
-        return {"data": {"job_id": "job-123"}}
+        return {"data": {"job_id": TEST_JOB_ID}}
 
     def get_job_detail(self, job_id: str) -> Dict[str, Any]:
         self.calls.setdefault("get_job_detail", []).append(job_id)
@@ -200,17 +205,17 @@ def test_job_create_json_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["success"] is True
-    assert data["data"]["job_id"] == "job-123"
+    assert data["data"]["job_id"] == TEST_JOB_ID
 
 
 def test_job_status_updates_cache_and_formats(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     patch_config_and_auth(monkeypatch, tmp_path)
     runner = CliRunner()
 
-    result = runner.invoke(cli_main, ["job", "status", "job-xyz"])
+    result = runner.invoke(cli_main, ["job", "status", TEST_JOB_ID])
     assert result.exit_code == 0
     assert "Job Status" in result.output
-    assert "job-xyz" in result.output
+    assert TEST_JOB_ID in result.output
 
 
 def test_job_status_not_found_sets_specific_exit_code(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
@@ -232,12 +237,12 @@ def test_job_stop_with_force_and_json(monkeypatch: pytest.MonkeyPatch, tmp_path:
 
     result = runner.invoke(
         cli_main,
-        ["--json", "job", "stop", "job-123", "--force"],
+        ["--json", "job", "stop", TEST_JOB_ID, "--force"],
     )
     assert result.exit_code == 0
 
     data = json.loads(result.output)
-    assert data["data"]["job_id"] == "job-123"
+    assert data["data"]["job_id"] == TEST_JOB_ID
     assert data["data"]["status"] == "stopped"
 
 
@@ -260,7 +265,7 @@ def test_job_wait_succeeds_and_exits_zero(monkeypatch: pytest.MonkeyPatch, tmp_p
     runner = CliRunner()
     result = runner.invoke(
         cli_main,
-        ["job", "wait", "job-999", "--timeout", "60", "--interval", "1"],
+        ["job", "wait", TEST_JOB_ID, "--timeout", "60", "--interval", "1"],
     )
     assert result.exit_code == EXIT_SUCCESS
     assert "SUCCEEDED" in result.output
@@ -286,7 +291,7 @@ def test_job_wait_times_out(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     runner = CliRunner()
     result = runner.invoke(
         cli_main,
-        ["job", "wait", "job-123", "--timeout", "1", "--interval", "1"],
+        ["job", "wait", TEST_JOB_ID, "--timeout", "1", "--interval", "1"],
     )
     assert result.exit_code == EXIT_TIMEOUT
     assert "Timeout after 1s" in result.output
@@ -307,7 +312,7 @@ def test_job_list_uses_local_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
         def list_jobs(self, limit: int = 10, status: Optional[str] = None) -> List[Dict[str, Any]]:
             return [
                 {
-                    "job_id": "job-1",
+                    "job_id": TEST_JOB_ID,
                     "name": "cached-job",
                     "status": status or "PENDING",
                     "created_at": "2025-01-01T00:00:00",
@@ -331,18 +336,18 @@ def test_job_logs_path_and_tail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     from inspire.cli.utils.job_cache import JobCache
     cache = JobCache(config.get_expanded_cache_path())
     cache.add_job(
-        job_id="job-abc",
+        job_id=TEST_JOB_ID,
         name="test-job",
         resource="H200",
         command="echo test",
         status="RUNNING",
-        log_path=str(tmp_path / "logs" / "training_master_job-abc.log"),
+        log_path=str(tmp_path / "logs" / f"training_master_{TEST_JOB_ID}.log"),
     )
 
     # Prepare a dummy log file
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir(exist_ok=True)
-    log_path = logs_dir / "training_master_job-abc.log"
+    log_path = logs_dir / f"training_master_{TEST_JOB_ID}.log"
     log_path.write_text("line1\nline2\nline3\n", encoding="utf-8")
 
     from importlib import import_module
@@ -360,12 +365,12 @@ def test_job_logs_path_and_tail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     runner = CliRunner()
 
     # --path just prints path
-    result = runner.invoke(cli_main, ["job", "logs", "job-abc", "--path"])
+    result = runner.invoke(cli_main, ["job", "logs", TEST_JOB_ID, "--path"])
     assert result.exit_code == 0
     assert str(log_path) in result.output
 
     # --tail reads last N lines
-    result_tail = runner.invoke(cli_main, ["job", "logs", "job-abc", "--tail", "2"])
+    result_tail = runner.invoke(cli_main, ["job", "logs", TEST_JOB_ID, "--tail", "2"])
     assert result_tail.exit_code == 0
     assert "line2" in result_tail.output
     assert "line3" in result_tail.output
@@ -379,12 +384,12 @@ def test_job_logs_follow_with_json_is_error(monkeypatch: pytest.MonkeyPatch, tmp
     from inspire.cli.utils.job_cache import JobCache
     cache = JobCache(config.get_expanded_cache_path())
     cache.add_job(
-        job_id="job-123",
+        job_id=TEST_JOB_ID,
         name="test-job",
         resource="H200",
         command="echo test",
         status="RUNNING",
-        log_path=str(tmp_path / "logs" / "training_master_job-123.log"),
+        log_path=str(tmp_path / "logs" / f"training_master_{TEST_JOB_ID}.log"),
     )
 
     from importlib import import_module
@@ -401,7 +406,7 @@ def test_job_logs_follow_with_json_is_error(monkeypatch: pytest.MonkeyPatch, tmp
     runner = CliRunner()
     result = runner.invoke(
         cli_main,
-        ["--json", "job", "logs", "job-123", "--follow"],
+        ["--json", "job", "logs", TEST_JOB_ID, "--follow"],
     )
 
     assert result.exit_code == EXIT_GENERAL_ERROR
@@ -418,7 +423,7 @@ def test_job_logs_missing_file_sets_exit_code(monkeypatch: pytest.MonkeyPatch, t
     from inspire.cli.utils.job_cache import JobCache
     cache = JobCache(config.get_expanded_cache_path())
     cache.add_job(
-        job_id="job-123",
+        job_id=TEST_JOB_ID,
         name="test-job",
         resource="H200",
         command="echo test",
@@ -427,10 +432,10 @@ def test_job_logs_missing_file_sets_exit_code(monkeypatch: pytest.MonkeyPatch, t
     )
 
     runner = CliRunner()
-    result = runner.invoke(cli_main, ["job", "logs", "job-123"])
+    result = runner.invoke(cli_main, ["job", "logs", TEST_JOB_ID])
 
     assert result.exit_code == EXIT_LOG_NOT_FOUND
-    assert "No log file found for job job-123" in result.output
+    assert f"No log file found for job {TEST_JOB_ID}" in result.output
 
 
 # ---------------------------------------------------------------------------

@@ -343,6 +343,59 @@ class ValidationError(InspireAPIError):
     pass
 
 
+class JobNotFoundError(InspireAPIError):
+    """Job not found or invalid job ID"""
+    pass
+
+
+# Known API error codes from Inspire platform
+API_ERROR_CODES = {
+    100002: "Parameter error - the job ID may be invalid, truncated, or the job no longer exists",
+    100001: "Authentication error",
+    100003: "Permission denied",
+    100004: "Resource not found",
+}
+
+
+def _translate_api_error(code: int, message: str) -> str:
+    """Translate API error code to a helpful message."""
+    hint = API_ERROR_CODES.get(code)
+    if hint:
+        return f"{message} ({hint})"
+    return message
+
+
+# Job ID format: job-<uuid> where uuid is 8-4-4-4-12 hex chars
+JOB_ID_PATTERN = re.compile(r'^job-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
+JOB_ID_EXPECTED_LENGTH = 40  # "job-" (4) + UUID with hyphens (36)
+
+
+def _validate_job_id_format(job_id: str) -> Optional[str]:
+    """Validate job ID format and return a helpful message if invalid.
+
+    Returns None if valid, or an error message if invalid.
+    """
+    if not job_id:
+        return "Job ID cannot be empty"
+
+    if not job_id.startswith("job-"):
+        return f"Job ID should start with 'job-', got: {job_id[:20]}..."
+
+    if JOB_ID_PATTERN.match(job_id):
+        return None  # Valid
+
+    # Try to give a helpful hint
+    actual_len = len(job_id)
+    if actual_len < JOB_ID_EXPECTED_LENGTH:
+        missing = JOB_ID_EXPECTED_LENGTH - actual_len
+        return (f"Job ID appears to be truncated (got {actual_len} chars, expected {JOB_ID_EXPECTED_LENGTH}). "
+                f"Missing {missing} character(s). Did you copy the full ID?")
+    elif actual_len > JOB_ID_EXPECTED_LENGTH:
+        return f"Job ID is too long (got {actual_len} chars, expected {JOB_ID_EXPECTED_LENGTH})"
+    else:
+        return f"Job ID format is invalid. Expected format: job-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+
 class InspireAPI:
     """
     启智API客户端 - 智能资源匹配版
@@ -431,6 +484,19 @@ class InspireAPI:
                 if response.status_code < 500:
                     return response
                 else:
+                    # Check if server returned an API error in JSON body (don't retry these)
+                    try:
+                        error_body = response.json()
+                        error_code = error_body.get('code')
+                        error_msg = error_body.get('message', '')
+                        if error_code is not None and error_code != 0:
+                            # This is an API-level error, not a transient server error
+                            # Don't retry - return immediately so caller can handle it
+                            logger.warning(f"API error {error_code}: {error_msg} (HTTP {response.status_code})")
+                            return response
+                    except (ValueError, KeyError):
+                        pass  # Not JSON or missing fields, treat as normal 500
+
                     if attempt < self.config.max_retries:
                         logger.warning(f"Server error {response.status_code}, retrying in {self.config.retry_delay}s...")
                         time.sleep(self.config.retry_delay * (attempt + 1))
@@ -751,33 +817,52 @@ class InspireAPI:
         """获取训练任务详情"""
         self._check_authentication()
         self._validate_required_params(job_id=job_id)
-        
+
+        # Validate job ID format before making API call
+        format_error = _validate_job_id_format(job_id)
+        if format_error:
+            raise JobNotFoundError(f"Invalid job ID '{job_id}': {format_error}")
+
         payload = {"job_id": job_id}
-        
+
         result = self._make_request('POST', APIEndpoints.TRAIN_JOB_DETAIL, payload)
-        
+
         if result.get('code') == 0:
             logger.info(f"📋 Retrieved details for job {job_id}")
             return result
         else:
+            error_code = result.get('code')
             error_msg = result.get('message', 'Unknown error')
-            raise InspireAPIError(f"Failed to get job details: {error_msg}")
+            friendly_msg = _translate_api_error(error_code, error_msg)
+            # Use specific exception for parameter errors (likely invalid job ID)
+            if error_code == 100002:
+                raise JobNotFoundError(f"Failed to get job details for '{job_id}': {friendly_msg}")
+            raise InspireAPIError(f"Failed to get job details: {friendly_msg}")
     
     def stop_training_job(self, job_id: str) -> bool:
         """停止训练任务"""
         self._check_authentication()
         self._validate_required_params(job_id=job_id)
-        
+
+        # Validate job ID format before making API call
+        format_error = _validate_job_id_format(job_id)
+        if format_error:
+            raise JobNotFoundError(f"Invalid job ID '{job_id}': {format_error}")
+
         payload = {"job_id": job_id}
-        
+
         result = self._make_request('POST', APIEndpoints.TRAIN_JOB_STOP, payload)
-        
+
         if result.get('code') == 0:
             logger.info(f"🛑 Training job {job_id} stopped successfully.")
             return True
         else:
+            error_code = result.get('code')
             error_msg = result.get('message', 'Unknown error')
-            raise InspireAPIError(f"Failed to stop training job: {error_msg}")
+            friendly_msg = _translate_api_error(error_code, error_msg)
+            if error_code == 100002:
+                raise JobNotFoundError(f"Failed to stop job '{job_id}': {friendly_msg}")
+            raise InspireAPIError(f"Failed to stop training job: {friendly_msg}")
     
     def list_available_specs(self, logic_compute_group_id: str) -> Dict[str, Any]:
         """获取可用的规格列表"""
