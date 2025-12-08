@@ -325,6 +325,7 @@ def test_job_list_uses_local_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 
     assert result.exit_code == 0
     assert "cached-job" in result.output
+    assert TEST_JOB_ID in result.output
 
 
 def test_job_logs_path_and_tail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):

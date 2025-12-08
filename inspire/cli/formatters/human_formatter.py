@@ -122,7 +122,7 @@ def format_job_list(jobs: List[Dict[str, Any]]) -> str:
     ]
 
     for job in jobs:
-        job_id = job.get("job_id", "N/A")[:38]
+        job_id = job.get("job_id", "N/A")
         name = job.get("name", "N/A")[:18]
         status = job.get("status", "UNKNOWN")
         emoji = STATUS_EMOJI.get(status, "\U0001f4ca")
