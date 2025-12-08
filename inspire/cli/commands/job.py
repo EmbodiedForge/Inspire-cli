@@ -166,9 +166,7 @@ def create(
                     if result.get("data"):
                         click.echo(str(result["data"]))
                 else:
-                    click.echo(
-                        human_formatter.format_success("Job created (no job ID returned)")
-                    )
+                    click.echo(human_formatter.format_success("Job created (no job ID returned)"))
                     click.echo(str(result))
 
     except ConfigError as e:
@@ -299,8 +297,12 @@ def wait(ctx: Context, job_id: str, timeout: int, interval: int):
         cache = JobCache(config.get_expanded_cache_path())
 
         terminal_statuses = {
-            "SUCCEEDED", "FAILED", "CANCELLED",  # Uppercase
-            "job_succeeded", "job_failed", "job_cancelled",  # API snake_case
+            "SUCCEEDED",
+            "FAILED",
+            "CANCELLED",  # Uppercase
+            "job_succeeded",
+            "job_failed",
+            "job_cancelled",  # API snake_case
         }
         start_time = time.time()
         last_status = None
@@ -312,9 +314,11 @@ def wait(ctx: Context, job_id: str, timeout: int, interval: int):
 
             if elapsed > timeout:
                 if ctx.json_output:
-                    click.echo(json_formatter.format_json_error(
-                        "Timeout", f"Timeout after {timeout}s", EXIT_TIMEOUT
-                    ))
+                    click.echo(
+                        json_formatter.format_json_error(
+                            "Timeout", f"Timeout after {timeout}s", EXIT_TIMEOUT
+                        )
+                    )
                 else:
                     click.echo(human_formatter.format_error(f"Timeout after {timeout}s"))
                 sys.exit(EXIT_TIMEOUT)
@@ -330,11 +334,15 @@ def wait(ctx: Context, job_id: str, timeout: int, interval: int):
                 # Print status change or progress
                 if current_status != last_status:
                     if ctx.json_output:
-                        click.echo(json_formatter.format_json({
-                            "event": "status_change",
-                            "status": current_status,
-                            "elapsed_seconds": int(elapsed),
-                        }))
+                        click.echo(
+                            json_formatter.format_json(
+                                {
+                                    "event": "status_change",
+                                    "status": current_status,
+                                    "elapsed_seconds": int(elapsed),
+                                }
+                            )
+                        )
                     else:
                         emoji = human_formatter.STATUS_EMOJI.get(current_status, "\U0001f4ca")
                         click.echo(f"\n{emoji} Status: {current_status}")
@@ -344,7 +352,10 @@ def wait(ctx: Context, job_id: str, timeout: int, interval: int):
                         # Progress indicator
                         mins = int(elapsed // 60)
                         secs = int(elapsed % 60)
-                        click.echo(f"\r[{mins:02d}:{secs:02d}] Waiting... Status: {current_status}", nl=False)
+                        click.echo(
+                            f"\r[{mins:02d}:{secs:02d}] Waiting... Status: {current_status}",
+                            nl=False,
+                        )
 
                 # Check if done
                 if current_status in terminal_statuses:
@@ -447,9 +458,7 @@ def logs(ctx: Context, job_id: str, tail: int, path: bool, refresh: bool):
                     )
                 )
             else:
-                click.echo(
-                    human_formatter.format_error(f"Job not found: {job_id}")
-                )
+                click.echo(human_formatter.format_error(f"Job not found: {job_id}"))
             sys.exit(EXIT_JOB_NOT_FOUND)
 
         remote_log_path_str = cached.get("log_path")
@@ -463,16 +472,21 @@ def logs(ctx: Context, job_id: str, tail: int, path: bool, refresh: bool):
                     )
                 )
             else:
-                click.echo(
-                    human_formatter.format_error(
-                        f"No log file found for job {job_id}"
-                    )
-                )
+                click.echo(human_formatter.format_error(f"No log file found for job {job_id}"))
             sys.exit(EXIT_LOG_NOT_FOUND)
 
         # Compute cache path for this job.
         cache_dir = Path(os.path.expanduser(config.log_cache_dir))
-        cache_path = cache_dir / f"job-{job_id}.log"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = cache_dir / f"{job_id}.log"
+        legacy_cache_path = cache_dir / f"job-{job_id}.log"
+
+        # Migrate legacy filename if present
+        if not cache_path.exists() and legacy_cache_path.exists():
+            try:
+                legacy_cache_path.replace(cache_path)
+            except OSError:
+                cache_path = legacy_cache_path
 
         # Let the user know when we are about to use the remote
         # GitHub Actions bridge path, since the first fetch typically
@@ -484,42 +498,43 @@ def logs(ctx: Context, job_id: str, tail: int, path: bool, refresh: bool):
                 "⏳ Fetching remote log via GitHub Actions bridge (first fetch may take ~10–30s)..."
             )
 
-        try:
-            fetch_remote_log_via_bridge(
-                config=config,
-                job_id=job_id,
-                remote_log_path=str(remote_log_path_str),
-                cache_path=cache_path,
-                refresh=refresh,
-            )
-        except GitHubAuthError as e:
-            _handle_error(
-                ctx,
-                "ConfigError",
-                str(e),
-                EXIT_CONFIG_ERROR,
-            )
-        except TimeoutError as e:
-            _handle_error(
-                ctx,
-                "Timeout",
-                str(e),
-                EXIT_TIMEOUT,
-            )
-        except GitHubError as e:
-            error_msg = (
-                f"{str(e)}\n\n"
-                f"Hints:\n"
-                f"- Check that the training job created a log file at: {remote_log_path_str}\n"
-                f"- Verify the Bridge workflow exists and can access the shared filesystem\n"
-                f"- View GitHub Actions runs at: https://github.com/{config.github_repo}/actions"
-            )
-            _handle_error(
-                ctx,
-                "RemoteLogError",
-                error_msg,
-                EXIT_GENERAL_ERROR,
-            )
+        if needs_remote_fetch:
+            try:
+                fetch_remote_log_via_bridge(
+                    config=config,
+                    job_id=job_id,
+                    remote_log_path=str(remote_log_path_str),
+                    cache_path=cache_path,
+                    refresh=refresh,
+                )
+            except GitHubAuthError as e:
+                _handle_error(
+                    ctx,
+                    "ConfigError",
+                    str(e),
+                    EXIT_CONFIG_ERROR,
+                )
+            except TimeoutError as e:
+                _handle_error(
+                    ctx,
+                    "Timeout",
+                    str(e),
+                    EXIT_TIMEOUT,
+                )
+            except GitHubError as e:
+                error_msg = (
+                    f"{str(e)}\n\n"
+                    f"Hints:\n"
+                    f"- Check that the training job created a log file at: {remote_log_path_str}\n"
+                    f"- Verify the Bridge workflow exists and can access the shared filesystem\n"
+                    f"- View GitHub Actions runs at: https://github.com/{config.github_repo}/actions"
+                )
+                _handle_error(
+                    ctx,
+                    "RemoteLogError",
+                    error_msg,
+                    EXIT_GENERAL_ERROR,
+                )
 
         if not cache_path.exists():
             _handle_error(
@@ -532,9 +547,7 @@ def logs(ctx: Context, job_id: str, tail: int, path: bool, refresh: bool):
         # Print path only
         if path:
             if ctx.json_output:
-                click.echo(
-                    json_formatter.format_json({"log_path": str(cache_path)})
-                )
+                click.echo(json_formatter.format_json({"log_path": str(cache_path)}))
             else:
                 click.echo(str(cache_path))
             return
@@ -544,43 +557,42 @@ def logs(ctx: Context, job_id: str, tail: int, path: bool, refresh: bool):
             try:
                 with cache_path.open("r", encoding="utf-8", errors="replace") as f:
                     lines = f.read().splitlines()
+                tail_lines = lines[-tail:] if tail > 0 else lines
+                if ctx.json_output:
+                    click.echo(
+                        json_formatter.format_json(
+                            {
+                                "log_path": str(cache_path),
+                                "lines": tail_lines,
+                                "count": len(tail_lines),
+                            }
+                        )
+                    )
+                else:
+                    click.echo(f"=== Last {len(tail_lines)} lines ===\n")
+                    for line in tail_lines:
+                        click.echo(line)
             except OSError as e:
                 _handle_error(ctx, "LogNotFound", str(e), EXIT_LOG_NOT_FOUND)
-            tail_lines = lines[-tail:] if tail > 0 else lines
-            if ctx.json_output:
-                click.echo(
-                    json_formatter.format_json(
-                        {
-                            "log_path": str(cache_path),
-                            "lines": tail_lines,
-                            "count": len(tail_lines),
-                        }
-                    )
-                )
-            else:
-                click.echo(f"=== Last {len(tail_lines)} lines ===\n")
-                for line in tail_lines:
-                    click.echo(line)
             return
 
         # Default: print full file
         try:
             content = cache_path.read_text(encoding="utf-8", errors="replace")
+            if ctx.json_output:
+                click.echo(
+                    json_formatter.format_json(
+                        {
+                            "log_path": str(cache_path),
+                            "content": content,
+                            "size_bytes": len(content),
+                        }
+                    )
+                )
+            else:
+                click.echo(content)
         except OSError as e:
             _handle_error(ctx, "LogNotFound", str(e), EXIT_LOG_NOT_FOUND)
-
-        if ctx.json_output:
-            click.echo(
-                json_formatter.format_json(
-                    {
-                        "log_path": str(cache_path),
-                        "content": content,
-                        "size_bytes": len(content),
-                    }
-                )
-            )
-        else:
-            click.echo(content)
 
     except ConfigError as e:
         _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)

@@ -34,6 +34,7 @@ def make_test_config(tmp_path: Path) -> config_module.Config:
         base_url="https://example.invalid",
         target_dir=str(tmp_path / "logs"),
         job_cache_path=str(tmp_path / "jobs.json"),
+        log_cache_dir=str(tmp_path / "log_cache"),
         timeout=5,
         max_retries=0,
         retry_delay=0.0,
@@ -68,11 +69,7 @@ class DummyAPI:
     def list_available_specs(self, compute_group_id: str) -> Dict[str, Any]:
         self.calls.setdefault("list_available_specs", []).append(compute_group_id)
         return {
-            "data": {
-                "specs": [
-                    {"name": "spec-1", "gpu_count": 1, "cpu_cores": 4, "memory_gb": 32}
-                ]
-            }
+            "data": {"specs": [{"name": "spec-1", "gpu_count": 1, "cpu_cores": 4, "memory_gb": 32}]}
         }
 
     def list_cluster_nodes(
@@ -218,7 +215,9 @@ def test_job_status_updates_cache_and_formats(monkeypatch: pytest.MonkeyPatch, t
     assert TEST_JOB_ID in result.output
 
 
-def test_job_status_not_found_sets_specific_exit_code(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def test_job_status_not_found_sets_specific_exit_code(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     api = patch_config_and_auth(monkeypatch, tmp_path)
 
     def failing_get_job_detail(job_id: str) -> Dict[str, Any]:
@@ -331,43 +330,43 @@ def test_job_list_uses_local_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 def test_job_logs_path_and_tail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     patch_config_and_auth(monkeypatch, tmp_path)
 
-    # Add job to cache
+    # Add job to cache with a remote log path
     config = make_test_config(tmp_path)
     from inspire.cli.utils.job_cache import JobCache
+
     cache = JobCache(config.get_expanded_cache_path())
+    remote_log_path = f"/train/logs/.inspire/training_master_{TEST_JOB_ID}.log"
     cache.add_job(
         job_id=TEST_JOB_ID,
         name="test-job",
         resource="H200",
         command="echo test",
         status="RUNNING",
-        log_path=str(tmp_path / "logs" / f"training_master_{TEST_JOB_ID}.log"),
+        log_path=remote_log_path,
     )
 
-    # Prepare a dummy log file
-    logs_dir = tmp_path / "logs"
-    logs_dir.mkdir(exist_ok=True)
-    log_path = logs_dir / f"training_master_{TEST_JOB_ID}.log"
-    log_path.write_text("line1\nline2\nline3\n", encoding="utf-8")
+    # Create local cache directory and log file (simulating already-fetched log)
+    local_cache_dir = Path(config.log_cache_dir)
+    local_cache_dir.mkdir(parents=True, exist_ok=True)
+    local_log_path = local_cache_dir / f"{TEST_JOB_ID}.log"
+    local_log_path.write_text("line1\nline2\nline3\n", encoding="utf-8")
 
+    # Mock fetch_remote_log_via_bridge to do nothing (log already cached)
     from importlib import import_module
 
     job_cmd = import_module("inspire.cli.commands.job")
-    from inspire.cli.utils.logs import LogReader
 
-    # Use real LogReader but force it to find the specific file
-    class FakeReader(LogReader):
-        def find_latest_log(self, job_id: Optional[str] = None):  # noqa: ARG002
-            return log_path
+    def fake_fetch(config, job_id, remote_log_path, cache_path, refresh):  # noqa: ARG001
+        pass  # Log already exists locally
 
-    monkeypatch.setattr(job_cmd, "LogReader", FakeReader)
+    monkeypatch.setattr(job_cmd, "fetch_remote_log_via_bridge", fake_fetch)
 
     runner = CliRunner()
 
     # --path just prints path
     result = runner.invoke(cli_main, ["job", "logs", TEST_JOB_ID, "--path"])
     assert result.exit_code == 0
-    assert str(log_path) in result.output
+    assert str(local_log_path) in result.output
 
     # --tail reads last N lines
     result_tail = runner.invoke(cli_main, ["job", "logs", TEST_JOB_ID, "--tail", "2"])
@@ -376,42 +375,90 @@ def test_job_logs_path_and_tail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert "line3" in result_tail.output
 
 
-def test_job_logs_follow_with_json_is_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def test_job_logs_json_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     patch_config_and_auth(monkeypatch, tmp_path)
 
-    # Add job to cache
+    # Add job to cache with a remote log path
     config = make_test_config(tmp_path)
     from inspire.cli.utils.job_cache import JobCache
+
     cache = JobCache(config.get_expanded_cache_path())
+    remote_log_path = f"/train/logs/.inspire/training_master_{TEST_JOB_ID}.log"
     cache.add_job(
         job_id=TEST_JOB_ID,
         name="test-job",
         resource="H200",
         command="echo test",
         status="RUNNING",
-        log_path=str(tmp_path / "logs" / f"training_master_{TEST_JOB_ID}.log"),
+        log_path=remote_log_path,
     )
+
+    # Create local cache directory and log file
+    local_cache_dir = Path(config.log_cache_dir)
+    local_cache_dir.mkdir(parents=True, exist_ok=True)
+    local_log_path = local_cache_dir / f"{TEST_JOB_ID}.log"
+    local_log_path.write_text("test log content\n", encoding="utf-8")
+
+    # Mock fetch_remote_log_via_bridge
+    from importlib import import_module
+
+    job_cmd = import_module("inspire.cli.commands.job")
+
+    def fake_fetch(config, job_id, remote_log_path, cache_path, refresh):  # noqa: ARG001
+        pass
+
+    monkeypatch.setattr(job_cmd, "fetch_remote_log_via_bridge", fake_fetch)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["--json", "job", "logs", TEST_JOB_ID])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["success"] is True
+    assert "log_path" in data["data"]
+    assert "content" in data["data"]
+    assert "test log content" in data["data"]["content"]
+
+
+def test_job_logs_legacy_filename_is_migrated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    patch_config_and_auth(monkeypatch, tmp_path)
+
+    config = make_test_config(tmp_path)
+    from inspire.cli.utils.job_cache import JobCache
+
+    cache = JobCache(config.get_expanded_cache_path())
+    remote_log_path = f"/train/logs/.inspire/training_master_{TEST_JOB_ID}.log"
+    cache.add_job(
+        job_id=TEST_JOB_ID,
+        name="test-job",
+        resource="H200",
+        command="echo test",
+        status="RUNNING",
+        log_path=remote_log_path,
+    )
+
+    local_cache_dir = Path(config.log_cache_dir)
+    local_cache_dir.mkdir(parents=True, exist_ok=True)
+    legacy_log_path = local_cache_dir / f"job-{TEST_JOB_ID}.log"
+    legacy_log_path.write_text("legacy line1\nlegacy line2\n", encoding="utf-8")
 
     from importlib import import_module
 
     job_cmd = import_module("inspire.cli.commands.job")
-    from inspire.cli.utils.logs import LogReader
 
-    class FakeReader(LogReader):
-        def find_latest_log(self, job_id: Optional[str] = None):  # noqa: ARG002
-            return Path("dummy.log")
+    def fail_fetch(*args, **kwargs):  # noqa: ARG001
+        raise AssertionError("fetch should not be called when legacy cache exists")
 
-    monkeypatch.setattr(job_cmd, "LogReader", FakeReader)
+    monkeypatch.setattr(job_cmd, "fetch_remote_log_via_bridge", fail_fetch)
 
     runner = CliRunner()
-    result = runner.invoke(
-        cli_main,
-        ["--json", "job", "logs", TEST_JOB_ID, "--follow"],
-    )
+    result = runner.invoke(cli_main, ["job", "logs", TEST_JOB_ID, "--tail", "1"])
 
-    assert result.exit_code == EXIT_GENERAL_ERROR
-    data = json.loads(result.output)
-    assert data["success"] is False
+    assert result.exit_code == 0
+    assert "legacy line2" in result.output
+    new_path = local_cache_dir / f"{TEST_JOB_ID}.log"
+    assert new_path.exists()
+    assert not legacy_log_path.exists()
 
 
 def test_job_logs_missing_file_sets_exit_code(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
@@ -421,6 +468,7 @@ def test_job_logs_missing_file_sets_exit_code(monkeypatch: pytest.MonkeyPatch, t
     # Add job to cache WITHOUT log_path to test the "log not found" path
     config = make_test_config(tmp_path)
     from inspire.cli.utils.job_cache import JobCache
+
     cache = JobCache(config.get_expanded_cache_path())
     cache.add_job(
         job_id=TEST_JOB_ID,
