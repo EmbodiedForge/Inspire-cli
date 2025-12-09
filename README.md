@@ -218,6 +218,12 @@ If you're running `inspire job logs` from a machine **without** access to the sh
    ```
 
 3. **Ensure your repo has a self-hosted runner** with access to the shared filesystem and label `qizhi-self-hosted`.
+   You can set a github action self-hosted runner in the "Action" option in the upper column of every github repo.
+   Tips: if you need sudo to setup a self-hosted runner in inspire platform, you can just try
+   ```bash
+   export RUNNER_ALLOW_RUNASROOT=1
+   ```
+   
 
 ### How It Works
 
