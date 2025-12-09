@@ -141,6 +141,12 @@ class ResourceManager:
                 compute_group_id="lcg-a91ad10b-415d-4abd-8170-828a2feae5d2",
                 gpu_type=GPUType.H200,
                 location="3号机房"
+            ),
+            ComputeGroup(
+                name="H200 3号-2",
+                compute_group_id="lcg-95e38be4-4842-4155-af13-4325aa744bca",
+                gpu_type=GPUType.H200,
+                location="3号-2"
             )
         ]
     

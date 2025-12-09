@@ -93,7 +93,7 @@ def create(
         inspire job create -n test -r H200 -c "python train.py" --priority 9
     """
     try:
-        config = Config.from_env()
+        config = Config.from_env(require_target_dir=True)
         api = AuthManager.get_api(config)
 
         # If INSP_TARGET_DIR is configured, wrap the command so

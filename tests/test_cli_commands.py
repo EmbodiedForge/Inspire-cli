@@ -205,6 +205,32 @@ def test_job_create_json_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert data["data"]["job_id"] == TEST_JOB_ID
 
 
+def test_job_create_requires_target_dir(monkeypatch: pytest.MonkeyPatch):
+    def fake_from_env(cls, require_target_dir: bool = False):  # type: ignore[override]
+        assert require_target_dir is True
+        raise ConfigError("Missing INSPIRE_TARGET_DIR")
+
+    monkeypatch.setattr(config_module.Config, "from_env", classmethod(fake_from_env))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_main,
+        [
+            "job",
+            "create",
+            "--name",
+            "test-job",
+            "--resource",
+            "H200",
+            "--command",
+            "echo hi",
+        ],
+    )
+
+    assert result.exit_code == EXIT_CONFIG_ERROR
+    assert "Missing INSPIRE_TARGET_DIR" in result.output
+
+
 def test_job_status_updates_cache_and_formats(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     patch_config_and_auth(monkeypatch, tmp_path)
     runner = CliRunner()

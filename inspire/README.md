@@ -9,7 +9,7 @@
 ### 🎯 智能资源匹配
 - **自然语言指定**: 支持 "H200", "4xH200", "8 H200", "H100" 等自然表达
 - **自动配置**: 自动匹配对应的 spec-id 和 compute-group-id
-- **机房选择**: 支持指定偏好的机房位置（1号/2号/3号机房）
+- **机房选择**: 支持指定偏好的机房位置（1号/2号/3号/3号-2）
 
 ### 📊 资源配置一览
 ```bash
@@ -127,6 +127,7 @@ python inspire_api_control.py list-nodes --page 1 --size 20
 - `--location "1号"` - 偏好1号机房
 - `--location "2号"` - 偏好2号机房
 - `--location "3号"` - 偏好3号机房
+- `--location "3号-2"` - 偏好3号-2机房
 
 ## 🔧 配置参数说明
 
@@ -166,6 +167,7 @@ python inspire_api_control.py list-nodes --page 1 --size 20
 | H200 | 1号机房 | lcg-df089db8-817a-4aa8-a164-eb1a32948564 |
 | H200 | 2号机房 | lcg-303ac8c6-aa19-4284-af03-2296592326e5 |
 | H200 | 3号机房 | lcg-a91ad10b-415d-4abd-8170-828a2feae5d2 |
+| H200 | 3号-2 | lcg-95e38be4-4842-4155-af13-4325aa744bca |
 
 ## 🚨 常见问题
 
