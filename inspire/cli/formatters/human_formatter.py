@@ -10,16 +10,16 @@ from datetime import datetime
 
 # Status emoji mapping
 STATUS_EMOJI = {
-    "PENDING": "\u23f3",      # hourglass
+    "PENDING": "\u23f3",  # hourglass
     "RUNNING": "\U0001f3c3",  # runner
-    "SUCCEEDED": "\u2705",    # check mark
-    "FAILED": "\u274c",       # cross mark
-    "CANCELLED": "\U0001f6d1", # stop sign
-    "UNKNOWN": "\u2753",      # question mark
+    "SUCCEEDED": "\u2705",  # check mark
+    "FAILED": "\u274c",  # cross mark
+    "CANCELLED": "\U0001f6d1",  # stop sign
+    "UNKNOWN": "\u2753",  # question mark
     # API snake_case variants
-    "job_succeeded": "\u2705",    # check mark
-    "job_failed": "\u274c",       # cross mark
-    "job_cancelled": "\U0001f6d1", # stop sign
+    "job_succeeded": "\u2705",  # check mark
+    "job_failed": "\u274c",  # cross mark
+    "job_cancelled": "\U0001f6d1",  # stop sign
 }
 
 
@@ -46,7 +46,7 @@ def _format_timestamp(timestamp_ms: str) -> str:
     try:
         timestamp = int(timestamp_ms) / 1000
         dt = datetime.fromtimestamp(timestamp)
-        return dt.strftime('%Y-%m-%d %H:%M:%S')
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
     except (ValueError, TypeError):
         return "Unknown"
 
@@ -113,24 +113,39 @@ def format_job_list(jobs: List[Dict[str, Any]]) -> str:
     if not jobs:
         return "\nNo jobs found in local cache.\n"
 
+    # Determine dynamic column widths to avoid truncation while keeping the table aligned.
+    job_id_width = max(len("Job ID"), *(len(str(job.get("job_id", "N/A"))) for job in jobs))
+    name_width = max(len("Name"), *(len(str(job.get("name", "N/A"))) for job in jobs))
+    status_strings = [
+        f"{STATUS_EMOJI.get(job.get('status', 'UNKNOWN'), '\U0001f4ca')} {job.get('status', 'UNKNOWN')}"
+        for job in jobs
+    ]
+    status_width = (
+        max(len("Status"), *(len(s) for s in status_strings)) if status_strings else len("Status")
+    )
+    created_width = max(len("Created"), *(len(str(job.get("created_at", "N/A"))) for job in jobs))
+
+    header_line = f"{'Job ID':<{job_id_width}} {'Name':<{name_width}} {'Status':<{status_width}} {'Created':<{created_width}}"
+    separator = "\u2500" * len(header_line)
+
     lines = [
         "",
         "\U0001f4cb Recent Jobs",
-        "\u2500" * 80,
-        f"{'Job ID':<40} {'Name':<20} {'Status':<12} {'Created':<20}",
-        "\u2500" * 80,
+        separator,
+        header_line,
+        separator,
     ]
 
-    for job in jobs:
-        job_id = job.get("job_id", "N/A")
-        name = job.get("name", "N/A")[:18]
-        status = job.get("status", "UNKNOWN")
-        emoji = STATUS_EMOJI.get(status, "\U0001f4ca")
-        created = job.get("created_at", "N/A")[:18]
+    for job, status_str in zip(jobs, status_strings):
+        job_id = str(job.get("job_id", "N/A"))
+        name = str(job.get("name", "N/A"))
+        created = str(job.get("created_at", "N/A"))
 
-        lines.append(f"{job_id:<40} {name:<20} {emoji} {status:<10} {created:<20}")
+        lines.append(
+            f"{job_id:<{job_id_width}} {name:<{name_width}} {status_str:<{status_width}} {created:<{created_width}}"
+        )
 
-    lines.append("\u2500" * 80)
+    lines.append(separator)
     lines.append(f"Total: {len(jobs)} job(s)")
 
     return "\n".join(lines)
@@ -158,24 +173,28 @@ def format_resources(specs: List[Dict[str, Any]], groups: List[Dict[str, Any]]) 
         desc = spec.get("description", f"{spec.get('gpu_count', '?')}x GPU")
         lines.append(f"  \u2022 {desc}")
 
-    lines.extend([
-        "",
-        "\U0001f3e2 Compute Groups:",
-        "\u2500" * 60,
-    ])
+    lines.extend(
+        [
+            "",
+            "\U0001f3e2 Compute Groups:",
+            "\u2500" * 60,
+        ]
+    )
 
     for group in groups:
         name = group.get("name", "Unknown")
         location = group.get("location", "")
         lines.append(f"  \u2022 {name}" + (f" ({location})" if location else ""))
 
-    lines.extend([
-        "",
-        "\U0001f4a1 Usage Examples:",
-        "  \u2022 --resource 'H200'     -> 1x H200 GPU",
-        "  \u2022 --resource '4xH200'   -> 4x H200 GPU",
-        "  \u2022 --resource '8 H200'   -> 8x H200 GPU",
-    ])
+    lines.extend(
+        [
+            "",
+            "\U0001f4a1 Usage Examples:",
+            "  \u2022 --resource 'H200'     -> 1x H200 GPU",
+            "  \u2022 --resource '4xH200'   -> 4x H200 GPU",
+            "  \u2022 --resource '8 H200'   -> 8x H200 GPU",
+        ]
+    )
 
     return "\n".join(lines)
 

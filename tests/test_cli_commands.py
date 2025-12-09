@@ -15,10 +15,12 @@ from inspire.cli.context import (
     EXIT_TIMEOUT,
     EXIT_LOG_NOT_FOUND,
     EXIT_JOB_NOT_FOUND,
+    EXIT_VALIDATION_ERROR,
 )
 from inspire.cli.utils import config as config_module
 from inspire.cli.utils import auth as auth_module
 from inspire.cli.utils.config import ConfigError
+from inspire.cli.utils.job_cache import JobCache
 from inspire.inspire_api_control import ResourceManager
 
 # Valid test job IDs (must match the format: job-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
@@ -511,6 +513,87 @@ def test_job_logs_missing_file_sets_exit_code(monkeypatch: pytest.MonkeyPatch, t
 
     assert result.exit_code == EXIT_LOG_NOT_FOUND
     assert f"No log file found for job {TEST_JOB_ID}" in result.output
+
+
+def test_job_logs_requires_job_id_without_update(monkeypatch: pytest.MonkeyPatch):
+    def fake_from_env(cls, require_target_dir: bool = False):  # type: ignore[override]
+        raise AssertionError("Config.from_env should not be called when validation fails")
+
+    monkeypatch.setattr(config_module.Config, "from_env", classmethod(fake_from_env))
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["job", "logs"])
+
+    assert result.exit_code == EXIT_VALIDATION_ERROR
+    assert "Job ID is required" in result.output
+
+
+def test_job_logs_bulk_update_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    config = make_test_config(tmp_path)
+
+    def fake_from_env(cls, require_target_dir: bool = False):  # type: ignore[override]
+        return config
+
+    monkeypatch.setattr(config_module.Config, "from_env", classmethod(fake_from_env))
+
+    from importlib import import_module
+
+    job_cmd = import_module("inspire.cli.commands.job")
+
+    calls: List[str] = []
+
+    def fake_fetch(config_obj, job_id: str, remote_log_path: str, cache_path: Path, refresh: bool):  # noqa: ARG001
+        calls.append(job_id)
+
+    monkeypatch.setattr(job_cmd, "fetch_remote_log_via_bridge", fake_fetch)
+
+    cache = JobCache(config.get_expanded_cache_path())
+    cache.add_job(
+        job_id=TEST_JOB_ID,
+        name="job-1",
+        resource="H200",
+        command="echo hi",
+        status="RUNNING",
+        log_path="/logs/.inspire/job1.log",
+    )
+    cache.add_job(
+        job_id=TEST_JOB_ID_2,
+        name="job-2",
+        resource="H200",
+        command="echo hi",
+        status="SUCCEEDED",
+        log_path="/logs/.inspire/job2.log",
+    )
+    cache.add_job(
+        job_id=TEST_JOB_ID_3,
+        name="job-3",
+        resource="H200",
+        command="echo hi",
+        status="FAILED",
+        log_path="/logs/.inspire/job3.log",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_main,
+        [
+            "--json",
+            "job",
+            "logs",
+            "--update",
+            "--status",
+            "RUNNING",
+            "--status",
+            "SUCCEEDED",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["success"] is True
+    updated_ids = {entry["job_id"] for entry in payload["data"]["updated"]}
+    assert updated_ids == {TEST_JOB_ID, TEST_JOB_ID_2}
+    assert len(calls) == 2
 
 
 # ---------------------------------------------------------------------------

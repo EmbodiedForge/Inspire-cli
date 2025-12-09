@@ -14,6 +14,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 import click
 
 from inspire.cli.context import (
@@ -23,6 +24,7 @@ from inspire.cli.context import (
     EXIT_GENERAL_ERROR,
     EXIT_CONFIG_ERROR,
     EXIT_AUTH_ERROR,
+    EXIT_VALIDATION_ERROR,
     EXIT_API_ERROR,
     EXIT_TIMEOUT,
     EXIT_LOG_NOT_FOUND,
@@ -527,15 +529,39 @@ def update_jobs(ctx: Context, status: tuple, limit: int, delay: float):
 
 
 @job.command("logs")
-@click.argument("job_id")
+@click.argument("job_id", required=False)
 @click.option("--tail", "-n", type=int, help="Show last N lines only")
 @click.option("--path", is_flag=True, help="Just print log path, don't read content")
 @click.option("--refresh", is_flag=True, help="Re-fetch log even if a cached copy exists")
+@click.option("--update", is_flag=True, help="Fetch and cache logs for cached jobs in bulk.")
+@click.option(
+    "--status",
+    "-s",
+    multiple=True,
+    help="Status filter when using --update (e.g., RUNNING). Repeatable.",
+)
+@click.option(
+    "--limit",
+    "-m",
+    type=int,
+    default=0,
+    help="Max cached jobs to process with --update (0 = all).",
+)
 @pass_context
-def logs(ctx: Context, job_id: str, tail: int, path: bool, refresh: bool):
+def logs(
+    ctx: Context,
+    job_id: Optional[str],
+    tail: int,
+    path: bool,
+    refresh: bool,
+    update: bool,
+    status: tuple,
+    limit: int,
+):
     """View logs for a training job.
 
-    Fetches logs via GitHub Actions bridge and caches them locally.
+    Fetches logs via GitHub Actions bridge and caches them locally. Use
+    --update to pull logs for many cached jobs in one go.
 
     \b
     Examples:
@@ -543,7 +569,27 @@ def logs(ctx: Context, job_id: str, tail: int, path: bool, refresh: bool):
         inspire job logs job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf --tail 100
         inspire job logs job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf --path
         inspire job logs job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf --refresh
+        inspire job logs --update --status RUNNING --status SUCCEEDED
     """
+    if update:
+        if tail or path:
+            _handle_error(
+                ctx,
+                "InvalidUsage",
+                "--update cannot be combined with --tail/--path",
+                EXIT_VALIDATION_ERROR,
+            )
+        _bulk_update_logs(ctx, status=status, limit=limit, refresh=refresh, job_id=job_id)
+        return
+
+    if not job_id:
+        _handle_error(
+            ctx,
+            "InvalidUsage",
+            "Job ID is required unless using --update",
+            EXIT_VALIDATION_ERROR,
+        )
+
     # Validate job ID format early
     format_error = _validate_job_id_format(job_id)
     if format_error:
@@ -701,6 +747,144 @@ def logs(ctx: Context, job_id: str, tail: int, path: bool, refresh: bool):
                 click.echo(content)
         except OSError as e:
             _handle_error(ctx, "LogNotFound", str(e), EXIT_LOG_NOT_FOUND)
+
+    except ConfigError as e:
+        _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
+    except Exception as e:
+        _handle_error(ctx, "Error", str(e), EXIT_GENERAL_ERROR)
+
+
+def _bulk_update_logs(
+    ctx: Context,
+    status: tuple,
+    limit: int,
+    refresh: bool,
+    job_id: Optional[str] = None,
+) -> None:
+    """Fetch and cache logs for many jobs from the local cache."""
+    try:
+        config = Config.from_env(require_target_dir=False)
+        cache = JobCache(config.get_expanded_cache_path())
+
+        alias_map = {
+            "PENDING": {"PENDING", "job_pending"},
+            "RUNNING": {"RUNNING", "job_running"},
+            "SUCCEEDED": {"SUCCEEDED", "job_succeeded"},
+            "FAILED": {"FAILED", "job_failed"},
+            "CANCELLED": {"CANCELLED", "job_cancelled"},
+        }
+
+        status_filter = set()
+        if status:
+            for s in status:
+                key = str(s).upper()
+                status_filter.update(alias_map.get(key, {s}))
+
+        if job_id:
+            format_error = _validate_job_id_format(job_id)
+            if format_error:
+                _handle_error(ctx, "InvalidJobID", format_error, EXIT_JOB_NOT_FOUND)
+            job = cache.get_job(job_id)
+            if not job:
+                _handle_error(ctx, "JobNotFound", f"Job not found: {job_id}", EXIT_JOB_NOT_FOUND)
+            jobs = [job] if not status_filter or job.get("status") in status_filter else []
+        else:
+            jobs = cache.list_jobs(limit=limit)
+            if status_filter:
+                jobs = [j for j in jobs if j.get("status") in status_filter]
+
+        total_candidates = len(jobs)
+
+        cache_dir = Path(os.path.expanduser(config.log_cache_dir))
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        updated = []
+        errors = []
+        skipped_no_log = []
+
+        for job in jobs:
+            job_id_item = job.get("job_id")
+            remote_log_path_str = job.get("log_path")
+
+            if not job_id_item:
+                continue
+
+            if not remote_log_path_str:
+                skipped_no_log.append(job_id_item)
+                continue
+
+            cache_path = cache_dir / f"{job_id_item}.log"
+
+            try:
+                fetch_remote_log_via_bridge(
+                    config=config,
+                    job_id=job_id_item,
+                    remote_log_path=str(remote_log_path_str),
+                    cache_path=cache_path,
+                    refresh=refresh,
+                )
+                updated.append({"job_id": job_id_item, "log_path": str(cache_path)})
+            except GitHubAuthError as e:
+                _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
+            except TimeoutError as e:
+                errors.append({"job_id": job_id_item, "error": str(e)})
+            except GitHubError as e:
+                error_msg = (
+                    f"{str(e)}\n\n"
+                    f"Hints:\n"
+                    f"- Check that the training job created a log file at: {remote_log_path_str}\n"
+                    f"- Verify the Bridge workflow exists and can access the shared filesystem\n"
+                    f"- View GitHub Actions runs at: https://github.com/{config.github_repo}/actions"
+                )
+                errors.append({"job_id": job_id_item, "error": error_msg})
+            except Exception as e:  # noqa: BLE001
+                errors.append({"job_id": job_id_item, "error": str(e)})
+
+        success_flag = not errors
+
+        payload = {
+            "updated": updated,
+            "errors": errors,
+            "skipped_no_log_path": skipped_no_log,
+            "processed": total_candidates,
+            "fetched": len(updated),
+            "refresh": refresh,
+            "status_filter": sorted(status_filter),
+            "limit": limit,
+            "job_filter": job_id,
+        }
+
+        if ctx.json_output:
+            click.echo(json_formatter.format_json(payload, success=success_flag))
+            if not success_flag:
+                sys.exit(EXIT_GENERAL_ERROR)
+            return
+
+        if not jobs:
+            click.echo("No cached jobs matched the filter.")
+            return
+
+        status_label = f" with status in {sorted(status_filter)}" if status_filter else ""
+        target_label = f" for job {job_id}" if job_id else ""
+        click.echo(
+            f"Updating logs for {total_candidates} cached job(s){status_label}{target_label} (refresh={refresh})"
+        )
+
+        if updated:
+            click.echo("\nFetched:")
+            for entry in updated:
+                click.echo(f"- {entry['job_id']}: {entry['log_path']}")
+
+        if skipped_no_log:
+            click.echo("\nSkipped (no log_path in cache): " + ", ".join(skipped_no_log))
+
+        if errors:
+            click.echo("\nErrors:")
+            for err in errors:
+                click.echo(f"- {err['job_id']}: {err['error']}")
+            sys.exit(EXIT_GENERAL_ERROR)
+
+        click.echo("\nDone.")
 
     except ConfigError as e:
         _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)

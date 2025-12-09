@@ -150,7 +150,9 @@ class JobCache:
         # Sort by created_at descending (most recent first)
         items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
 
-        return items[:limit]
+        if limit is not None and limit > 0:
+            return items[:limit]
+        return items
 
     def remove_job(self, job_id: str) -> bool:
         """Remove a job from cache.
