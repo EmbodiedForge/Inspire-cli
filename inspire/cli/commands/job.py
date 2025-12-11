@@ -446,15 +446,16 @@ def update_jobs(ctx: Context, status: tuple, limit: int, delay: float):
     """Update cached jobs by polling the API.
 
     Refreshes statuses for cached jobs matching the status filter
-    (defaults to PENDING/RUNNING and API snake_case aliases) and
+    (defaults to PENDING/RUNNING/QUEUING and API snake_case aliases) and
     updates the local cache. Skips jobs that fail to refresh and
     reports them.
     """
     # Build status set with aliases
-    default_statuses = ("PENDING", "RUNNING") if not status else tuple(status)
+    default_statuses = ("PENDING", "RUNNING", "QUEUING") if not status else tuple(status)
     alias_map = {
         "PENDING": {"PENDING", "job_pending"},
         "RUNNING": {"RUNNING", "job_running"},
+        "QUEUING": {"QUEUING", "job_queuing"},
         "SUCCEEDED": {"SUCCEEDED", "job_succeeded"},
         "FAILED": {"FAILED", "job_failed"},
         "CANCELLED": {"CANCELLED", "job_cancelled"},

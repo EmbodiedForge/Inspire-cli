@@ -43,7 +43,7 @@ class _GitHubClient:
 
     def _build_request(self, method: str, url: str, data: Optional[dict] = None) -> urlrequest.Request:
         headers = {
-            "Authorization": f"Bearer {self.token}",
+            "Authorization": f"token {self.token}",
             "Accept": "application/vnd.github+json",
             "User-Agent": "inspire-cli-job-logs",
         }
@@ -168,6 +168,28 @@ class _GitHubClient:
                 raise GitHubError(f"GitHub API request failed for {url}: {e}")
 
 
+def _sanitize_token(token: str) -> str:
+    """Sanitize a GitHub token by removing common prefixes users might accidentally include.
+
+    Users sometimes copy tokens with "Bearer " or "token " prefix from examples,
+    which would result in double prefixes like "Bearer Bearer ..." causing 401 errors.
+
+    Args:
+        token: Raw token string from environment or gh CLI
+
+    Returns:
+        Sanitized token with any prefix removed
+    """
+    token = token.strip()
+    # Remove common prefixes (case-insensitive)
+    lower = token.lower()
+    if lower.startswith("bearer "):
+        token = token[7:].strip()
+    elif lower.startswith("token "):
+        token = token[6:].strip()
+    return token
+
+
 def _resolve_github_token(config: Config) -> str:
     """Resolve a GitHub token using PAT or `gh` CLI.
 
@@ -179,7 +201,7 @@ def _resolve_github_token(config: Config) -> str:
     """
 
     if config.github_token:
-        token = config.github_token
+        token = _sanitize_token(config.github_token)
         logging.debug(
             "GitHub token resolved from INSP_GITHUB_TOKEN (length=%d)",
             len(token),
@@ -195,7 +217,7 @@ def _resolve_github_token(config: Config) -> str:
             stderr=subprocess.DEVNULL,
             text=True,
         )
-        token = proc.stdout.strip()
+        token = _sanitize_token(proc.stdout)
         if token:
             logging.debug(
                 "GitHub token resolved from `gh auth token` (length=%d)",
