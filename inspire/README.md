@@ -142,7 +142,7 @@ python inspire_api_control.py list-nodes --page 1 --size 20
 - `--priority`: 任务优先级 1-10（默认: 8）
 - `--max-time-hours`: 最大运行时间（小时，默认: 100）
 - `--instances`: 实例数量（默认: 1）
-- `--shm-size`: 共享内存大小（Gi，默认: 40）
+- `--shm-size`: 共享内存大小（Gi，默认: 环境变量 `INSPIRE_SHM_SIZE` 或 200）
 - `--image`: 自定义镜像名称
 - `--project-id`: 项目ID（可选）
 - `--workspace-id`: 工作空间ID（可选）

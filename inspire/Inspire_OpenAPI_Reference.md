@@ -70,7 +70,7 @@ Create a distributed training job. The API accepts either the low-level spec IDs
     {
       "spec_id": "string",
       "instance_count": 1,
-      "shm_gi": 40
+      "shm_gi": 200
     }
   ],
   "envs": [

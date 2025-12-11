@@ -43,6 +43,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+DEFAULT_SHM_ENV_VAR = "INSPIRE_SHM_SIZE"
+
+
+def _get_default_shm_size(fallback: int = 200) -> int:
+    """Read default shared memory size from env, falling back to a sane default."""
+    env_value = os.getenv(DEFAULT_SHM_ENV_VAR)
+    if env_value:
+        try:
+            value = int(env_value)
+            if value >= 1:
+                return value
+            logger.warning(
+                "Environment variable %s must be >= 1 (got %s). Falling back to %s Gi.",
+                DEFAULT_SHM_ENV_VAR,
+                env_value,
+                fallback,
+            )
+        except ValueError:
+            logger.warning(
+                "Environment variable %s must be an integer (got %s). Falling back to %s Gi.",
+                DEFAULT_SHM_ENV_VAR,
+                env_value,
+                fallback,
+            )
+    return fallback
+
 
 class GPUType(Enum):
     """GPU类型枚举"""
@@ -411,7 +437,7 @@ class InspireAPI:
     # 默认值常量
     DEFAULT_TASK_PRIORITY = 8
     DEFAULT_INSTANCE_COUNT = 1
-    DEFAULT_SHM_SIZE = 40
+    DEFAULT_SHM_SIZE = _get_default_shm_size()
     DEFAULT_MAX_RUNNING_TIME = "360000000"  # 100小时
     DEFAULT_IMAGE_TYPE = "SOURCE_PRIVATE"
     DEFAULT_PROJECT_ID = os.getenv(
@@ -669,7 +695,7 @@ class InspireAPI:
             image: 镜像名称 (可选，使用默认值)
             task_priority: 任务优先级 (默认: 8)
             instance_count: 实例数量 (默认: 1)
-            shm_gi: 共享内存大小 (默认: 40)
+            shm_gi: 共享内存大小 (默认: 环境变量 INSPIRE_SHM_SIZE 或 200)
             max_running_time_ms: 最大运行时间(毫秒) (默认: 360000000ms=100h)
             auto_fault_tolerance: 是否开启容错 (默认: False)
             enable_notification: 是否启用通知 (默认: False)
@@ -975,8 +1001,9 @@ def main():
                               help='自定义镜像名称 (可选)')
     create_parser.add_argument('--instances', type=int, default=1, 
                               help='实例数量 (默认: 1)')
-    create_parser.add_argument('--shm-size', type=int, default=40, 
-                              help='共享内存大小(Gi) (默认: 40)')
+    default_shm_size = InspireAPI.DEFAULT_SHM_SIZE
+    create_parser.add_argument('--shm-size', type=int, default=default_shm_size, 
+                              help=f'共享内存大小(Gi) (默认: {default_shm_size}，可通过 {DEFAULT_SHM_ENV_VAR} 覆盖)')
     create_parser.add_argument('--max-time-hours', type=float, default=100.0, 
                               help='最大运行时间(小时) (默认: 100)')
     create_parser.add_argument('--project-id', type=str, 
