@@ -53,7 +53,7 @@ def job():
 @click.option("--resource", "-r", required=True, help="Resource spec (e.g., '4xH200')")
 @click.option("--command", "-c", required=True, help="Start command")
 @click.option("--framework", default="pytorch", help="Training framework (default: pytorch)")
-@click.option("--priority", type=int, default=8, help="Task priority 1-10 (default: 8)")
+@click.option("--priority", type=int, default=lambda: int(os.environ.get("INSP_PRIORITY", "8")), help="Task priority 1-10 (default: 8, env: INSP_PRIORITY)")
 @click.option("--max-time", type=float, default=100.0, help="Max runtime in hours (default: 100)")
 @click.option("--location", help="Preferred datacenter location")
 @click.option("--image", help="Custom Docker image")
