@@ -29,6 +29,7 @@ export INSP_GITHUB_REPO="owner/repo"
 export INSP_GITHUB_TOKEN="ghp_..."   # or set via `gh auth login`
 
 # Optional
+export INSP_IMAGE="your_image:tag"  # Default Docker image for `inspire job create` (same as --image)
 export INSPIRE_BASE_URL="https://qz.sii.edu.cn"  # default
 export INSPIRE_LOG_PATTERN="training_master_*.log"  # default
 export INSPIRE_JOB_CACHE="~/.inspire/jobs.json"  # default
