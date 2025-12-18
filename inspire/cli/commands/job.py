@@ -56,7 +56,7 @@ def job():
 @click.option("--priority", type=int, default=lambda: int(os.environ.get("INSP_PRIORITY", "8")), help="Task priority 1-10 (default: 8, env: INSP_PRIORITY)")
 @click.option("--max-time", type=float, default=100.0, help="Max runtime in hours (default: 100)")
 @click.option("--location", help="Preferred datacenter location")
-@click.option("--image", help="Custom Docker image")
+@click.option("--image", default=lambda: os.environ.get("INSP_IMAGE"), help="Custom Docker image")
 @pass_context
 def create(
     ctx: Context,
