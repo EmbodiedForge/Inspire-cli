@@ -9,7 +9,7 @@ Command-line interface for the Inspire HPC training platform.
 ## Installation
 
 ```bash
-pip install git+https://github.com/cyteena/inspire-cli.git
+uv tool install git+https://github.com/cyteena/inspire-cli.git
 ```
 
 ## Configuration
