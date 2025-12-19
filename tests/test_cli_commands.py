@@ -356,6 +356,38 @@ def test_job_list_uses_local_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     assert TEST_JOB_ID in result.output
 
 
+def test_job_update_refreshes_job_creating_status(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    api = patch_config_and_auth(monkeypatch, tmp_path)
+
+    # Seed cache with a job in an early-stage API status that should still be refreshed
+    config = make_test_config(tmp_path)
+    cache = JobCache(config.get_expanded_cache_path())
+    cache.add_job(
+        job_id=TEST_JOB_ID,
+        name="creating-job",
+        resource="H200",
+        command="echo hi",
+        status="job_creating",
+        log_path=None,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["--json", "job", "update", "--delay", "0"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["success"] is True
+
+    updated_ids = {entry["job_id"] for entry in payload["data"]["updated"]}
+    assert updated_ids == {TEST_JOB_ID}
+
+    # Ensure the job was actually polled and the cache was updated
+    assert api.calls["get_job_detail"] == [TEST_JOB_ID]
+    refreshed = cache.get_job(TEST_JOB_ID)
+    assert refreshed is not None
+    assert refreshed["status"] == "SUCCEEDED"
+
+
 def test_job_logs_path_and_tail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     patch_config_and_auth(monkeypatch, tmp_path)
 
@@ -542,7 +574,7 @@ def test_job_logs_bulk_update_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 
     calls: List[str] = []
 
-    def fake_fetch(config_obj, job_id: str, remote_log_path: str, cache_path: Path, refresh: bool):  # noqa: ARG001
+    def fake_fetch(config, job_id: str, remote_log_path: str, cache_path: Path, refresh: bool):  # noqa: ARG001
         calls.append(job_id)
 
     monkeypatch.setattr(job_cmd, "fetch_remote_log_via_bridge", fake_fetch)

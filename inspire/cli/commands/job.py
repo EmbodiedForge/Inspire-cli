@@ -453,7 +453,9 @@ def update_jobs(ctx: Context, status: tuple, limit: int, delay: float):
     # Build status set with aliases
     default_statuses = ("PENDING", "RUNNING", "QUEUING") if not status else tuple(status)
     alias_map = {
-        "PENDING": {"PENDING", "job_pending"},
+        # Some API backends return early-stage states like "job_creating".
+        # Treat them as PENDING so `job update` keeps refreshing them by default.
+        "PENDING": {"PENDING", "job_pending", "job_creating"},
         "RUNNING": {"RUNNING", "job_running"},
         "QUEUING": {"QUEUING", "job_queuing"},
         "SUCCEEDED": {"SUCCEEDED", "job_succeeded"},
