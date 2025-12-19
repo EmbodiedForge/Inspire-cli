@@ -151,6 +151,16 @@ def test_global_debug_flag_runs_subcommand(monkeypatch: pytest.MonkeyPatch, tmp_
     assert result.exit_code == 0
 
 
+def test_job_help_smoke(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Smoke test to ensure `inspire job --help` works (no import/syntax errors)."""
+    patch_config_and_auth(monkeypatch, tmp_path)
+    runner = CliRunner()
+
+    result = runner.invoke(cli_main, ["job", "--help"])
+    assert result.exit_code == 0
+    assert "Manage training jobs" in result.output
+
+
 # ---------------------------------------------------------------------------
 # Job command group
 # ---------------------------------------------------------------------------

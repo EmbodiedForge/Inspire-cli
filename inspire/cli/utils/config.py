@@ -128,7 +128,7 @@ class Config:
         """Create configuration from environment variables.
 
         Args:
-            require_target_dir: If True, raise error if INSP_TARGET_DIR is not set
+            require_target_dir: If True, raise error if INSPIRE_TARGET_DIR is not set
 
         Returns:
             Config instance

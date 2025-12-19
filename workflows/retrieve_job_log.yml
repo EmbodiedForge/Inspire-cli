@@ -4,7 +4,7 @@
 # manually via the GitHub Actions API (workflow_dispatch) by the
 # `inspire job logs` command running on a laptop. It reads a training
 # log file from the shared filesystem (the same mount used for
-# INSP_TARGET_DIR) and uploads it as an artifact.
+# INSPIRE_TARGET_DIR) and uploads it as an artifact.
 
 name: Retrieve Job Log
 

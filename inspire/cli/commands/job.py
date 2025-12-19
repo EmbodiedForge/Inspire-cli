@@ -71,7 +71,7 @@ def create(
 ):
     """Create a new training job.
 
-    IMPORTANT: Always set INSPIRE_TARGET_LOG_DIR before running this command (from your laptop).
+    IMPORTANT: Always set INSPIRE_TARGET_DIR before running this command (from your laptop).
     This path should point to the shared filesystem on Bridge where training logs will be written
     (e.g., /train/logs).
 
@@ -81,16 +81,16 @@ def create(
     When creating a job:
       - The wrapped command is sent to Inspire API
       - Inspire executes it on the Bridge machine
-      - Logs are written to INSPIRE_TARGET_LOG_DIR on Bridge
+      - Logs are written to INSPIRE_TARGET_DIR on Bridge
       - log_path is cached in ~/.inspire/jobs.json for later retrieval
 
     When retrieving logs later:
-      - Set INSPIRE_TARGET_LOG_DIR to the same path used during job creation
+      - Set INSPIRE_TARGET_DIR to the same path used during job creation
       - Use `inspire job logs <job_id>` to fetch logs via GitHub bridge
 
     \b
     Examples:
-        export INSPIRE_TARGET_LOG_DIR="/train/logs"
+        export INSPIRE_TARGET_DIR="/train/logs"
         inspire job create --name "pr-123" --resource "4xH200" --command "cd /path/to/code && bash train.sh"
         inspire job create -n test -r H200 -c "python train.py" --priority 9
     """
@@ -98,9 +98,9 @@ def create(
         config = Config.from_env(require_target_dir=True)
         api = AuthManager.get_api(config)
 
-        # If INSP_TARGET_DIR is configured, wrap the command so
+        # If INSPIRE_TARGET_DIR is configured, wrap the command so
         # stdout/stderr land in a single master log file under
-        # ${INSP_TARGET_DIR}/.inspire/.
+        # ${INSPIRE_TARGET_DIR}/.inspire/.
         final_command = command
         log_path = None
         if config.target_dir:

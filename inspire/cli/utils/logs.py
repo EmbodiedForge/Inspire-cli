@@ -22,7 +22,7 @@ class LogReader:
         """Initialize log reader.
 
         Args:
-            target_dir: Base directory on shared filesystem (INSP_TARGET_DIR)
+            target_dir: Base directory on shared filesystem (INSPIRE_TARGET_DIR)
             pattern: Glob pattern for finding log files
         """
         self.target_dir = Path(target_dir)

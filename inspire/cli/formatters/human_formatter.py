@@ -22,6 +22,8 @@ STATUS_EMOJI = {
     "job_cancelled": "\U0001f6d1",  # stop sign
 }
 
+DEFAULT_STATUS_EMOJI = "\U0001f4ca"  # bar chart
+
 
 def _format_duration(ms: str) -> str:
     """Format milliseconds as human-readable duration."""
@@ -61,7 +63,7 @@ def format_job_status(job_data: Dict[str, Any]) -> str:
         Formatted string with job status
     """
     status = job_data.get("status", "UNKNOWN")
-    emoji = STATUS_EMOJI.get(status, "\U0001f4ca")  # bar chart as default
+    emoji = STATUS_EMOJI.get(status, DEFAULT_STATUS_EMOJI)
 
     lines = [
         "",
@@ -117,7 +119,7 @@ def format_job_list(jobs: List[Dict[str, Any]]) -> str:
     job_id_width = max(len("Job ID"), *(len(str(job.get("job_id", "N/A"))) for job in jobs))
     name_width = max(len("Name"), *(len(str(job.get("name", "N/A"))) for job in jobs))
     status_strings = [
-        f"{STATUS_EMOJI.get(job.get('status', 'UNKNOWN'), '\U0001f4ca')} {job.get('status', 'UNKNOWN')}"
+        f"{STATUS_EMOJI.get(job.get('status', 'UNKNOWN'), DEFAULT_STATUS_EMOJI)} {job.get('status', 'UNKNOWN')}"
         for job in jobs
     ]
     status_width = (
