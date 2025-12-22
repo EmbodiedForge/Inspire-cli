@@ -20,10 +20,10 @@ from inspire.cli.context import (
     pass_context,
 )
 from inspire.cli.utils.config import Config, ConfigError
-from inspire.cli.utils.github import (
-    GitHubError,
-    GitHubAuthError,
-    trigger_bridge_action_workflow,
+from inspire.cli.utils.gitlab import (
+    GitLabError,
+    GitLabAuthError,
+    trigger_bridge_action_pipeline,
     wait_for_bridge_action_completion,
     download_bridge_artifact,
     fetch_bridge_output_log,
@@ -77,7 +77,7 @@ def exec_command(
     wait: bool,
     timeout: Optional[int],
 ) -> None:
-    """Execute a command on the Bridge runner (self-hosted GitHub runner).
+    """Execute a command on the Bridge runner (self-hosted GitLab runner).
 
     COMMAND is the shell command to run on Bridge (in INSPIRE_TARGET_DIR).
     Command output (stdout/stderr) is automatically displayed after completion.
@@ -122,18 +122,27 @@ def exec_command(
             click.echo(f"Artifact paths: {artifact_paths_list}")
 
     try:
-        trigger_bridge_action_workflow(
+        pipeline_response = trigger_bridge_action_pipeline(
             config=config,
             raw_command=command,
             artifact_paths=artifact_paths_list,
             request_id=request_id,
             denylist=merged_denylist,
         )
-    except (GitHubError, GitHubAuthError) as e:
+        pipeline_id = pipeline_response.get("id")
+        pipeline_url = pipeline_response.get("web_url", "")
+    except (GitLabError, GitLabAuthError) as e:
         if ctx.json_output:
-            click.echo(json.dumps({"error": str(e), "type": "github_error"}))
+            click.echo(json.dumps({"error": str(e), "type": "gitlab_error"}))
         else:
             click.echo(f"Error: {e}", err=True)
+        sys.exit(EXIT_GENERAL_ERROR)
+
+    if not pipeline_id:
+        if ctx.json_output:
+            click.echo(json.dumps({"error": "Failed to get pipeline ID", "type": "gitlab_error"}))
+        else:
+            click.echo("Error: Failed to get pipeline ID from response", err=True)
         sys.exit(EXIT_GENERAL_ERROR)
 
     if not wait:
@@ -143,12 +152,16 @@ def exec_command(
                     {
                         "status": "triggered",
                         "request_id": request_id,
+                        "pipeline_id": pipeline_id,
+                        "pipeline_url": pipeline_url,
                         "command": command,
                     }
                 )
             )
         else:
-            click.echo("Action dispatched; not waiting for completion")
+            click.echo("Pipeline dispatched; not waiting for completion")
+            if pipeline_url:
+                click.echo(f"Pipeline: {pipeline_url}")
         sys.exit(EXIT_SUCCESS)
 
     action_timeout = timeout or config.bridge_action_timeout or 300
@@ -159,7 +172,7 @@ def exec_command(
     try:
         result = wait_for_bridge_action_completion(
             config=config,
-            request_id=request_id,
+            pipeline_id=pipeline_id,
             timeout=action_timeout,
         )
     except TimeoutError as e:
@@ -168,9 +181,9 @@ def exec_command(
         else:
             click.echo(f"Timeout: {e}", err=True)
         sys.exit(EXIT_TIMEOUT)
-    except GitHubError as e:
+    except GitLabError as e:
         if ctx.json_output:
-            click.echo(json.dumps({"error": str(e), "type": "github_error"}))
+            click.echo(json.dumps({"error": str(e), "type": "gitlab_error"}))
         else:
             click.echo(f"Error: {e}", err=True)
         sys.exit(EXIT_GENERAL_ERROR)
@@ -178,8 +191,8 @@ def exec_command(
     # Fetch and display command output
     output_log: Optional[str] = None
     try:
-        output_log = fetch_bridge_output_log(config, request_id)
-    except GitHubError:
+        output_log = fetch_bridge_output_log(config, pipeline_id)
+    except GitLabError:
         pass  # Output fetch is best-effort
 
     if output_log and not ctx.json_output:
@@ -196,14 +209,14 @@ def exec_command(
                     {
                         "status": "failed",
                         "conclusion": result.get("conclusion"),
-                        "workflow_url": result.get("html_url", ""),
+                        "pipeline_url": result.get("web_url", ""),
                         "output": output_log,
                     }
                 )
             )
         else:
             click.echo(
-                f"Action failed: {result.get('conclusion')} (see {result.get('html_url', '')})",
+                f"Action failed: {result.get('conclusion')} (see {result.get('web_url', '')})",
                 err=True,
             )
         sys.exit(EXIT_GENERAL_ERROR)
@@ -212,8 +225,8 @@ def exec_command(
         if not ctx.json_output:
             click.echo(f"Downloading artifact to {download}...")
         try:
-            download_bridge_artifact(config, request_id, Path(download))
-        except GitHubError as e:
+            download_bridge_artifact(config, pipeline_id, Path(download))
+        except GitLabError as e:
             if ctx.json_output:
                 click.echo(
                     json.dumps(
@@ -233,6 +246,7 @@ def exec_command(
                 {
                     "status": "success",
                     "request_id": request_id,
+                    "pipeline_id": pipeline_id,
                     "artifact_downloaded": bool(download),
                     "output": output_log,
                 }
@@ -240,8 +254,8 @@ def exec_command(
         )
     else:
         click.echo("✓ Action completed successfully")
-        if result.get("html_url"):
-            click.echo(f"Workflow: {result.get('html_url')}")
+        if result.get("web_url"):
+            click.echo(f"Pipeline: {result.get('web_url')}")
         if download:
             click.echo("Artifacts downloaded")
 

@@ -9,7 +9,7 @@ Command-line interface for the Inspire HPC training platform.
 ## Installation
 
 ```bash
-uv tool install git+https://github.com/cyteena/inspire-cli.git
+uv tool install git+https://gitlab.com/cyteena/inspire-cli.git
 ```
 
 ## Configuration
@@ -24,9 +24,10 @@ export INSPIRE_PASSWORD="your_password"
 # Required for sync/bridge/log operations (shared filesystem root)
 export INSPIRE_TARGET_DIR="/path/to/shared/filesystem"
 
-# GitHub bridge (required for sync/bridge exec/remote logs)
-export INSP_GITHUB_REPO="owner/repo"
-export INSP_GITHUB_TOKEN="ghp_..."   # or set via `gh auth login`
+# GitLab bridge (required for sync/bridge exec/remote logs)
+export INSP_GITLAB_PROJECT="namespace/project"
+export INSP_GITLAB_TOKEN="glpat-..."   # or set via `glab auth login`
+export INSP_GITLAB_SERVER="https://gitlab.com"  # optional, defaults to gitlab.com
 
 # Optional
 export INSP_IMAGE="your_image:tag"  # Default Docker image for `inspire job create` (same as --image)
@@ -73,7 +74,7 @@ inspire job wait <job-id> --timeout 7200
 inspire job logs <job-id> --tail 100
 ```
 
-Logs written during job execution (when `INSPIRE_TARGET_DIR` is set) are stored under `INSPIRE_TARGET_DIR/.inspire/` with pattern `training_master_*.log` and fetched via the GitHub bridge.
+Logs written during job execution (when `INSPIRE_TARGET_DIR` is set) are stored under `INSPIRE_TARGET_DIR/.inspire/` with pattern `training_master_*.log` and fetched via the GitLab pipeline.
 
 ## Command Reference
 
@@ -200,42 +201,37 @@ For **remote** log retrieval (from a laptop), see [Remote Log Retrieval](#remote
 
 ## Remote Log Retrieval
 
-If you're running `inspire job logs` from a machine **without** access to the shared filesystem (e.g., your laptop), the CLI can fetch logs via GitHub Actions.
+If you're running `inspire job logs` from a machine **without** access to the shared filesystem (e.g., your laptop), the CLI can fetch logs via GitLab CI/CD pipelines.
 
 ### Setup
 
-1. **Copy the workflow file** to your repository:
-   ```bash
-   # Copy from this repo's workflows/ directory
-   cp workflows/retrieve_job_log.yml YOUR_REPO/.github/workflows/
-   ```
-
-   Or copy it from: [`workflows/retrieve_job_log.yml`](workflows/retrieve_job_log.yml)
+1. **Ensure `.gitlab-ci.yml` is configured** in your repository with the `retrieve_job_log` job.
 
 2. **Set environment variables:**
    ```bash
-   export INSP_GITHUB_REPO="owner/repo"      # Your GitHub repo
-   export INSP_GITHUB_TOKEN="ghp_..."        # GitHub PAT (or use: gh auth login)
+   export INSP_GITLAB_PROJECT="namespace/project"  # Your GitLab project
+   export INSP_GITLAB_TOKEN="glpat-..."            # GitLab PAT (or use: glab auth login)
+   export INSP_GITLAB_SERVER="https://gitlab.com"  # Optional, defaults to gitlab.com
    ```
 
-3. **Ensure your repo has a self-hosted runner** with access to the shared filesystem and label `qizhi-self-hosted`.
-   You can set a github action self-hosted runner in the "Action" option in the upper column of every github repo.
+3. **Ensure your project has a self-hosted runner** with access to the shared filesystem and tag `qizhi-self-hosted`.
+   You can set up a GitLab runner in your project's Settings > CI/CD > Runners.
    Tips: if you need sudo to setup a self-hosted runner in inspire platform, you can just try
    ```bash
    export RUNNER_ALLOW_RUNASROOT=1
    ```
-   
+
 
 ### How It Works
 
 ```
 Laptop (inspire job logs)
     ↓
-GitHub API (triggers workflow)
+GitLab API (triggers pipeline)
     ↓
 Self-hosted Runner (reads log from shared filesystem)
     ↓
-GitHub Artifact (uploads log)
+GitLab Artifact (uploads log)
     ↓
 Laptop (downloads and caches locally)
 ```
@@ -257,18 +253,17 @@ Logs are cached locally at `~/.inspire/logs/` and reused on subsequent calls.
 
 ## Code Sync
 
-The `inspire sync` command pushes your local branch to GitHub and triggers a workflow on the Bridge runner to sync the code to the shared filesystem. This replaces the old PR-based workflow for launching training.
+The `inspire sync` command pushes your local branch to GitLab and triggers a pipeline on the Bridge runner to sync the code to the shared filesystem. This replaces the old PR-based workflow for launching training.
 
 ## Bridge Exec
 
 Run shell commands on the Bridge self-hosted runner (in `INSPIRE_TARGET_DIR`), with optional denylist and artifact download.
 
 ### Setup
-- Copy `workflows/run_bridge_action.yml` into your repo (e.g., `.github/workflows/`).
+- Ensure `.gitlab-ci.yml` is configured in your repo with the `bridge_action_exec` job.
 - Env vars:
-  - `INSP_GITHUB_REPO` (owner/repo)
+  - `INSP_GITLAB_PROJECT` (namespace/project)
   - `INSPIRE_TARGET_DIR` (target dir on Bridge — shared with sync and logs)
-  - Optional: `INSPIRE_BRIDGE_ACTION_WORKFLOW` (default `run_bridge_action.yml`)
   - Optional: `INSPIRE_BRIDGE_ACTION_TIMEOUT` (seconds, default 300)
   - Optional: `INSPIRE_BRIDGE_DENYLIST` (comma/newline glob patterns for blocking commands)
 
@@ -303,16 +298,13 @@ Notes:
 
 ## Code Sync Setup
 
-1. **Copy the workflow file** to your repository:
-   ```bash
-   cp workflows/sync_code.yml YOUR_REPO/.github/workflows/
-   ```
+1. **Ensure `.gitlab-ci.yml` is configured** in your repository with the `sync_code` job.
 
 2. **Set local environment variables:**
    ```bash
-   export INSP_GITHUB_REPO="owner/repo"        # Your GitHub repo
-   export INSPIRE_TARGET_DIR="/path/to/dir"    # Target directory on Bridge
-   export INSPIRE_DEFAULT_REMOTE="origin"      # Optional, defaults to origin
+   export INSP_GITLAB_PROJECT="namespace/project"  # Your GitLab project
+   export INSPIRE_TARGET_DIR="/path/to/dir"        # Target directory on Bridge
+   export INSPIRE_DEFAULT_REMOTE="origin"          # Optional, defaults to origin
    ```
 
 ### Sync Usage
@@ -358,7 +350,7 @@ Laptop (inspire sync)
     ↓
 Git push to remote
     ↓
-GitHub API (triggers sync_code.yml)
+GitLab API (triggers sync_code pipeline)
     ↓
 Self-hosted Runner:
     - cd to target directory
@@ -374,7 +366,7 @@ If the Bridge has local changes or the branch has diverged, the sync will fail:
 
 ```
 ✗ Sync failed: failure
-  See: https://github.com/owner/repo/actions/runs/123456
+  See: https://gitlab.com/namespace/project/-/pipelines/123456
 ```
 
 To resolve, use `--force` to discard local changes on Bridge:

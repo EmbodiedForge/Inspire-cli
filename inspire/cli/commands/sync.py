@@ -5,14 +5,13 @@ Usage:
 
 This command:
 1. Pushes the current (or specified) branch to the remote
-2. Triggers a GitHub Action on the Bridge runner to sync the code
+2. Triggers a GitLab pipeline on the Bridge runner to sync the code
 3. Returns the synced commit SHA
 """
 
 import json
 import subprocess
 import sys
-import time
 import logging
 from typing import Optional
 
@@ -26,11 +25,11 @@ from inspire.cli.context import (
     EXIT_GENERAL_ERROR,
 )
 from inspire.cli.utils.config import Config, ConfigError
-from inspire.cli.utils.github import (
-    GitHubError,
-    GitHubAuthError,
-    _get_client,
-    _get_repo,
+from inspire.cli.utils.gitlab import (
+    GitLabError,
+    GitLabAuthError,
+    trigger_sync_pipeline,
+    wait_for_pipeline_completion,
 )
 
 
@@ -110,92 +109,6 @@ def _push_to_remote(branch: str, remote: str) -> None:
         raise click.ClickException(f"Failed to push to {remote}: {error_msg}")
 
 
-def _trigger_sync_workflow(
-    config: Config,
-    branch: str,
-    commit_sha: str,
-    force: bool = False,
-) -> str:
-    """Trigger the sync workflow on GitHub Actions.
-
-    Returns the workflow run ID.
-    """
-    repo = _get_repo(config)
-    client = _get_client(config)
-
-    workflow_file = config.sync_workflow
-    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_file}/dispatches"
-
-    data = {
-        "ref": "main",  # Workflow file must be on main
-        "inputs": {
-            "branch": branch,
-            "commit_sha": commit_sha,
-            "force": str(force).lower(),
-            "target_dir": config.target_dir,
-        },
-    }
-
-    try:
-        client.request_json("POST", url, data=data)
-    except GitHubError as e:
-        raise click.ClickException(f"Failed to trigger sync workflow: {e}")
-
-    # Wait briefly then find the run ID
-    time.sleep(2)
-
-    # Get the most recent workflow run for this workflow
-    runs_url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_file}/runs?per_page=5"
-    try:
-        response = client.request_json("GET", runs_url)
-        runs = response.get("workflow_runs", [])
-        if runs:
-            return str(runs[0]["id"])
-    except GitHubError:
-        pass
-
-    return ""
-
-
-def _wait_for_sync_completion(
-    config: Config,
-    run_id: str,
-    timeout: int = 120,
-) -> dict:
-    """Wait for the sync workflow to complete.
-
-    Returns the workflow run result with status and conclusion.
-    """
-    if not run_id:
-        return {"status": "unknown", "conclusion": None}
-
-    repo = _get_repo(config)
-    client = _get_client(config)
-
-    url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}"
-    deadline = time.time() + timeout
-
-    while time.time() < deadline:
-        try:
-            response = client.request_json("GET", url)
-            status = response.get("status")
-            conclusion = response.get("conclusion")
-
-            if status == "completed":
-                return {
-                    "status": status,
-                    "conclusion": conclusion,
-                    "html_url": response.get("html_url", ""),
-                }
-
-            time.sleep(3)
-        except GitHubError as e:
-            logging.debug(f"Error checking workflow status: {e}")
-            time.sleep(3)
-
-    return {"status": "timeout", "conclusion": None}
-
-
 @click.command()
 @click.option(
     "--branch", "-b",
@@ -239,8 +152,8 @@ def sync(
 ) -> None:
     """Sync local code to the Bridge shared filesystem.
 
-    This command pushes your local branch to GitHub, then triggers a
-    workflow on the self-hosted runner to sync the code to the shared
+    This command pushes your local branch to GitLab, then triggers a
+    pipeline on the self-hosted runner to sync the code to the shared
     filesystem used by the Inspire training platform.
 
     \b
@@ -253,11 +166,13 @@ def sync(
     \b
     Environment variables:
         INSPIRE_DEFAULT_REMOTE    Default git remote (default: origin)
-        INSPIRE_SYNC_WORKFLOW     Workflow filename (default: sync_code.yml)
         INSPIRE_TARGET_DIR        Target directory on Bridge (required)
+        INSP_GITLAB_PROJECT       GitLab project (namespace/project)
+        INSP_GITLAB_TOKEN         GitLab Personal Access Token
+        INSP_GITLAB_SERVER        GitLab server URL (default: https://gitlab.com)
     """
     try:
-        # Load config - we need GitHub settings but not Inspire API credentials
+        # Load config - we need GitLab settings but not Inspire API credentials
         # for sync, so we do a minimal check
         config = Config.from_env_for_sync()
     except ConfigError as e:
@@ -305,27 +220,42 @@ def sync(
                 }))
             raise
 
-    # Trigger sync workflow
+    # Trigger sync pipeline
     if not ctx.json_output:
-        click.echo("Triggering sync workflow...")
+        click.echo("Triggering sync pipeline...")
 
     try:
-        run_id = _trigger_sync_workflow(config, branch, commit_sha, force)
-    except (GitHubError, GitHubAuthError) as e:
+        pipeline_response = trigger_sync_pipeline(config, branch, commit_sha, force)
+        pipeline_id = pipeline_response.get("id")
+        pipeline_url = pipeline_response.get("web_url", "")
+    except (GitLabError, GitLabAuthError) as e:
         if ctx.json_output:
             click.echo(json.dumps({
                 "error": str(e),
-                "type": "github_error",
+                "type": "gitlab_error",
             }))
         else:
             click.echo(f"Error: {e}", err=True)
         sys.exit(EXIT_CONFIG_ERROR)
 
-    if wait and run_id:
+    if wait and pipeline_id:
         if not ctx.json_output:
             click.echo("Waiting for sync to complete...")
 
-        result = _wait_for_sync_completion(config, run_id, timeout)
+        try:
+            result = wait_for_pipeline_completion(config, pipeline_id, timeout)
+        except TimeoutError:
+            if ctx.json_output:
+                click.echo(json.dumps({
+                    "status": "timeout",
+                    "branch": branch,
+                    "commit": commit_sha[:7],
+                    "error": f"Sync pipeline did not complete within {timeout}s",
+                }))
+            else:
+                click.echo(f"⚠ Sync pipeline timed out after {timeout}s", err=True)
+                click.echo("The sync may still complete. Check GitLab for status.", err=True)
+            sys.exit(EXIT_GENERAL_ERROR)
 
         if result["conclusion"] == "success":
             if ctx.json_output:
@@ -337,24 +267,12 @@ def sync(
                     "commit_full": commit_sha,
                     "message": commit_msg,
                     "target_dir": config.target_dir,
-                    "workflow_url": result.get("html_url", ""),
+                    "pipeline_url": result.get("web_url", ""),
                 }))
             else:
                 click.echo(click.style("✓", fg="green") + f" Synced branch '{branch}' ({commit_sha[:7]}) to {config.target_dir}")
                 click.echo(f"  Commit: {commit_msg}")
                 click.echo(f"  Remote: {remote}")
-        elif result["status"] == "timeout":
-            if ctx.json_output:
-                click.echo(json.dumps({
-                    "status": "timeout",
-                    "branch": branch,
-                    "commit": commit_sha[:7],
-                    "error": f"Sync workflow did not complete within {timeout}s",
-                }))
-            else:
-                click.echo(f"⚠ Sync workflow timed out after {timeout}s", err=True)
-                click.echo("The sync may still complete. Check GitHub Actions for status.", err=True)
-            sys.exit(EXIT_GENERAL_ERROR)
         else:
             if ctx.json_output:
                 click.echo(json.dumps({
@@ -362,12 +280,12 @@ def sync(
                     "branch": branch,
                     "commit": commit_sha[:7],
                     "conclusion": result.get("conclusion"),
-                    "workflow_url": result.get("html_url", ""),
+                    "pipeline_url": result.get("web_url", ""),
                 }))
             else:
                 click.echo(f"✗ Sync failed: {result.get('conclusion', 'unknown')}", err=True)
-                if result.get("html_url"):
-                    click.echo(f"  See: {result['html_url']}", err=True)
+                if result.get("web_url"):
+                    click.echo(f"  See: {result['web_url']}", err=True)
             sys.exit(EXIT_GENERAL_ERROR)
     else:
         # Not waiting
@@ -378,11 +296,14 @@ def sync(
                 "remote": remote,
                 "commit": commit_sha[:7],
                 "commit_full": commit_sha,
-                "run_id": run_id,
+                "pipeline_id": pipeline_id,
+                "pipeline_url": pipeline_url,
             }))
         else:
             click.echo(click.style("✓", fg="green") + f" Pushed {branch} to {remote}")
-            click.echo(click.style("✓", fg="green") + " Triggered sync workflow" + (f" (run {run_id})" if run_id else ""))
+            click.echo(click.style("✓", fg="green") + " Triggered sync pipeline" + (f" (pipeline {pipeline_id})" if pipeline_id else ""))
             click.echo(f"  Commit: {commit_sha[:7]} - {commit_msg}")
+            if pipeline_url:
+                click.echo(f"  Pipeline: {pipeline_url}")
 
     sys.exit(EXIT_SUCCESS)

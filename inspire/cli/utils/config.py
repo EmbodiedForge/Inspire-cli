@@ -71,10 +71,10 @@ class Config:
     **Log settings:**
     - INSPIRE_LOG_PATTERN: Log file glob pattern (default: training_master_*.log)
 
-    **GitHub bridge (required for sync, bridge exec, remote logs):**
-    - INSP_GITHUB_REPO: GitHub repo as 'owner/repo'
-    - INSP_GITHUB_TOKEN: GitHub Personal Access Token (or use `gh auth token`)
-    - INSP_GITHUB_WORKFLOW: Log retrieval workflow filename (default: retrieve_job_log.yml)
+    **GitLab bridge (required for sync, bridge exec, remote logs):**
+    - INSP_GITLAB_PROJECT: GitLab project as 'namespace/project' or numeric ID
+    - INSP_GITLAB_TOKEN: GitLab Personal Access Token (or use `glab auth status`)
+    - INSP_GITLAB_SERVER: GitLab server URL (default: https://gitlab.com)
     - INSP_LOG_CACHE_DIR: Cache directory for remote logs (default: ~/.inspire/logs)
     - INSP_REMOTE_TIMEOUT: Max time to wait for artifact (seconds, default: 90)
 
@@ -87,7 +87,6 @@ class Config:
     - INSPIRE_RETRY_DELAY: Retry delay in seconds (default: 1.0)
 
     **Bridge exec settings:**
-    - INSPIRE_BRIDGE_ACTION_WORKFLOW: Workflow filename (default: run_bridge_action.yml)
     - INSPIRE_BRIDGE_ACTION_TIMEOUT: Timeout in seconds (default: 300)
     - INSPIRE_BRIDGE_DENYLIST: Glob patterns to block (comma/newline separated)
     """
@@ -107,19 +106,17 @@ class Config:
     max_retries: int = 3
     retry_delay: float = 1.0
 
-    # GitHub / remote log settings
-    github_repo: Optional[str] = None
-    github_workflow: str = "retrieve_job_log.yml"
-    github_token: Optional[str] = None
+    # GitLab / remote log settings
+    gitlab_project: Optional[str] = None
+    gitlab_token: Optional[str] = None
+    gitlab_server: str = "https://gitlab.com"
     log_cache_dir: str = "~/.inspire/logs"
     remote_timeout: int = 90
 
     # Sync settings
     default_remote: str = "origin"
-    sync_workflow: str = "sync_code.yml"
 
     # Bridge action settings
-    bridge_action_workflow: str = "run_bridge_action.yml"
     bridge_action_timeout: int = 300
     bridge_action_denylist: list[str] = field(default_factory=list)
 
@@ -212,14 +209,12 @@ class Config:
             timeout=timeout,
             max_retries=max_retries,
             retry_delay=retry_delay,
-            github_repo=os.getenv("INSP_GITHUB_REPO"),
-            github_workflow=os.getenv("INSP_GITHUB_WORKFLOW", "retrieve_job_log.yml"),
-            github_token=os.getenv("INSP_GITHUB_TOKEN"),
+            gitlab_project=os.getenv("INSP_GITLAB_PROJECT"),
+            gitlab_token=os.getenv("INSP_GITLAB_TOKEN"),
+            gitlab_server=os.getenv("INSP_GITLAB_SERVER", "https://gitlab.com"),
             log_cache_dir=os.getenv("INSP_LOG_CACHE_DIR", "~/.inspire/logs"),
             remote_timeout=_parse_remote_timeout(os.getenv("INSP_REMOTE_TIMEOUT", "90")),
             default_remote=os.getenv("INSPIRE_DEFAULT_REMOTE", "origin"),
-            sync_workflow=os.getenv("INSPIRE_SYNC_WORKFLOW", "sync_code.yml"),
-            bridge_action_workflow=os.getenv("INSPIRE_BRIDGE_ACTION_WORKFLOW", "run_bridge_action.yml"),
             bridge_action_timeout=bridge_action_timeout,
             bridge_action_denylist=_parse_denylist(os.getenv("INSPIRE_BRIDGE_DENYLIST")),
         )
@@ -228,7 +223,7 @@ class Config:
     def from_env_for_sync(cls) -> "Config":
         """Create configuration for sync/bridge commands (doesn't require platform credentials).
 
-        The sync and bridge exec commands only need GitHub access and target dir,
+        The sync and bridge exec commands only need GitLab access and target dir,
         not Inspire platform credentials.
 
         Returns:
@@ -246,12 +241,12 @@ class Config:
                 "Set it with: export INSPIRE_TARGET_DIR='/path/to/shared/directory'"
             )
 
-        # Check for GitHub repo
-        github_repo = os.getenv("INSP_GITHUB_REPO")
-        if not github_repo:
+        # Check for GitLab project
+        gitlab_project = os.getenv("INSP_GITLAB_PROJECT")
+        if not gitlab_project:
             raise ConfigError(
-                "Missing INSP_GITHUB_REPO environment variable.\n"
-                "Set it with: export INSP_GITHUB_REPO='owner/repo'"
+                "Missing INSP_GITLAB_PROJECT environment variable.\n"
+                "Set it with: export INSP_GITLAB_PROJECT='namespace/project'"
             )
 
         bridge_action_timeout = 300
@@ -269,12 +264,11 @@ class Config:
             username="",
             password="",
             target_dir=target_dir,
-            github_repo=github_repo,
-            github_token=os.getenv("INSP_GITHUB_TOKEN"),
+            gitlab_project=gitlab_project,
+            gitlab_token=os.getenv("INSP_GITLAB_TOKEN"),
+            gitlab_server=os.getenv("INSP_GITLAB_SERVER", "https://gitlab.com"),
             default_remote=os.getenv("INSPIRE_DEFAULT_REMOTE", "origin"),
-            sync_workflow=os.getenv("INSPIRE_SYNC_WORKFLOW", "sync_code.yml"),
             remote_timeout=_parse_remote_timeout(os.getenv("INSP_REMOTE_TIMEOUT", "90")),
-            bridge_action_workflow=os.getenv("INSPIRE_BRIDGE_ACTION_WORKFLOW", "run_bridge_action.yml"),
             bridge_action_timeout=bridge_action_timeout,
             bridge_action_denylist=_parse_denylist(os.getenv("INSPIRE_BRIDGE_DENYLIST")),
         )

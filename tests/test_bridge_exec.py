@@ -19,12 +19,11 @@ def make_sync_config(tmp_path: Path) -> Config:
         username="",
         password="",
         target_dir=str(tmp_path),
-        github_repo="owner/repo",
-        github_token="token",
+        gitlab_project="owner/repo",
+        gitlab_token="token",
+        gitlab_server="https://gitlab.com",
         default_remote="origin",
-        sync_workflow="sync_code.yml",
         remote_timeout=90,
-        bridge_action_workflow="run_bridge_action.yml",
         bridge_action_timeout=5,
         bridge_action_denylist=[],
     )
@@ -37,15 +36,16 @@ def test_bridge_exec_triggers_and_no_wait(monkeypatch: pytest.MonkeyPatch, tmp_p
 
     monkeypatch.setattr(Config, "from_env_for_sync", classmethod(lambda cls: config))
 
-    def fake_trigger(config: Config, raw_command: str, artifact_paths: List[str], request_id: str, denylist: Optional[List[str]] = None) -> None:
+    def fake_trigger(config: Config, raw_command: str, artifact_paths: List[str], request_id: str, denylist: Optional[List[str]] = None) -> Dict[str, Any]:
         called["trigger"] = {
             "raw_command": raw_command,
             "artifact_paths": artifact_paths,
             "request_id": request_id,
             "denylist": denylist,
         }
+        return {"id": 12345, "web_url": "https://gitlab.com/test/-/pipelines/12345"}
 
-    monkeypatch.setattr(bridge_module, "trigger_bridge_action_workflow", fake_trigger)
+    monkeypatch.setattr(bridge_module, "trigger_bridge_action_pipeline", fake_trigger)
 
     runner = CliRunner()
     result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--no-wait"])
@@ -63,10 +63,11 @@ def test_bridge_exec_uses_env_denylist(monkeypatch: pytest.MonkeyPatch, tmp_path
 
     monkeypatch.setattr(Config, "from_env_for_sync", classmethod(lambda cls: config))
 
-    def fake_trigger(config: Config, raw_command: str, artifact_paths: List[str], request_id: str, denylist: Optional[List[str]] = None) -> None:
+    def fake_trigger(config: Config, raw_command: str, artifact_paths: List[str], request_id: str, denylist: Optional[List[str]] = None) -> Dict[str, Any]:
         captured["denylist"] = denylist
+        return {"id": 12345, "web_url": "https://gitlab.com/test/-/pipelines/12345"}
 
-    monkeypatch.setattr(bridge_module, "trigger_bridge_action_workflow", fake_trigger)
+    monkeypatch.setattr(bridge_module, "trigger_bridge_action_pipeline", fake_trigger)
 
     runner = CliRunner()
     result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--no-wait"])
@@ -80,16 +81,16 @@ def test_bridge_exec_reports_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: 
 
     monkeypatch.setattr(Config, "from_env_for_sync", classmethod(lambda cls: config))
 
-    def fake_trigger(*args: Any, **kwargs: Any) -> None:
-        return None
+    def fake_trigger(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+        return {"id": 12345, "web_url": "https://gitlab.com/test/-/pipelines/12345"}
 
     def fake_wait(*args: Any, **kwargs: Any) -> Dict[str, Any]:
-        return {"status": "completed", "conclusion": "failure", "html_url": "http://example.com"}
+        return {"status": "completed", "conclusion": "failure", "web_url": "https://gitlab.com/test/-/pipelines/12345"}
 
     def fake_fetch_log(*args: Any, **kwargs: Any) -> Optional[str]:
         return None
 
-    monkeypatch.setattr(bridge_module, "trigger_bridge_action_workflow", fake_trigger)
+    monkeypatch.setattr(bridge_module, "trigger_bridge_action_pipeline", fake_trigger)
     monkeypatch.setattr(bridge_module, "wait_for_bridge_action_completion", fake_wait)
     monkeypatch.setattr(bridge_module, "fetch_bridge_output_log", fake_fetch_log)
 
@@ -105,16 +106,16 @@ def test_bridge_exec_displays_output_log(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
     monkeypatch.setattr(Config, "from_env_for_sync", classmethod(lambda cls: config))
 
-    def fake_trigger(*args: Any, **kwargs: Any) -> None:
-        return None
+    def fake_trigger(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+        return {"id": 12345, "web_url": "https://gitlab.com/test/-/pipelines/12345"}
 
     def fake_wait(*args: Any, **kwargs: Any) -> Dict[str, Any]:
-        return {"status": "completed", "conclusion": "success", "html_url": "http://example.com"}
+        return {"status": "completed", "conclusion": "success", "web_url": "https://gitlab.com/test/-/pipelines/12345"}
 
     def fake_fetch_log(*args: Any, **kwargs: Any) -> Optional[str]:
         return "Hello from Bridge!\nCommand completed."
 
-    monkeypatch.setattr(bridge_module, "trigger_bridge_action_workflow", fake_trigger)
+    monkeypatch.setattr(bridge_module, "trigger_bridge_action_pipeline", fake_trigger)
     monkeypatch.setattr(bridge_module, "wait_for_bridge_action_completion", fake_wait)
     monkeypatch.setattr(bridge_module, "fetch_bridge_output_log", fake_fetch_log)
 
@@ -134,16 +135,16 @@ def test_bridge_exec_json_includes_output(monkeypatch: pytest.MonkeyPatch, tmp_p
 
     monkeypatch.setattr(Config, "from_env_for_sync", classmethod(lambda cls: config))
 
-    def fake_trigger(*args: Any, **kwargs: Any) -> None:
-        return None
+    def fake_trigger(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+        return {"id": 12345, "web_url": "https://gitlab.com/test/-/pipelines/12345"}
 
     def fake_wait(*args: Any, **kwargs: Any) -> Dict[str, Any]:
-        return {"status": "completed", "conclusion": "success", "html_url": "http://example.com"}
+        return {"status": "completed", "conclusion": "success", "web_url": "https://gitlab.com/test/-/pipelines/12345"}
 
     def fake_fetch_log(*args: Any, **kwargs: Any) -> Optional[str]:
         return "Test output"
 
-    monkeypatch.setattr(bridge_module, "trigger_bridge_action_workflow", fake_trigger)
+    monkeypatch.setattr(bridge_module, "trigger_bridge_action_pipeline", fake_trigger)
     monkeypatch.setattr(bridge_module, "wait_for_bridge_action_completion", fake_wait)
     monkeypatch.setattr(bridge_module, "fetch_bridge_output_log", fake_fetch_log)
 
