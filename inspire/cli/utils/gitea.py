@@ -66,13 +66,13 @@ class _GiteaClient:
         self, method: str, url: str, data: Optional[dict] = None
     ) -> dict:
         """Make a JSON request to the Gitea API with retry."""
-        max_retries = 2
-        retry_delay = 1.0
+        max_retries = 3
+        retry_delay = 2.0
 
         for attempt in range(max_retries + 1):
             try:
                 req = self._build_request(method, url, data)
-                with urlrequest.urlopen(req, timeout=30) as resp:
+                with urlrequest.urlopen(req, timeout=60) as resp:
                     charset = resp.headers.get_content_charset("utf-8")
                     payload = resp.read().decode(charset)
                     if not payload:
@@ -104,8 +104,8 @@ class _GiteaClient:
 
     def request_bytes(self, method: str, url: str) -> bytes:
         """Make a binary request to the Gitea API with retry."""
-        max_retries = 2
-        retry_delay = 1.0
+        max_retries = 3
+        retry_delay = 2.0
 
         for attempt in range(max_retries + 1):
             try:
@@ -118,7 +118,7 @@ class _GiteaClient:
                 req = self._build_request(
                     method, url, data=None, accept="application/octet-stream"
                 )
-                with urlrequest.urlopen(req, timeout=60) as resp:
+                with urlrequest.urlopen(req, timeout=120) as resp:
                     return resp.read()
             except urlerror.HTTPError as e:
                 debug_body = ""
