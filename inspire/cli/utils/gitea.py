@@ -38,7 +38,7 @@ class _GiteaClient:
     """Small helper around the Gitea REST API."""
 
     token: str
-    server_url: str = "https://gitea.com"
+    server_url: str = "https://codeberg.org"
 
     def _build_request(
         self,
@@ -202,7 +202,7 @@ def _get_repo(config: Config) -> str:
 
 def _get_server_url(config: Config) -> str:
     """Get the Gitea server URL from config."""
-    return (config.gitea_server or "https://gitea.com").rstrip("/")
+    return (config.gitea_server or "https://codeberg.org").rstrip("/")
 
 
 def _get_client(config: Config) -> _GiteaClient:

@@ -109,7 +109,7 @@ class Config:
     # Gitea / remote log settings
     gitea_repo: Optional[str] = None
     gitea_token: Optional[str] = None
-    gitea_server: str = "https://gitea.com"
+    gitea_server: str = "https://codeberg.org"
     gitea_log_workflow: str = "retrieve_job_log.yml"
     gitea_sync_workflow: str = "sync_code.yml"
     gitea_bridge_workflow: str = "run_bridge_action.yml"
@@ -214,7 +214,7 @@ class Config:
             retry_delay=retry_delay,
             gitea_repo=os.getenv("INSP_GITEA_REPO"),
             gitea_token=os.getenv("INSP_GITEA_TOKEN"),
-            gitea_server=os.getenv("INSP_GITEA_SERVER", "https://gitea.com"),
+            gitea_server=os.getenv("INSP_GITEA_SERVER", "https://codeberg.org"),
             gitea_log_workflow=os.getenv("INSP_GITEA_LOG_WORKFLOW", "retrieve_job_log.yml"),
             gitea_sync_workflow=os.getenv("INSP_GITEA_SYNC_WORKFLOW", "sync_code.yml"),
             gitea_bridge_workflow=os.getenv("INSP_GITEA_BRIDGE_WORKFLOW", "run_bridge_action.yml"),
@@ -255,7 +255,7 @@ class Config:
                 "Set it with: export INSP_GITEA_REPO='owner/repo'"
             )
 
-        gitea_server = os.getenv("INSP_GITEA_SERVER", "https://gitea.com")
+        gitea_server = os.getenv("INSP_GITEA_SERVER", "https://codeberg.org")
 
         bridge_action_timeout = 300
         bat_env = os.getenv("INSPIRE_BRIDGE_ACTION_TIMEOUT")
