@@ -537,8 +537,6 @@ def wait_for_bridge_action_completion(
     timeout_seconds = timeout or config.bridge_action_timeout or 300
     deadline = time.time() + max(5, int(timeout_seconds))
 
-    run_name = f"Bridge action {request_id}"
-
     while True:
         if time.time() > deadline:
             raise TimeoutError(
@@ -551,17 +549,30 @@ def wait_for_bridge_action_completion(
             runs = response.get("workflow_runs", []) or []
 
             for run in runs:
-                # Match by display_title (Gitea Actions field)
-                if run.get("display_title") == run_name:
-                    status = run.get("status")
-                    conclusion = run.get("conclusion")
-                    if status == "completed":
-                        return {
-                            "status": status,
-                            "conclusion": conclusion,
-                            "run_id": run.get("id"),
-                            "html_url": run.get("html_url", ""),
-                        }
+                # Match by request_id in event_payload (Codeberg/Forgejo)
+                event_payload = run.get("event_payload", "")
+                if event_payload:
+                    try:
+                        payload = json.loads(event_payload)
+                        inputs = payload.get("inputs", {})
+                        if inputs.get("request_id") == request_id:
+                            status = run.get("status")
+                            conclusion = run.get("conclusion")
+                            logging.debug(
+                                "Found matching run: status=%s, conclusion=%s",
+                                status,
+                                conclusion,
+                            )
+                            # Codeberg uses 'success'/'failure' as status, not 'completed'
+                            if status in ("completed", "success", "failure"):
+                                return {
+                                    "status": status,
+                                    "conclusion": conclusion or status,
+                                    "run_id": run.get("id"),
+                                    "html_url": run.get("html_url", ""),
+                                }
+                    except (json.JSONDecodeError, TypeError):
+                        pass
         except GiteaError:
             pass
 
@@ -573,58 +584,50 @@ def download_bridge_artifact(
     request_id: str,
     local_path: Path,
 ) -> None:
-    """Download artifact for a bridge action run."""
+    """Download artifact for a bridge action run from the logs branch."""
     repo = _get_repo(config)
     client = _get_client(config)
     server_url = _get_server_url(config)
 
     artifact_name = f"bridge-action-{request_id}"
-    artifact = _find_artifact_by_name(config, artifact_name)
-    if artifact is None:
-        raise GiteaError(f"Artifact not found: {artifact_name}")
+    raw_url = f"{server_url}/api/v1/repos/{repo}/raw/logs/{artifact_name}.zip"
 
-    artifact_id = artifact.get("id")
-    if not artifact_id:
-        raise GiteaError(f"Artifact {artifact_name} missing id field")
+    try:
+        data = client.request_bytes("GET", raw_url)
+        if data and len(data) > 0:
+            local_path.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(BytesIO(data)) as zf:
+                zf.extractall(local_path)
+            return
+    except GiteaError:
+        pass
 
-    download_url = f"{server_url}/api/v1/repos/{repo}/actions/artifacts/{artifact_id}"
-    data = client.request_bytes("GET", download_url)
-
-    local_path.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(BytesIO(data)) as zf:
-        zf.extractall(local_path)
+    raise GiteaError(f"Artifact not found: {artifact_name}")
 
 
 def fetch_bridge_output_log(
     config: Config,
     request_id: str,
 ) -> Optional[str]:
-    """Fetch the output.log from a bridge action artifact."""
+    """Fetch the output.log from a bridge action artifact on the logs branch."""
     repo = _get_repo(config)
     client = _get_client(config)
     server_url = _get_server_url(config)
 
     artifact_name = f"bridge-action-{request_id}"
-    artifact = _find_artifact_by_name(config, artifact_name)
-    if artifact is None:
-        return None
+    raw_url = f"{server_url}/api/v1/repos/{repo}/raw/logs/{artifact_name}.zip"
 
-    artifact_id = artifact.get("id")
-    if not artifact_id:
-        return None
-
-    download_url = f"{server_url}/api/v1/repos/{repo}/actions/artifacts/{artifact_id}"
     try:
-        data = client.request_bytes("GET", download_url)
+        data = client.request_bytes("GET", raw_url)
+        if data and len(data) > 0:
+            with zipfile.ZipFile(BytesIO(data)) as zf:
+                for member in zf.infolist():
+                    if member.filename == "output.log" or member.filename.endswith(
+                        "/output.log"
+                    ):
+                        with zf.open(member) as f:
+                            return f.read().decode("utf-8", errors="replace")
     except GiteaError:
-        return None
-
-    with zipfile.ZipFile(BytesIO(data)) as zf:
-        for member in zf.infolist():
-            if member.filename == "output.log" or member.filename.endswith(
-                "/output.log"
-            ):
-                with zf.open(member) as f:
-                    return f.read().decode("utf-8", errors="replace")
+        pass
 
     return None

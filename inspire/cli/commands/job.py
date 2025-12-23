@@ -536,19 +536,18 @@ def update_jobs(ctx: Context, status: tuple, limit: int, delay: float):
 @click.option("--tail", "-n", type=int, help="Show last N lines only")
 @click.option("--path", is_flag=True, help="Just print log path, don't read content")
 @click.option("--refresh", is_flag=True, help="Re-fetch log even if a cached copy exists")
-@click.option("--update", is_flag=True, help="Fetch and cache logs for cached jobs in bulk.")
 @click.option(
     "--status",
     "-s",
     multiple=True,
-    help="Status filter when using --update (e.g., RUNNING). Repeatable.",
+    help="Status filter for bulk mode (e.g., RUNNING). Repeatable.",
 )
 @click.option(
     "--limit",
     "-m",
     type=int,
     default=0,
-    help="Max cached jobs to process with --update (0 = all).",
+    help="Max cached jobs to process in bulk mode (0 = all).",
 )
 @pass_context
 def logs(
@@ -557,14 +556,20 @@ def logs(
     tail: int,
     path: bool,
     refresh: bool,
-    update: bool,
     status: tuple,
     limit: int,
 ):
     """View logs for a training job.
 
-    Fetches logs via Gitea workflow and caches them locally. Use
-    --update to pull logs for many cached jobs in one go.
+    Fetches logs via Gitea workflow and caches them locally.
+
+    \b
+    Single job mode (with JOB_ID):
+        Fetches and displays the log for a specific job.
+
+    Bulk mode (without JOB_ID):
+        Fetches and caches logs for multiple jobs from local cache.
+        Use --status to filter by job status.
 
     \b
     Examples:
@@ -572,26 +577,20 @@ def logs(
         inspire job logs job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf --tail 100
         inspire job logs job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf --path
         inspire job logs job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf --refresh
-        inspire job logs --update --status RUNNING --status SUCCEEDED
+        inspire job logs --status RUNNING --status SUCCEEDED
+        inspire job logs --refresh --status RUNNING
     """
-    if update:
+    # Bulk mode: no job_id provided
+    if not job_id:
         if tail or path:
             _handle_error(
                 ctx,
                 "InvalidUsage",
-                "--update cannot be combined with --tail/--path",
+                "--tail and --path require a JOB_ID",
                 EXIT_VALIDATION_ERROR,
             )
-        _bulk_update_logs(ctx, status=status, limit=limit, refresh=refresh, job_id=job_id)
+        _bulk_update_logs(ctx, status=status, limit=limit, refresh=refresh)
         return
-
-    if not job_id:
-        _handle_error(
-            ctx,
-            "InvalidUsage",
-            "Job ID is required unless using --update",
-            EXIT_VALIDATION_ERROR,
-        )
 
     # Validate job ID format early
     format_error = _validate_job_id_format(job_id)
@@ -762,7 +761,6 @@ def _bulk_update_logs(
     status: tuple,
     limit: int,
     refresh: bool,
-    job_id: Optional[str] = None,
 ) -> None:
     """Fetch and cache logs for many jobs from the local cache."""
     try:
@@ -783,18 +781,9 @@ def _bulk_update_logs(
                 key = str(s).upper()
                 status_filter.update(alias_map.get(key, {s}))
 
-        if job_id:
-            format_error = _validate_job_id_format(job_id)
-            if format_error:
-                _handle_error(ctx, "InvalidJobID", format_error, EXIT_JOB_NOT_FOUND)
-            job = cache.get_job(job_id)
-            if not job:
-                _handle_error(ctx, "JobNotFound", f"Job not found: {job_id}", EXIT_JOB_NOT_FOUND)
-            jobs = [job] if not status_filter or job.get("status") in status_filter else []
-        else:
-            jobs = cache.list_jobs(limit=limit)
-            if status_filter:
-                jobs = [j for j in jobs if j.get("status") in status_filter]
+        jobs = cache.list_jobs(limit=limit)
+        if status_filter:
+            jobs = [j for j in jobs if j.get("status") in status_filter]
 
         total_candidates = len(jobs)
 
@@ -854,7 +843,6 @@ def _bulk_update_logs(
             "refresh": refresh,
             "status_filter": sorted(status_filter),
             "limit": limit,
-            "job_filter": job_id,
         }
 
         if ctx.json_output:
@@ -868,9 +856,8 @@ def _bulk_update_logs(
             return
 
         status_label = f" with status in {sorted(status_filter)}" if status_filter else ""
-        target_label = f" for job {job_id}" if job_id else ""
         click.echo(
-            f"Updating logs for {total_candidates} cached job(s){status_label}{target_label} (refresh={refresh})"
+            f"Updating logs for {total_candidates} cached job(s){status_label} (refresh={refresh})"
         )
 
         if updated:
