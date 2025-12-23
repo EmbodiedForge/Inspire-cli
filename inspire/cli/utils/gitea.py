@@ -376,10 +376,11 @@ def wait_for_workflow_completion(
         conclusion = run.get("conclusion")
 
         # Gitea uses: queued, in_progress, completed
-        if status == "completed":
+        # Codeberg/Forgejo uses: success, failure directly as status
+        if status in ("completed", "success", "failure"):
             return {
                 "status": status,
-                "conclusion": conclusion or "unknown",
+                "conclusion": conclusion or status,
                 "run_id": run_id,
                 "html_url": run.get("html_url", ""),
             }
