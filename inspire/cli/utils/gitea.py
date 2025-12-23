@@ -414,12 +414,17 @@ def wait_for_log_artifact(
     request_id: str,
     cache_path: Path,
 ) -> None:
-    """Poll Gitea for the log artifact and download it."""
+    """Poll for the log file and download it.
+
+    Tries two methods:
+    1. Artifact API (works on Gitea 1.24+)
+    2. Raw file from 'logs' branch (works on any Git platform)
+    """
     repo = _get_repo(config)
     client = _get_client(config)
     server_url = _get_server_url(config)
 
-    artifact_name = _artifact_name(job_id, request_id)
+    log_filename = _artifact_name(job_id, request_id)
     deadline = time.time() + max(5, int(config.remote_timeout or 90))
 
     while True:
@@ -428,31 +433,39 @@ def wait_for_log_artifact(
                 f"Remote log retrieval timed out after {config.remote_timeout} seconds."
             )
 
-        artifact = _find_artifact_by_name(config, artifact_name)
+        # Method 1: Try artifact API first (Gitea 1.24+)
+        artifact = _find_artifact_by_name(config, log_filename)
         if artifact is not None:
             artifact_id = artifact.get("id")
-            if not artifact_id:
-                raise GiteaError(
-                    f"Found artifact {artifact_name} but it has no id field."
+            if artifact_id:
+                download_url = (
+                    f"{server_url}/api/v1/repos/{repo}/actions/artifacts/{artifact_id}/zip"
                 )
+                try:
+                    data = client.request_bytes("GET", download_url)
+                    # Extract the zip and write the contained log file to cache_path
+                    with zipfile.ZipFile(BytesIO(data)) as zf:
+                        members = [m for m in zf.infolist() if not m.is_dir()]
+                        if members:
+                            member = members[0]
+                            cache_path.parent.mkdir(parents=True, exist_ok=True)
+                            with zf.open(member, "r") as src, cache_path.open("wb") as dst:
+                                dst.write(src.read())
+                            return
+                except GiteaError:
+                    pass  # Fall through to try raw file method
 
-            download_url = (
-                f"{server_url}/api/v1/repos/{repo}/actions/artifacts/{artifact_id}/zip"
-            )
-            data = client.request_bytes("GET", download_url)
-
-            # Extract the zip and write the contained log file to cache_path
-            with zipfile.ZipFile(BytesIO(data)) as zf:
-                members = [m for m in zf.infolist() if not m.is_dir()]
-                if not members:
-                    raise GiteaError(
-                        f"Artifact {artifact_name} does not contain any files."
-                    )
-                member = members[0]
+        # Method 2: Try raw file from logs branch (Codeberg/Forgejo)
+        # The workflow pushes logs to a 'logs' branch as raw files
+        raw_url = f"{server_url}/api/v1/repos/{repo}/raw/logs/{log_filename}.log"
+        try:
+            data = client.request_bytes("GET", raw_url)
+            if data and len(data) > 0:
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(member, "r") as src, cache_path.open("wb") as dst:
-                    dst.write(src.read())
-            return
+                cache_path.write_bytes(data)
+                return
+        except GiteaError:
+            pass  # File not ready yet, keep polling
 
         time.sleep(3)
 
