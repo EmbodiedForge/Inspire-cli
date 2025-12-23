@@ -71,10 +71,10 @@ class Config:
     **Log settings:**
     - INSPIRE_LOG_PATTERN: Log file glob pattern (default: training_master_*.log)
 
-    **GitLab bridge (required for sync, bridge exec, remote logs):**
-    - INSP_GITLAB_PROJECT: GitLab project as 'namespace/project' or numeric ID
-    - INSP_GITLAB_TOKEN: GitLab Personal Access Token (or use `glab auth status`)
-    - INSP_GITLAB_SERVER: GitLab server URL (default: https://gitlab.com)
+    **Gitea bridge (required for sync, bridge exec, remote logs):**
+    - INSP_GITEA_REPO: Gitea repo as 'owner/repo'
+    - INSP_GITEA_TOKEN: Gitea Personal Access Token
+    - INSP_GITEA_SERVER: Gitea server URL (e.g., https://gitea.example.com)
     - INSP_LOG_CACHE_DIR: Cache directory for remote logs (default: ~/.inspire/logs)
     - INSP_REMOTE_TIMEOUT: Max time to wait for artifact (seconds, default: 90)
 
@@ -106,10 +106,13 @@ class Config:
     max_retries: int = 3
     retry_delay: float = 1.0
 
-    # GitLab / remote log settings
-    gitlab_project: Optional[str] = None
-    gitlab_token: Optional[str] = None
-    gitlab_server: str = "https://gitlab.com"
+    # Gitea / remote log settings
+    gitea_repo: Optional[str] = None
+    gitea_token: Optional[str] = None
+    gitea_server: str = "https://gitea.com"
+    gitea_log_workflow: str = "retrieve_job_log.yml"
+    gitea_sync_workflow: str = "sync_code.yml"
+    gitea_bridge_workflow: str = "run_bridge_action.yml"
     log_cache_dir: str = "~/.inspire/logs"
     remote_timeout: int = 90
 
@@ -209,9 +212,12 @@ class Config:
             timeout=timeout,
             max_retries=max_retries,
             retry_delay=retry_delay,
-            gitlab_project=os.getenv("INSP_GITLAB_PROJECT"),
-            gitlab_token=os.getenv("INSP_GITLAB_TOKEN"),
-            gitlab_server=os.getenv("INSP_GITLAB_SERVER", "https://gitlab.com"),
+            gitea_repo=os.getenv("INSP_GITEA_REPO"),
+            gitea_token=os.getenv("INSP_GITEA_TOKEN"),
+            gitea_server=os.getenv("INSP_GITEA_SERVER", "https://gitea.com"),
+            gitea_log_workflow=os.getenv("INSP_GITEA_LOG_WORKFLOW", "retrieve_job_log.yml"),
+            gitea_sync_workflow=os.getenv("INSP_GITEA_SYNC_WORKFLOW", "sync_code.yml"),
+            gitea_bridge_workflow=os.getenv("INSP_GITEA_BRIDGE_WORKFLOW", "run_bridge_action.yml"),
             log_cache_dir=os.getenv("INSP_LOG_CACHE_DIR", "~/.inspire/logs"),
             remote_timeout=_parse_remote_timeout(os.getenv("INSP_REMOTE_TIMEOUT", "90")),
             default_remote=os.getenv("INSPIRE_DEFAULT_REMOTE", "origin"),
@@ -223,7 +229,7 @@ class Config:
     def from_env_for_sync(cls) -> "Config":
         """Create configuration for sync/bridge commands (doesn't require platform credentials).
 
-        The sync and bridge exec commands only need GitLab access and target dir,
+        The sync and bridge exec commands only need Gitea access and target dir,
         not Inspire platform credentials.
 
         Returns:
@@ -241,13 +247,15 @@ class Config:
                 "Set it with: export INSPIRE_TARGET_DIR='/path/to/shared/directory'"
             )
 
-        # Check for GitLab project
-        gitlab_project = os.getenv("INSP_GITLAB_PROJECT")
-        if not gitlab_project:
+        # Check for Gitea repo
+        gitea_repo = os.getenv("INSP_GITEA_REPO")
+        if not gitea_repo:
             raise ConfigError(
-                "Missing INSP_GITLAB_PROJECT environment variable.\n"
-                "Set it with: export INSP_GITLAB_PROJECT='namespace/project'"
+                "Missing INSP_GITEA_REPO environment variable.\n"
+                "Set it with: export INSP_GITEA_REPO='owner/repo'"
             )
+
+        gitea_server = os.getenv("INSP_GITEA_SERVER", "https://gitea.com")
 
         bridge_action_timeout = 300
         bat_env = os.getenv("INSPIRE_BRIDGE_ACTION_TIMEOUT")
@@ -264,9 +272,12 @@ class Config:
             username="",
             password="",
             target_dir=target_dir,
-            gitlab_project=gitlab_project,
-            gitlab_token=os.getenv("INSP_GITLAB_TOKEN"),
-            gitlab_server=os.getenv("INSP_GITLAB_SERVER", "https://gitlab.com"),
+            gitea_repo=gitea_repo,
+            gitea_token=os.getenv("INSP_GITEA_TOKEN"),
+            gitea_server=gitea_server,
+            gitea_log_workflow=os.getenv("INSP_GITEA_LOG_WORKFLOW", "retrieve_job_log.yml"),
+            gitea_sync_workflow=os.getenv("INSP_GITEA_SYNC_WORKFLOW", "sync_code.yml"),
+            gitea_bridge_workflow=os.getenv("INSP_GITEA_BRIDGE_WORKFLOW", "run_bridge_action.yml"),
             default_remote=os.getenv("INSPIRE_DEFAULT_REMOTE", "origin"),
             remote_timeout=_parse_remote_timeout(os.getenv("INSP_REMOTE_TIMEOUT", "90")),
             bridge_action_timeout=bridge_action_timeout,

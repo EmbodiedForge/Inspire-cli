@@ -34,9 +34,9 @@ from inspire.inspire_api_control import _validate_job_id_format
 from inspire.cli.utils.config import Config, ConfigError
 from inspire.cli.utils.auth import AuthManager, AuthenticationError
 from inspire.cli.utils.job_cache import JobCache
-from inspire.cli.utils.gitlab import (
-    GitLabAuthError,
-    GitLabError,
+from inspire.cli.utils.gitea import (
+    GiteaAuthError,
+    GiteaError,
     fetch_remote_log_via_bridge,
 )
 from inspire.cli.formatters import json_formatter, human_formatter
@@ -86,7 +86,7 @@ def create(
 
     When retrieving logs later:
       - Set INSPIRE_TARGET_DIR to the same path used during job creation
-      - Use `inspire job logs <job_id>` to fetch logs via GitLab bridge
+      - Use `inspire job logs <job_id>` to fetch logs via Gitea bridge
 
     \b
     Examples:
@@ -563,7 +563,7 @@ def logs(
 ):
     """View logs for a training job.
 
-    Fetches logs via GitLab pipeline and caches them locally. Use
+    Fetches logs via Gitea workflow and caches them locally. Use
     --update to pull logs for many cached jobs in one go.
 
     \b
@@ -646,13 +646,13 @@ def logs(
                 cache_path = legacy_cache_path
 
         # Let the user know when we are about to use the remote
-        # GitLab pipeline path, since the first fetch typically
-        # takes a few seconds while the pipeline runs and the
+        # Gitea workflow path, since the first fetch typically
+        # takes a few seconds while the workflow runs and the
         # artifact is prepared.
         needs_remote_fetch = refresh or not cache_path.exists()
         if needs_remote_fetch and not ctx.json_output:
             click.echo(
-                "⏳ Fetching remote log via GitLab pipeline (first fetch may take ~10–30s)..."
+                "Fetching remote log via Gitea workflow (first fetch may take ~10-30s)..."
             )
 
         if needs_remote_fetch:
@@ -664,7 +664,7 @@ def logs(
                     cache_path=cache_path,
                     refresh=refresh,
                 )
-            except GitLabAuthError as e:
+            except GiteaAuthError as e:
                 _handle_error(
                     ctx,
                     "ConfigError",
@@ -678,13 +678,13 @@ def logs(
                     str(e),
                     EXIT_TIMEOUT,
                 )
-            except GitLabError as e:
+            except GiteaError as e:
                 error_msg = (
                     f"{str(e)}\n\n"
                     f"Hints:\n"
                     f"- Check that the training job created a log file at: {remote_log_path_str}\n"
-                    f"- Verify the Bridge pipeline exists and can access the shared filesystem\n"
-                    f"- View GitLab pipelines at: {config.gitlab_server}/{config.gitlab_project}/-/pipelines"
+                    f"- Verify the Bridge workflow exists and can access the shared filesystem\n"
+                    f"- View Gitea Actions at: {config.gitea_server}/{config.gitea_repo}/actions"
                 )
                 _handle_error(
                     ctx,
@@ -827,17 +827,17 @@ def _bulk_update_logs(
                     refresh=refresh,
                 )
                 updated.append({"job_id": job_id_item, "log_path": str(cache_path)})
-            except GitLabAuthError as e:
+            except GiteaAuthError as e:
                 _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
             except TimeoutError as e:
                 errors.append({"job_id": job_id_item, "error": str(e)})
-            except GitLabError as e:
+            except GiteaError as e:
                 error_msg = (
                     f"{str(e)}\n\n"
                     f"Hints:\n"
                     f"- Check that the training job created a log file at: {remote_log_path_str}\n"
-                    f"- Verify the Bridge pipeline exists and can access the shared filesystem\n"
-                    f"- View GitLab pipelines at: {config.gitlab_server}/{config.gitlab_project}/-/pipelines"
+                    f"- Verify the Bridge workflow exists and can access the shared filesystem\n"
+                    f"- View Gitea Actions at: {config.gitea_server}/{config.gitea_repo}/actions"
                 )
                 errors.append({"job_id": job_id_item, "error": error_msg})
             except Exception as e:  # noqa: BLE001

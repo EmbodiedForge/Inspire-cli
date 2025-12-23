@@ -5,7 +5,7 @@ Usage:
 
 This command:
 1. Pushes the current (or specified) branch to the remote
-2. Triggers a GitLab pipeline on the Bridge runner to sync the code
+2. Triggers a Gitea workflow on the Bridge runner to sync the code
 3. Returns the synced commit SHA
 """
 
@@ -25,11 +25,11 @@ from inspire.cli.context import (
     EXIT_GENERAL_ERROR,
 )
 from inspire.cli.utils.config import Config, ConfigError
-from inspire.cli.utils.gitlab import (
-    GitLabError,
-    GitLabAuthError,
-    trigger_sync_pipeline,
-    wait_for_pipeline_completion,
+from inspire.cli.utils.gitea import (
+    GiteaError,
+    GiteaAuthError,
+    trigger_sync_workflow,
+    wait_for_workflow_completion,
 )
 
 
@@ -152,8 +152,8 @@ def sync(
 ) -> None:
     """Sync local code to the Bridge shared filesystem.
 
-    This command pushes your local branch to GitLab, then triggers a
-    pipeline on the self-hosted runner to sync the code to the shared
+    This command pushes your local branch to Gitea, then triggers a
+    workflow on the self-hosted runner to sync the code to the shared
     filesystem used by the Inspire training platform.
 
     \b
@@ -167,12 +167,12 @@ def sync(
     Environment variables:
         INSPIRE_DEFAULT_REMOTE    Default git remote (default: origin)
         INSPIRE_TARGET_DIR        Target directory on Bridge (required)
-        INSP_GITLAB_PROJECT       GitLab project (namespace/project)
-        INSP_GITLAB_TOKEN         GitLab Personal Access Token
-        INSP_GITLAB_SERVER        GitLab server URL (default: https://gitlab.com)
+        INSP_GITEA_REPO           Gitea repo (owner/repo)
+        INSP_GITEA_TOKEN          Gitea Personal Access Token
+        INSP_GITEA_SERVER         Gitea server URL
     """
     try:
-        # Load config - we need GitLab settings but not Inspire API credentials
+        # Load config - we need Gitea settings but not Inspire API credentials
         # for sync, so we do a minimal check
         config = Config.from_env_for_sync()
     except ConfigError as e:
@@ -220,41 +220,39 @@ def sync(
                 }))
             raise
 
-    # Trigger sync pipeline
+    # Trigger sync workflow
     if not ctx.json_output:
-        click.echo("Triggering sync pipeline...")
+        click.echo("Triggering sync workflow...")
 
     try:
-        pipeline_response = trigger_sync_pipeline(config, branch, commit_sha, force)
-        pipeline_id = pipeline_response.get("id")
-        pipeline_url = pipeline_response.get("web_url", "")
-    except (GitLabError, GitLabAuthError) as e:
+        run_id = trigger_sync_workflow(config, branch, commit_sha, force)
+    except (GiteaError, GiteaAuthError) as e:
         if ctx.json_output:
             click.echo(json.dumps({
                 "error": str(e),
-                "type": "gitlab_error",
+                "type": "gitea_error",
             }))
         else:
             click.echo(f"Error: {e}", err=True)
         sys.exit(EXIT_CONFIG_ERROR)
 
-    if wait and pipeline_id:
+    if wait and run_id:
         if not ctx.json_output:
             click.echo("Waiting for sync to complete...")
 
         try:
-            result = wait_for_pipeline_completion(config, pipeline_id, timeout)
+            result = wait_for_workflow_completion(config, run_id, timeout)
         except TimeoutError:
             if ctx.json_output:
                 click.echo(json.dumps({
                     "status": "timeout",
                     "branch": branch,
                     "commit": commit_sha[:7],
-                    "error": f"Sync pipeline did not complete within {timeout}s",
+                    "error": f"Sync workflow did not complete within {timeout}s",
                 }))
             else:
-                click.echo(f"⚠ Sync pipeline timed out after {timeout}s", err=True)
-                click.echo("The sync may still complete. Check GitLab for status.", err=True)
+                click.echo(f"Sync workflow timed out after {timeout}s", err=True)
+                click.echo("The sync may still complete. Check Gitea for status.", err=True)
             sys.exit(EXIT_GENERAL_ERROR)
 
         if result["conclusion"] == "success":
@@ -267,10 +265,10 @@ def sync(
                     "commit_full": commit_sha,
                     "message": commit_msg,
                     "target_dir": config.target_dir,
-                    "pipeline_url": result.get("web_url", ""),
+                    "html_url": result.get("html_url", ""),
                 }))
             else:
-                click.echo(click.style("✓", fg="green") + f" Synced branch '{branch}' ({commit_sha[:7]}) to {config.target_dir}")
+                click.echo(click.style("OK", fg="green") + f" Synced branch '{branch}' ({commit_sha[:7]}) to {config.target_dir}")
                 click.echo(f"  Commit: {commit_msg}")
                 click.echo(f"  Remote: {remote}")
         else:
@@ -280,12 +278,12 @@ def sync(
                     "branch": branch,
                     "commit": commit_sha[:7],
                     "conclusion": result.get("conclusion"),
-                    "pipeline_url": result.get("web_url", ""),
+                    "html_url": result.get("html_url", ""),
                 }))
             else:
-                click.echo(f"✗ Sync failed: {result.get('conclusion', 'unknown')}", err=True)
-                if result.get("web_url"):
-                    click.echo(f"  See: {result['web_url']}", err=True)
+                click.echo(f"Sync failed: {result.get('conclusion', 'unknown')}", err=True)
+                if result.get("html_url"):
+                    click.echo(f"  See: {result['html_url']}", err=True)
             sys.exit(EXIT_GENERAL_ERROR)
     else:
         # Not waiting
@@ -296,14 +294,11 @@ def sync(
                 "remote": remote,
                 "commit": commit_sha[:7],
                 "commit_full": commit_sha,
-                "pipeline_id": pipeline_id,
-                "pipeline_url": pipeline_url,
+                "run_id": run_id,
             }))
         else:
-            click.echo(click.style("✓", fg="green") + f" Pushed {branch} to {remote}")
-            click.echo(click.style("✓", fg="green") + " Triggered sync pipeline" + (f" (pipeline {pipeline_id})" if pipeline_id else ""))
+            click.echo(click.style("OK", fg="green") + f" Pushed {branch} to {remote}")
+            click.echo(click.style("OK", fg="green") + " Triggered sync workflow" + (f" (run {run_id})" if run_id else ""))
             click.echo(f"  Commit: {commit_sha[:7]} - {commit_msg}")
-            if pipeline_url:
-                click.echo(f"  Pipeline: {pipeline_url}")
 
     sys.exit(EXIT_SUCCESS)
