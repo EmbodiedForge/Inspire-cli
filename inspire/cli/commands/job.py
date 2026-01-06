@@ -391,8 +391,13 @@ def wait(ctx: Context, job_id: str, timeout: int, interval: int):
 @job.command("list")
 @click.option("--limit", "-n", type=int, default=10, help="Max jobs to show (default: 10)")
 @click.option("--status", "-s", help="Filter by status (PENDING, RUNNING, SUCCEEDED, FAILED)")
+@click.option(
+    "--active", "-a",
+    is_flag=True,
+    help="Show only active jobs (exclude failed, cancelled, stopped)"
+)
 @pass_context
-def list_jobs(ctx: Context, limit: int, status: str):
+def list_jobs(ctx: Context, limit: int, status: str, active: bool):
     """List recent jobs from local cache.
 
     Note: This lists jobs from the local cache, not from the API
@@ -402,12 +407,22 @@ def list_jobs(ctx: Context, limit: int, status: str):
     Example:
         inspire job list
         inspire job list --limit 20 --status RUNNING
+        inspire job list --active
     """
     try:
         config = Config.from_env()
         cache = JobCache(config.get_expanded_cache_path())
 
-        jobs = cache.list_jobs(limit=limit, status=status)
+        # Define statuses to exclude when --active flag is set
+        exclude_statuses = None
+        if active:
+            exclude_statuses = {
+                "FAILED", "job_failed",
+                "CANCELLED", "job_cancelled",
+                "job_stopped",
+            }
+
+        jobs = cache.list_jobs(limit=limit, status=status, exclude_statuses=exclude_statuses)
 
         if ctx.json_output:
             click.echo(json_formatter.format_json(jobs))

@@ -127,13 +127,15 @@ class JobCache:
     def list_jobs(
         self,
         limit: int = 10,
-        status: Optional[str] = None
+        status: Optional[str] = None,
+        exclude_statuses: Optional[set] = None
     ) -> List[Dict[str, Any]]:
         """List recent jobs from cache.
 
         Args:
             limit: Maximum number of jobs to return
             status: Filter by status (optional)
+            exclude_statuses: Set of statuses to exclude (optional)
 
         Returns:
             List of job data dicts, sorted by created_at descending
@@ -146,6 +148,10 @@ class JobCache:
         # Filter by status if specified
         if status:
             items = [j for j in items if j.get("status") == status]
+
+        # Exclude specified statuses
+        if exclude_statuses:
+            items = [j for j in items if j.get("status") not in exclude_statuses]
 
         # Sort by created_at descending (most recent first)
         items.sort(key=lambda x: x.get("created_at", ""), reverse=True)

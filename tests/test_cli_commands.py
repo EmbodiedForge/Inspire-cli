@@ -346,7 +346,7 @@ def test_job_list_uses_local_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
         def __init__(self, path: str) -> None:  # noqa: ARG002
             pass
 
-        def list_jobs(self, limit: int = 10, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        def list_jobs(self, limit: int = 10, status: Optional[str] = None, exclude_statuses: Optional[set] = None) -> List[Dict[str, Any]]:
             return [
                 {
                     "job_id": TEST_JOB_ID,
