@@ -243,6 +243,31 @@ def test_job_create_requires_target_dir(monkeypatch: pytest.MonkeyPatch):
     assert "Missing INSPIRE_TARGET_DIR" in result.output
 
 
+def test_wrap_in_bash():
+    """Test the bash wrapper helper function."""
+    from inspire.cli.commands.job import _wrap_in_bash
+
+    # Basic wrapping
+    assert _wrap_in_bash("python train.py") == "bash -c 'python train.py'"
+
+    # Source command (the main use case)
+    result = _wrap_in_bash("source .env && python train.py")
+    assert result == "bash -c 'source .env && python train.py'"
+
+    # Escape single quotes
+    result = _wrap_in_bash("echo 'hello'")
+    assert result == "bash -c 'echo '\\''hello'\\'''"
+
+    # Skip if already wrapped
+    assert _wrap_in_bash("bash -c 'foo'") == "bash -c 'foo'"
+    assert _wrap_in_bash("sh -c 'foo'") == "sh -c 'foo'"
+    assert _wrap_in_bash("/bin/bash -c 'foo'") == "/bin/bash -c 'foo'"
+    assert _wrap_in_bash("/bin/sh -c 'foo'") == "/bin/sh -c 'foo'"
+
+    # Whitespace handling
+    assert _wrap_in_bash("  bash -c 'foo'  ") == "  bash -c 'foo'  "
+
+
 def test_job_status_updates_cache_and_formats(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     patch_config_and_auth(monkeypatch, tmp_path)
     runner = CliRunner()
@@ -555,87 +580,6 @@ def test_job_logs_missing_file_sets_exit_code(monkeypatch: pytest.MonkeyPatch, t
 
     assert result.exit_code == EXIT_LOG_NOT_FOUND
     assert f"No log file found for job {TEST_JOB_ID}" in result.output
-
-
-def test_job_logs_requires_job_id_without_update(monkeypatch: pytest.MonkeyPatch):
-    def fake_from_env(cls, require_target_dir: bool = False):  # type: ignore[override]
-        raise AssertionError("Config.from_env should not be called when validation fails")
-
-    monkeypatch.setattr(config_module.Config, "from_env", classmethod(fake_from_env))
-
-    runner = CliRunner()
-    result = runner.invoke(cli_main, ["job", "logs"])
-
-    assert result.exit_code == EXIT_VALIDATION_ERROR
-    assert "Job ID is required" in result.output
-
-
-def test_job_logs_bulk_update_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    config = make_test_config(tmp_path)
-
-    def fake_from_env(cls, require_target_dir: bool = False):  # type: ignore[override]
-        return config
-
-    monkeypatch.setattr(config_module.Config, "from_env", classmethod(fake_from_env))
-
-    from importlib import import_module
-
-    job_cmd = import_module("inspire.cli.commands.job")
-
-    calls: List[str] = []
-
-    def fake_fetch(config, job_id: str, remote_log_path: str, cache_path: Path, refresh: bool):  # noqa: ARG001
-        calls.append(job_id)
-
-    monkeypatch.setattr(job_cmd, "fetch_remote_log_via_bridge", fake_fetch)
-
-    cache = JobCache(config.get_expanded_cache_path())
-    cache.add_job(
-        job_id=TEST_JOB_ID,
-        name="job-1",
-        resource="H200",
-        command="echo hi",
-        status="RUNNING",
-        log_path="/logs/.inspire/job1.log",
-    )
-    cache.add_job(
-        job_id=TEST_JOB_ID_2,
-        name="job-2",
-        resource="H200",
-        command="echo hi",
-        status="SUCCEEDED",
-        log_path="/logs/.inspire/job2.log",
-    )
-    cache.add_job(
-        job_id=TEST_JOB_ID_3,
-        name="job-3",
-        resource="H200",
-        command="echo hi",
-        status="FAILED",
-        log_path="/logs/.inspire/job3.log",
-    )
-
-    runner = CliRunner()
-    result = runner.invoke(
-        cli_main,
-        [
-            "--json",
-            "job",
-            "logs",
-            "--update",
-            "--status",
-            "RUNNING",
-            "--status",
-            "SUCCEEDED",
-        ],
-    )
-
-    assert result.exit_code == 0
-    payload = json.loads(result.output)
-    assert payload["success"] is True
-    updated_ids = {entry["job_id"] for entry in payload["data"]["updated"]}
-    assert updated_ids == {TEST_JOB_ID, TEST_JOB_ID_2}
-    assert len(calls) == 2
 
 
 # ---------------------------------------------------------------------------

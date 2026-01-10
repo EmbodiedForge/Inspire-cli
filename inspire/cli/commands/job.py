@@ -50,6 +50,24 @@ def job():
     pass
 
 
+def _wrap_in_bash(command: str) -> str:
+    """Wrap command in bash -c if not already wrapped.
+
+    The Inspire platform's remote shell is sh (dash), which doesn't support
+    bash features like 'source'. This wraps all commands in bash to ensure
+    consistent behavior.
+    """
+    stripped = command.strip()
+
+    # Skip if already wrapped
+    if stripped.startswith(("bash -c ", "sh -c ", "/bin/bash -c ", "/bin/sh -c ")):
+        return command
+
+    # Escape single quotes: ' -> '\''
+    escaped = command.replace("'", "'\\''")
+    return f"bash -c '{escaped}'"
+
+
 @job.command("create")
 @click.option("--name", "-n", required=True, help="Job name")
 @click.option("--resource", "-r", required=True, help="Resource spec (e.g., '4xH200')")
@@ -99,6 +117,9 @@ def create(
     try:
         config = Config.from_env(require_target_dir=True)
         api = AuthManager.get_api(config)
+
+        # Wrap in bash for consistent shell behavior
+        command = _wrap_in_bash(command)
 
         # If INSPIRE_TARGET_DIR is configured, wrap the command so
         # stdout/stderr land in a single master log file under

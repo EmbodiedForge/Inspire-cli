@@ -10,25 +10,18 @@ After 50+ job submissions, syncs, and log fetches during a deep learning profili
 
 ## Pain Points
 
-### 1. Command Quoting / Shell Compatibility (High Priority)
+### 1. ~~Command Quoting / Shell Compatibility~~ (Fixed)
 
-**Problem**: Remote shell is `sh`, not `bash`. Commands with `source` fail silently.
+**Status**: Resolved in v0.2.4
+
+Commands are now automatically wrapped in `bash -c '...'`. No manual wrapping needed:
 
 ```bash
-# This fails:
+# Now works directly:
 inspire job create --command "cd /path && source .env && python script.py"
-# Error: /bin/dash: source: not found
-
-# Must use:
-inspire job create --command 'bash -c "cd /path && source .env && python script.py"'
 ```
 
-**Impact**: Multiple failed jobs, wasted GPU time, debugging frustration.
-
-**Suggestions**:
-- Auto-wrap commands in `bash -c "..."` by default
-- Add `--shell bash` flag for explicit control
-- Better error message when `source` is used without bash wrapper
+Commands already wrapped in `bash -c` or `sh -c` are detected and not double-wrapped.
 
 ---
 
@@ -141,13 +134,13 @@ templates:
 
 ## Priority Summary
 
-| Priority | Issue | Effort | Impact |
-|----------|-------|--------|--------|
-| P0 | Auto bash wrapper | Low | High |
-| P0 | `inspire run` one-liner | Medium | High |
-| P1 | Faster log access | Medium | Medium |
-| P1 | Job templates | Medium | Medium |
-| P2 | Job history/comparison | High | Low |
+| Priority | Issue | Effort | Impact | Status |
+|----------|-------|--------|--------|--------|
+| ~~P0~~ | ~~Auto bash wrapper~~ | ~~Low~~ | ~~High~~ | **Done** |
+| P0 | `inspire run` one-liner | Medium | High | |
+| P1 | Faster log access | Medium | Medium | |
+| P1 | Job templates | Medium | Medium | |
+| P2 | Job history/comparison | High | Low | |
 
 ---
 
