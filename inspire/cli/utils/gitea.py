@@ -256,12 +256,22 @@ def trigger_log_retrieval_workflow(
     job_id: str,
     remote_log_path: str,
     request_id: str,
+    start_offset: int = 0,
 ) -> None:
-    """Trigger the workflow that uploads a job log as an artifact."""
+    """Trigger the workflow that uploads a job log as an artifact.
+
+    Args:
+        config: CLI configuration
+        job_id: Inspire job ID
+        remote_log_path: Absolute path to log on shared filesystem
+        request_id: Unique request identifier
+        start_offset: Byte offset to start reading from (default: 0 = full file)
+    """
     inputs = {
         "job_id": job_id,
         "remote_log_path": remote_log_path,
         "request_id": request_id,
+        "start_offset": str(start_offset),
     }
     trigger_workflow_dispatch(
         config, config.gitea_log_workflow, inputs
@@ -524,6 +534,73 @@ def fetch_remote_log_via_bridge(
     _prune_old_logs(cache_dir, max_age_days=7)
 
     return cache_path
+
+
+def fetch_remote_log_incremental(
+    config: Config,
+    job_id: str,
+    remote_log_path: str,
+    cache_path: Path,
+    start_offset: int = 0,
+) -> tuple[Path, int]:
+    """Fetch incremental portion of remote log and append to cache.
+
+    Args:
+        config: CLI configuration
+        job_id: Inspire job ID
+        remote_log_path: Absolute path to log on shared filesystem
+        cache_path: Local cache file path
+        start_offset: Byte offset to start from
+
+    Returns:
+        Tuple of (cache_path, bytes_written)
+
+    Raises:
+        GiteaError: If workflow fails or artifact not found
+        TimeoutError: If workflow times out
+    """
+    request_id = f"{int(time.time())}-{os.getpid()}"
+
+    # Trigger workflow with offset
+    trigger_log_retrieval_workflow(
+        config=config,
+        job_id=job_id,
+        remote_log_path=remote_log_path,
+        request_id=request_id,
+        start_offset=start_offset,
+    )
+
+    # Download to temp file first
+    temp_path = cache_path.parent / f"{job_id}.tmp.{os.getpid()}"
+    try:
+        wait_for_log_artifact(
+            config=config,
+            job_id=job_id,
+            request_id=request_id,
+            cache_path=temp_path,
+        )
+
+        # Get bytes written
+        bytes_written = temp_path.stat().st_size if temp_path.exists() else 0
+
+        if bytes_written > 0:
+            # Append to existing cache
+            if cache_path.exists() and start_offset > 0:
+                with cache_path.open("ab") as dst:
+                    dst.write(temp_path.read_bytes())
+            else:
+                # First fetch or offset=0, replace file
+                temp_path.replace(cache_path)
+                return cache_path, bytes_written
+
+        return cache_path, bytes_written
+    finally:
+        # Cleanup temp file
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
 
 
 def wait_for_bridge_action_completion(

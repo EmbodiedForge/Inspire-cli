@@ -211,3 +211,43 @@ class JobCache:
             self._save(jobs)
 
         return removed
+
+    def get_log_offset(self, job_id: str) -> int:
+        """Get the cached byte offset for a job's log.
+
+        Args:
+            job_id: Job identifier
+
+        Returns:
+            Byte offset (0 if no cache exists or job not found)
+        """
+        jobs = self._load()
+        if job_id in jobs:
+            return jobs[job_id].get("log_byte_offset", 0)
+        return 0
+
+    def set_log_offset(self, job_id: str, offset: int) -> None:
+        """Update the cached byte offset for a job's log.
+
+        Args:
+            job_id: Job identifier
+            offset: New offset value (total bytes cached)
+        """
+        jobs = self._load()
+        if job_id in jobs:
+            jobs[job_id]["log_byte_offset"] = offset
+            jobs[job_id]["log_cached_at"] = datetime.now().isoformat()
+            self._save(jobs)
+
+    def reset_log_offset(self, job_id: str) -> None:
+        """Reset the byte offset for a job's log (used with --refresh).
+
+        Args:
+            job_id: Job identifier
+        """
+        jobs = self._load()
+        if job_id in jobs:
+            jobs[job_id]["log_byte_offset"] = 0
+            if "log_cached_at" in jobs[job_id]:
+                del jobs[job_id]["log_cached_at"]
+            self._save(jobs)
