@@ -938,6 +938,10 @@ def _follow_logs(
             else:
                 click.echo(content, nl=False)
 
+            # Sync offset with actual file size (fixes stale/missing cache offset)
+            current_offset = cache_path.stat().st_size
+            cache.set_log_offset(job_id, current_offset)
+
         # Track last displayed position
         last_displayed = current_offset
 
@@ -948,21 +952,28 @@ def _follow_logs(
             time.sleep(interval)
 
             try:
-                # Fetch new content
-                _, bytes_added = fetch_remote_log_incremental(
+                # Remember size before fetch
+                size_before = cache_path.stat().st_size if cache_path.exists() else 0
+
+                # Fetch full log (more robust than incremental)
+                fetch_remote_log_via_bridge(
                     config=config,
                     job_id=job_id,
                     remote_log_path=remote_log_path,
                     cache_path=cache_path,
-                    start_offset=current_offset,
+                    refresh=True,  # Always get latest
                 )
+
+                # Calculate actual new bytes
+                size_after = cache_path.stat().st_size if cache_path.exists() else 0
+                bytes_added = size_after - last_displayed
 
                 if bytes_added > 0:
                     # Update offset
-                    current_offset += bytes_added
+                    current_offset = size_after
                     cache.set_log_offset(job_id, current_offset)
 
-                    # Display new content
+                    # Display only the new content
                     with cache_path.open("rb") as f:
                         f.seek(last_displayed)
                         new_content = f.read().decode("utf-8", errors="replace")
