@@ -313,13 +313,38 @@ class ResourceManager:
         
         # 选择计算组（优先考虑位置偏好）
         selected_group = matching_groups[0]  # 默认选择第一个
-        
+
         if prefer_location:
+            matched = False
+
+            # Step 1: Try substring match
             for group in matching_groups:
                 if prefer_location.lower() in group.location.lower():
                     selected_group = group
+                    matched = True
                     break
-        
+
+            # Step 2: Try number-based semantic match
+            if not matched:
+                numbers = re.findall(r'\d+', prefer_location)
+                if numbers:
+                    for num in numbers:
+                        for group in matching_groups:
+                            if num in group.location:
+                                selected_group = group
+                                matched = True
+                                break
+                        if matched:
+                            break
+
+            # Step 3: Error if nothing matched
+            if not matched:
+                available_locations = [g.location for g in matching_groups]
+                raise ValueError(
+                    f"Location '{prefer_location}' not found for {gpu_type.value}. "
+                    f"Available locations: {', '.join(available_locations)}"
+                )
+
         return selected_spec.spec_id, selected_group.compute_group_id
     
     def display_available_resources(self) -> None:
