@@ -9,15 +9,21 @@ Command-line interface for the Inspire HPC training platform.
 ## Installation
 
 ```bash
+# Via HTTPS (requires token)
 uv tool install git+https://<your-gitea-host>/cyteena/inspire-cli.git
+
+# Via SSH (recommended - no token needed)
+uv tool install git+ssh://git@<your-gitea-host>/cyteena/inspire-cli.git
 ```
+
+> **Tip**: If you use SSH keys for Git, the SSH method is simpler - no need to set up access tokens.
 
 ## Configuration
 
 Set the required environment variables:
 
 ```bash
-# Required
+# Required for API access
 export INSPIRE_USERNAME="your_username"
 export INSPIRE_PASSWORD="your_password"
 
@@ -30,7 +36,8 @@ export INSP_GITEA_TOKEN="..."          # Gitea personal access token
 export INSP_GITEA_SERVER="https://gitea.example.com"
 
 # Optional
-export INSP_IMAGE="your_image:tag"  # Default Docker image for `inspire job create` (same as --image)
+export INSP_IMAGE="your_image:tag"  # Default Docker image
+export INSP_PRIORITY="6"            # Default job priority (1-10)
 export INSPIRE_BASE_URL="https://qz.sii.edu.cn"  # default
 export INSPIRE_LOG_PATTERN="training_master_*.log"  # default
 export INSPIRE_JOB_CACHE="~/.inspire/jobs.json"  # default
@@ -49,59 +56,144 @@ inspire --help
 # Check configuration and authentication
 inspire config check
 
-# Sync code to Bridge (before launching training)
-inspire sync                    # Sync current branch via origin
-inspire sync --remote upstream  # Sync via upstream remote
-
-# List available resources
+# Check GPU availability
 inspire resources list
 
-# Create a training job (minimal)
+# Quick job submission (recommended)
+inspire run "python train.py"                    # 8xH200, auto-select location
+inspire run "bash train.sh" --gpus 4 --type H100 # 4xH100
+inspire run "python train.py" --watch            # Sync, run, follow logs
+
+# Traditional job creation
 inspire job create \
   --name "my-experiment" \
   --resource "4xH200" \
   --command "bash train.sh"
 
-Defaults: `--framework` (pytorch), `--priority` (8), `--max-time` (100 hours). `--location` and `--image` are optional.
-
 # Check job status
 inspire job status <job-id>
 
-# Wait for job completion
-inspire job wait <job-id> --timeout 7200
-
 # View logs
-inspire job logs <job-id> --tail 100
+inspire job logs <job-id> --tail 100 --follow
 ```
-
-Logs written during job execution (when `INSPIRE_TARGET_DIR` is set) are stored under `INSPIRE_TARGET_DIR/.inspire/` with pattern `training_master_*.log` and fetched via the Gitea Actions workflow.
 
 ## Command Reference
 
+### Quick Run (Recommended)
+
+The `inspire run` command provides smart resource allocation - automatically selects the compute group with most available GPUs.
+
+```bash
+# Basic usage (8xH200, auto-select best location)
+inspire run "python train.py"
+
+# Specify GPU count and type
+inspire run "python train.py" --gpus 4 --type H100
+
+# Full workflow: sync code, run job, follow logs
+inspire run "python train.py" --watch
+
+# With custom options
+inspire run "bash train.sh" \
+  --gpus 8 \
+  --type H200 \
+  --name "my-experiment" \
+  --priority 8 \
+  --max-time 24
+```
+
+| Option | Description |
+|--------|-------------|
+| `-g, --gpus` | Number of GPUs (default: 8) |
+| `--type` | GPU type: H100 or H200 (default: H200) |
+| `-n, --name` | Job name (auto-generated if not specified) |
+| `-s, --sync` | Sync code before running |
+| `-w, --watch` | Sync, run, then follow logs until completion |
+| `--priority` | Task priority 1-10 (default: 6, env: INSP_PRIORITY) |
+| `--location` | Preferred datacenter (overrides auto-selection) |
+| `--max-time` | Max runtime in hours (default: 100) |
+| `--image` | Custom Docker image |
+
+### Resource Discovery
+
+```bash
+# List GPU availability (OpenAPI - global view)
+inspire resources list
+
+# Watch availability continuously
+inspire resources list --watch
+
+# Workspace-scoped availability (matches browser view)
+inspire resources list --workspace
+
+# Include all compute groups
+inspire resources list --all
+```
+
+| Option | Description |
+|--------|-------------|
+| `--workspace, -ws` | Use browser API for workspace-scoped view (requires INSPIRE_USERNAME/PASSWORD) |
+| `--watch, -w` | Continuously watch availability (refreshes every 30s) |
+| `--interval, -i` | Watch refresh interval in seconds (default: 30) |
+| `--all` | Show all accessible compute groups |
+| `--no-cache` | Bypass cache and fetch fresh data |
+
 ### Code Sync
 
-| Command | Description |
-|---------|-------------|
-| `inspire sync` | Sync local branch to Bridge shared filesystem |
-| `inspire sync --force` | Force sync, discarding any local changes on Bridge |
+```bash
+inspire sync                    # Sync current branch via origin
+inspire sync --remote upstream  # Sync via upstream remote
+inspire sync --force            # Force sync, discard local changes on Bridge
+```
 
 ### Job Management
 
 | Command | Description |
 |---------|-------------|
-| `inspire job create` | Create a new training job (options: `--name`, `--resource`, `--command`, `--framework`, `--priority`, `--max-time`, `--location`, `--image`) |
+| `inspire job create` | Create a training job |
 | `inspire job status <id>` | Check job status |
 | `inspire job stop <id>` | Stop a running job |
 | `inspire job wait <id>` | Wait for job completion |
-| `inspire job list` | List recent jobs (from local cache) |
+| `inspire job list` | List recent jobs |
+| `inspire job list --watch` | Watch job status with live updates |
 | `inspire job logs <id>` | View job logs |
+| `inspire job logs <id> --follow` | Stream logs in real-time |
 
-### Resource Discovery
+### SSH Tunnel (Fast Bridge Access)
 
-| Command | Description |
-|---------|-------------|
-| `inspire resources list` | List available GPU configurations |
-| `inspire nodes list` | List cluster nodes |
+The SSH tunnel provides ~100x faster command execution compared to Gitea Actions.
+
+```bash
+# Set up tunnel URL
+inspire tunnel set-url "https://nat-notebook-inspire.../proxy/31337/"
+
+# Start tunnel
+inspire tunnel start
+
+# Check status
+inspire tunnel status
+
+# Stop tunnel
+inspire tunnel stop
+```
+
+Once the tunnel is running, `bridge exec` and `job logs` automatically use it for faster execution.
+
+### Bridge Exec
+
+Run shell commands on the Bridge self-hosted runner:
+
+```bash
+# Run a command
+inspire bridge exec "pip install torch"
+
+# With artifact download
+inspire bridge exec "python generate.py" \
+  --artifact-path outputs --download ./local-outputs
+
+# Fire-and-forget
+inspire bridge exec "python train.py" --no-wait
+```
 
 ### Configuration
 
@@ -120,7 +212,32 @@ Logs written during job execution (when `INSPIRE_TARGET_DIR` is set) are stored 
 
 ## Examples
 
-### Create a debug training job
+### Quick Training Workflow
+
+```bash
+# 1. Check available GPUs
+inspire resources list
+
+# 2. Run training with auto-allocation
+inspire run "python train.py" --watch
+
+# Or step by step:
+inspire sync
+inspire run "python train.py"
+inspire job logs <job-id> --follow
+```
+
+### Monitor Job with Watch Mode
+
+```bash
+# Watch job list with live updates
+inspire job list --watch
+
+# Watch resource availability
+inspire resources list --watch
+```
+
+### Create Job with Full Options
 
 ```bash
 inspire job create \
@@ -128,27 +245,16 @@ inspire job create \
   --resource "4xH200" \
   --command "bash train_debug.sh" \
   --priority 9 \
-  --max-time 2
+  --max-time 2 \
+  --location "H200 机房3"
 ```
 
-### Monitor job with JSON output (for automation)
+### JSON Output for Automation
 
 ```bash
 inspire --json job status job-abc-123
-```
-
-### Stream logs in real-time
-
-```bash
-# Poll for latest logs while job is running
-watch -n 30 "inspire job logs job-abc-123 --tail 100 --refresh"
-```
-
-### Wait for job and get exit code
-
-```bash
-inspire job wait job-abc-123 --timeout 14400 --interval 60
-echo "Exit code: $?"  # 0 = success, non-zero = failure
+inspire --json job list
+inspire --json resources list
 ```
 
 ## Exit Codes
@@ -165,19 +271,64 @@ echo "Exit code: $?"  # 0 = success, non-zero = failure
 | 15 | Log not found |
 | 16 | Job not found |
 
-## For Claude Code Integration
+## Remote Log Retrieval
 
-The CLI is designed to work well with AI agents like Claude Code:
+If running `inspire job logs` from a machine without access to the shared filesystem, the CLI can fetch logs via Gitea Actions workflows.
+
+### Setup
+
+1. **Ensure the workflow file exists** in your training repo:
+   - `.gitea/workflows/retrieve_job_log.yml`
+
+2. **Set environment variables:**
+   ```bash
+   export INSP_GITEA_REPO="owner/repo"
+   export INSP_GITEA_TOKEN="..."
+   export INSP_GITEA_SERVER="https://gitea.example.com"
+   ```
+
+3. **Ensure your repo has a Gitea Actions runner** with access to the shared filesystem.
+
+### How It Works
+
+```
+Laptop (inspire job logs)
+    ↓
+Gitea API (triggers workflow)
+    ↓
+Self-hosted Runner (reads log)
+    ↓
+Artifact (uploads log)
+    ↓
+Laptop (downloads and caches)
+```
+
+## Code Sync Setup
+
+1. **Ensure the workflow file exists:**
+   - `.gitea/workflows/sync_code.yml`
+
+2. **Set environment variables:**
+   ```bash
+   export INSP_GITEA_REPO="owner/repo"
+   export INSP_GITEA_SERVER="https://gitea.example.com"
+   export INSP_GITEA_TOKEN="..."
+   export INSPIRE_TARGET_DIR="/path/to/dir"
+   ```
+
+### Typical Workflow
 
 ```bash
-# Machine-readable JSON output
-inspire --json job create --name "test" --resource "H200" --command "echo hello"
+# 1. Make changes and commit
+git add . && git commit -m "feat: improve model"
 
-# Parse status programmatically
-inspire --json job status job-abc-123 | jq '.data.status'
+# 2. Sync and run
+inspire run "bash train.sh" --watch
 
-# Get log content as JSON
-inspire --json job logs job-abc-123 --tail 50
+# Or manually:
+inspire sync
+inspire job create --name "test" --resource "4xH200" --command "bash train.sh"
+inspire job logs <job-id> --follow
 ```
 
 ## Troubleshooting
@@ -190,206 +341,20 @@ export INSPIRE_USERNAME="your_username"
 export INSPIRE_PASSWORD="your_password"
 ```
 
-### "Missing INSPIRE_TARGET_DIR environment variable"
-
-This is required for **local** log operations (when you have access to the shared filesystem):
-```bash
-export INSPIRE_TARGET_DIR="/inspire/hdd/global_user/..."
-```
-
-For **remote** log retrieval (from a laptop), see [Remote Log Retrieval](#remote-log-retrieval) below.
-
-## Remote Log Retrieval
-
-If you're running `inspire job logs` from a machine **without** access to the shared filesystem (e.g., your laptop), the CLI can fetch logs via Gitea Actions workflows.
-
-### Setup
-
-1. **Ensure the workflow file exists** in your training repo:
-   - `.gitea/workflows/retrieve_job_log.yml`
-
-2. **Set environment variables:**
-   ```bash
-   export INSP_GITEA_REPO="owner/repo"            # Your Gitea repo
-   export INSP_GITEA_TOKEN="..."                  # Gitea personal access token
-   export INSP_GITEA_SERVER="https://gitea.example.com"
-   ```
-
-3. **Ensure your repo has a Gitea Actions runner** with access to the shared filesystem and label `qz-selfhosted`.
-   (You already have this if `act_runner` is registered on the Bridge machine.)
-   Tips: if you need sudo to setup a self-hosted runner in inspire platform, you can just try
-   ```bash
-   export RUNNER_ALLOW_RUNASROOT=1
-   ```
-
-
-### How It Works
-
-```
-Laptop (inspire job logs)
-    ↓
-Gitea API (triggers workflow)
-    ↓
-Self-hosted Runner (reads log from shared filesystem)
-    ↓
-Artifact (uploads log)
-    ↓
-Laptop (downloads and caches locally)
-```
-
-### Usage
-
-```bash
-# Fetch log (first time: ~20-30 seconds, cached after)
-inspire job logs <job-id>
-
-# Force refresh while job is running
-inspire job logs <job-id> --tail 100 --refresh
-
-# Monitor continuously
-watch -n 30 "inspire job logs <job-id> --tail 100 --refresh"
-```
-
-Logs are cached locally at `~/.inspire/logs/` and reused on subsequent calls.
-
-## Code Sync
-
-The `inspire sync` command pushes your local branch to Gitea and triggers a workflow on the Bridge runner to sync the code to the shared filesystem.
-
-## Bridge Exec
-
-Run shell commands on the Bridge self-hosted runner (in `INSPIRE_TARGET_DIR`), with optional denylist and artifact download.
-
-### Setup
-- Ensure the workflow file exists in your training repo:
-  - `.gitea/workflows/run_bridge_action.yml`
-- Env vars:
-  - `INSP_GITEA_REPO` (owner/repo)
-  - `INSP_GITEA_SERVER` (Gitea server URL)
-  - `INSP_GITEA_TOKEN` (Gitea token)
-  - `INSPIRE_TARGET_DIR` (target dir on Bridge — shared with sync and logs)
-  - Optional: `INSPIRE_BRIDGE_ACTION_TIMEOUT` (seconds, default 300)
-  - Optional: `INSPIRE_BRIDGE_DENYLIST` (comma/newline glob patterns for blocking commands)
-
-### Usage
-```bash
-# Run a command (output is displayed in terminal)
-inspire bridge exec "uv venv .venv && ./.venv/bin/pip install torch"
-
-# With denylist to block dangerous patterns
-inspire bridge exec "pip install numpy" \
-  --denylist "rm*" --denylist "*sudo*"
-
-# Download files created by the command
-inspire bridge exec "uv venv .venv" \
-  --artifact-path .venv --download ./local-venv
-
-# Fire-and-forget (don't wait for completion)
-inspire bridge exec "python train.py" --no-wait
-```
-
-Notes:
-- **Command output is displayed** in your terminal after the command completes
-- Denylist is optional (warning if none). Patterns use **glob-style** matching (like `.gitignore`):
-  | Pattern | Matches |
-  |---------|---------|
-  | `rm` | exact command `rm` only |
-  | `rm*` | `rm`, `rm -rf /`, `rmdir foo` |
-  | `*sudo*` | any command containing `sudo` |
-  | `*rm -rf*` | any command containing `rm -rf` |
-- All commands run under `bash -lc` with `set -euo pipefail` and `cd $INSPIRE_TARGET_DIR`.
-- To download files, specify `--artifact-path` relative to `INSPIRE_TARGET_DIR`, then `--download` local dir.
-
-## Code Sync Setup
-
-1. **Ensure the workflow file exists** in your training repo:
-   - `.gitea/workflows/sync_code.yml`
-
-2. **Set local environment variables:**
-   ```bash
-   export INSP_GITEA_REPO="owner/repo"             # Your Gitea repo
-   export INSP_GITEA_SERVER="https://gitea.example.com"
-   export INSP_GITEA_TOKEN="..."
-   export INSPIRE_TARGET_DIR="/path/to/dir"        # Target directory on Bridge
-   export INSPIRE_DEFAULT_REMOTE="origin"          # Optional, defaults to origin
-   ```
-
-### Sync Usage
-
-```bash
-# Sync current branch to origin, then to Bridge
-inspire sync
-
-# Sync to a different remote
-inspire sync --remote upstream
-
-# Sync a specific branch
-inspire sync --branch feature/new-model
-
-# Force sync (discard local changes on Bridge)
-inspire sync --force
-
-# Don't wait for completion
-inspire sync --no-wait
-```
-
-### Typical Workflow
-
-```bash
-# 1. Make changes and commit
-git add . && git commit -m "feat: improve model"
-
-# 2. Sync to Bridge
-inspire sync
-# Output: ✓ Synced branch 'my-branch' (abc1234) to /shared/EBM_dev
-
-# 3. Launch training
-inspire job create --name "test-improve" --resource "4xH200" --command "bash train.sh"
-
-# 4. Monitor logs
-inspire job logs <job-id> --tail 100
-```
-
-### How It Works
-
-```
-Laptop (inspire sync)
-    ↓
-Git push to remote
-    ↓
-Gitea API (triggers sync_code workflow)
-    ↓
-Self-hosted Runner:
-    - cd to target directory
-    - git fetch && checkout branch
-    - git pull (or git reset --hard if --force)
-    ↓
-Returns commit SHA to confirm sync
-```
-
-### Handling Sync Errors
-
-If the Bridge has local changes or the branch has diverged, the sync will fail:
-
-```
-✗ Sync failed: failure
-  See: https://gitea.example.com/owner/repo/actions
-```
-
-To resolve, use `--force` to discard local changes on Bridge:
-
-```bash
-inspire sync --force
-```
-
-**Warning:** `--force` will run `git reset --hard` on the Bridge, discarding any uncommitted changes there.
-
 ### "Authentication failed"
 
 - Verify your username and password are correct
 - Check if the Inspire platform is accessible
-- Try with `--debug` flag for more details
-- Run `inspire config check` to validate configuration and authentication
+- Run `inspire config check` to validate configuration
+
+### "Missing INSPIRE_TARGET_DIR"
+
+Required for local log access:
+```bash
+export INSPIRE_TARGET_DIR="/inspire/hdd/global_user/..."
+```
+
+For remote access, configure Gitea Actions (see Remote Log Retrieval).
 
 ## License
 
