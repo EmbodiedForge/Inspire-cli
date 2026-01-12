@@ -1442,25 +1442,54 @@ def _fetch_log_via_ssh(
 def _follow_logs_via_ssh(
     remote_log_path: str,
     tail_lines: int = 50,
+    wait_timeout: int = 300,
 ) -> None:
     """Stream log content via SSH tail -f.
 
     This uses SSH's tail -f for real-time streaming.
+    Waits for the log file to exist if the job is still queuing.
 
     Args:
         remote_log_path: Path to log file on Bridge
         tail_lines: Initial number of lines to show
+        wait_timeout: Max seconds to wait for log file to appear (default: 300)
     """
     import subprocess
-    from inspire.cli.utils.tunnel import get_ssh_command_args
+    import time
+    from inspire.cli.utils.tunnel import get_ssh_command_args, run_ssh_command
+
+    click.echo(f"Log file: {remote_log_path}")
+
+    # Wait for log file to exist (job may be queuing)
+    check_cmd = f"test -f '{remote_log_path}' && echo 'exists' || echo 'waiting'"
+    start_time = time.time()
+    file_exists = False
+
+    while time.time() - start_time < wait_timeout:
+        try:
+            result = run_ssh_command(check_cmd, timeout=10)
+            if "exists" in result.stdout:
+                file_exists = True
+                break
+        except Exception:
+            pass
+
+        elapsed = int(time.time() - start_time)
+        click.echo(f"\rWaiting for job to start... ({elapsed}s)", nl=False)
+        time.sleep(5)
+
+    if not file_exists:
+        click.echo(f"\n\nTimeout: Log file not created after {wait_timeout}s")
+        click.echo("Job may still be queuing. Check status with: inspire job status <job_id>")
+        return
+
+    click.echo(f"\nJob started! Following logs...")
+    click.echo(f"(showing last {tail_lines} lines, then following new content)")
+    click.echo("Press Ctrl+C to stop\n")
 
     # Build command: show last N lines then follow
     command = f"tail -n {tail_lines} -f '{remote_log_path}'"
     ssh_args = get_ssh_command_args(remote_command=command)
-
-    click.echo(f"Streaming logs from: {remote_log_path}")
-    click.echo(f"(showing last {tail_lines} lines, then following new content)")
-    click.echo("Press Ctrl+C to stop\n")
 
     try:
         # Run SSH with real-time output
