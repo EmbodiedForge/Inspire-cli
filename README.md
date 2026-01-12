@@ -169,7 +169,7 @@ inspire sync --force            # Force sync, discard local changes on Bridge
 The SSH tunnel provides ~100x faster command execution compared to Gitea Actions.
 
 ```bash
-# Set up tunnel URL
+# Set up tunnel URL (from Bridge notebook's Ports tab, port 31337)
 inspire tunnel set-url "https://nat-notebook-inspire.../proxy/31337/"
 
 # Start tunnel
@@ -182,7 +182,23 @@ inspire tunnel status
 inspire tunnel stop
 ```
 
-Once the tunnel is running, `bridge exec` and `job logs` automatically use it for faster execution.
+Once the tunnel is running, `bridge exec`, `job logs`, and `sync` automatically use it for faster execution.
+
+#### Proxy Configuration (WSL Users)
+
+If using WSL with a proxy (e.g., aTrust + Karing), ensure your `http_proxy` and `HTTP_PROXY` environment variables match. The tunnel will fail fast with a clear error if they mismatch:
+
+```bash
+# If you see "Proxy env mismatch" error:
+export HTTP_PROXY="$http_proxy"
+export HTTPS_PROXY="$https_proxy"
+```
+
+#### Reliability Features
+
+- **10-second SSH timeout**: Handles slow network conditions
+- **Automatic retry**: Retries once on transient SSH failures (helpful for parallel commands)
+- **Graceful fallback**: Falls back to Gitea Actions if tunnel is unavailable
 
 ### Bridge Exec
 

@@ -132,8 +132,16 @@ def _get_tunnel_pid(config: TunnelConfig) -> Optional[int]:
         return None
 
 
-def _test_ssh_connection(config: TunnelConfig, timeout: int = 5) -> bool:
-    """Test if SSH connection works."""
+def _test_ssh_connection(config: TunnelConfig, timeout: int = 10) -> bool:
+    """Test if SSH connection works.
+
+    Args:
+        config: Tunnel configuration
+        timeout: SSH connection timeout in seconds (default: 10)
+
+    Returns:
+        True if SSH connection succeeds, False otherwise
+    """
     try:
         result = subprocess.run(
             [
@@ -154,8 +162,12 @@ def _test_ssh_connection(config: TunnelConfig, timeout: int = 5) -> bool:
         return False
 
 
-def is_tunnel_available(config: Optional[TunnelConfig] = None) -> bool:
+def is_tunnel_available(config: Optional[TunnelConfig] = None, retries: int = 1) -> bool:
     """Check if SSH tunnel is running and responsive.
+
+    Args:
+        config: Tunnel configuration (loads default if None)
+        retries: Number of retries if SSH test fails (default: 1)
 
     Returns:
         True if tunnel is available and SSH works, False otherwise
@@ -168,8 +180,13 @@ def is_tunnel_available(config: Optional[TunnelConfig] = None) -> bool:
     if pid is None:
         return False
 
-    # Test SSH connection
-    return _test_ssh_connection(config)
+    # Test SSH connection with retry
+    for attempt in range(retries + 1):
+        if _test_ssh_connection(config):
+            return True
+        if attempt < retries:
+            time.sleep(1)  # Brief pause before retry
+    return False
 
 
 def run_ssh_command(
@@ -307,12 +324,30 @@ def start_tunnel(
     # Start rtunnel
     config.config_dir.mkdir(parents=True, exist_ok=True)
 
+    # Check for proxy env var mismatch (fail fast)
+    env = os.environ.copy()
+    for proxy_var in ("http_proxy", "https_proxy"):
+        lower_val = env.get(proxy_var)
+        upper_val = env.get(proxy_var.upper())
+        if lower_val and upper_val and lower_val != upper_val:
+            raise TunnelError(
+                f"Proxy env mismatch: {proxy_var}={lower_val} but "
+                f"{proxy_var.upper()}={upper_val}. "
+                f"Run 'export {proxy_var.upper()}=\"${proxy_var}\"' to fix."
+            )
+        # Normalize: prefer lowercase, sync to uppercase for Go compatibility
+        if lower_val:
+            env[proxy_var.upper()] = lower_val
+        elif upper_val:
+            env[proxy_var] = upper_val
+
     with open(config.log_file, "w") as log_f:
         process = subprocess.Popen(
             [str(rtunnel_bin), url, str(config.local_port)],
             stdout=log_f,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            env=env,
         )
 
     # Write PID file
