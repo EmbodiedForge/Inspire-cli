@@ -41,6 +41,12 @@ from inspire.cli.utils.gitea import (
     fetch_remote_log_via_bridge,
     fetch_remote_log_incremental,
 )
+from inspire.cli.utils.tunnel import (
+    is_tunnel_available,
+    run_ssh_command,
+    TunnelNotAvailableError,
+)
+from inspire.cli.utils.resources import fetch_resource_availability, find_best_compute_group, clear_availability_cache
 from inspire.cli.formatters import json_formatter, human_formatter
 
 
@@ -76,6 +82,8 @@ def _wrap_in_bash(command: str) -> str:
 @click.option("--priority", type=int, default=lambda: int(os.environ.get("INSP_PRIORITY", "8")), help="Task priority 1-10 (default: 8, env: INSP_PRIORITY)")
 @click.option("--max-time", type=float, default=100.0, help="Max runtime in hours (default: 100)")
 @click.option("--location", help="Preferred datacenter location")
+@click.option("--auto", is_flag=True, help="Auto-select best location based on GPU availability")
+@click.option("--no-cache", is_flag=True, help="Bypass availability cache when using --auto")
 @click.option("--image", default=lambda: os.environ.get("INSP_IMAGE"), help="Custom Docker image")
 @pass_context
 def create(
@@ -87,6 +95,8 @@ def create(
     priority: int,
     max_time: float,
     location: str,
+    auto: bool,
+    no_cache: bool,
     image: str,
 ):
     """Create a new training job.
@@ -117,6 +127,53 @@ def create(
     try:
         config = Config.from_env(require_target_dir=True)
         api = AuthManager.get_api(config)
+
+        # Auto-select location based on GPU availability (if requested)
+        if auto and not location:
+            if no_cache:
+                clear_availability_cache()
+
+            try:
+                requested_gpu_type, requested_gpu_count = api.resource_manager.parse_resource_request(resource)
+            except Exception as e:
+                _handle_error(ctx, "ValidationError", f"Invalid resource spec: {e}", EXIT_VALIDATION_ERROR)
+                return
+
+            availability = fetch_resource_availability(config, known_only=True)
+            best = find_best_compute_group(
+                availability,
+                gpu_type=requested_gpu_type.value,
+                min_gpus=requested_gpu_count,
+            )
+
+            if not best:
+                _handle_error(
+                    ctx,
+                    "InsufficientResources",
+                    f"No {requested_gpu_type.value} compute group has at least {requested_gpu_count} free GPUs",
+                    EXIT_VALIDATION_ERROR,
+                )
+                return
+
+            # Map group_id -> location string expected by ResourceManager
+            selected_group_name = best.group_name
+            selected_location = None
+            for group in api.resource_manager.compute_groups:
+                if group.compute_group_id == best.group_id:
+                    selected_group_name = group.name
+                    selected_location = group.location
+                    break
+
+            if not selected_location:
+                # Fall back to group name if we can't map it
+                selected_location = selected_group_name
+
+            location = selected_location
+
+            if not ctx.json_output:
+                click.echo(
+                    f"Auto-selected location: {selected_group_name} ({selected_location}), free GPUs: {best.free_gpus}"
+                )
 
         # Wrap in bash for consistent shell behavior
         command = _wrap_in_bash(command)
@@ -249,24 +306,19 @@ def status(ctx: Context, job_id: str):
 
 @job.command("stop")
 @click.argument("job_id")
-@click.option("--force", "-f", is_flag=True, help="Skip confirmation")
 @pass_context
-def stop(ctx: Context, job_id: str, force: bool):
+def stop(ctx: Context, job_id: str):
     """Stop a running training job.
 
     \b
     Example:
         inspire job stop job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf
-        inspire job stop job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf --force
     """
     # Validate job ID format early (before auth/API calls)
     format_error = _validate_job_id_format(job_id)
     if format_error:
         _handle_error(ctx, "InvalidJobID", format_error, EXIT_JOB_NOT_FOUND)
         return
-
-    if not force:
-        click.confirm(f"Stop job {job_id}?", abort=True)
 
     try:
         config = Config.from_env()
@@ -711,7 +763,76 @@ def logs(
             except OSError:
                 cache_path = legacy_cache_path
 
-        # Handle --follow mode
+        # Try SSH tunnel first for fast log access
+        try:
+            if is_tunnel_available():
+                if follow:
+                    # Real-time streaming via SSH
+                    if not ctx.json_output:
+                        click.echo("Using SSH tunnel (fast path)")
+                    _follow_logs_via_ssh(
+                        remote_log_path=str(remote_log_path_str),
+                        tail_lines=tail or 50,
+                    )
+                    sys.exit(EXIT_SUCCESS)
+                else:
+                    # One-time fetch via SSH
+                    if not ctx.json_output:
+                        click.echo("Using SSH tunnel (fast path)")
+
+                    content = _fetch_log_via_ssh(
+                        remote_log_path=str(remote_log_path_str),
+                        tail=tail,
+                        head=head,
+                    )
+
+                    if path:
+                        # Just show path
+                        if ctx.json_output:
+                            click.echo(json_formatter.format_json({
+                                "job_id": job_id,
+                                "log_path": str(remote_log_path_str),
+                            }))
+                        else:
+                            click.echo(str(remote_log_path_str))
+                    else:
+                        # Show content
+                        if ctx.json_output:
+                            click.echo(json_formatter.format_json({
+                                "job_id": job_id,
+                                "log_path": str(remote_log_path_str),
+                                "content": content,
+                                "method": "ssh_tunnel",
+                            }))
+                        else:
+                            if tail:
+                                click.echo(f"=== Last {tail} lines ===\n")
+                            elif head:
+                                click.echo(f"=== First {head} lines ===\n")
+                            click.echo(content)
+
+                    sys.exit(EXIT_SUCCESS)
+
+        except TunnelNotAvailableError:
+            if not ctx.json_output:
+                click.echo("Tunnel not available, using Gitea workflow...", err=True)
+        except IOError as e:
+            if not ctx.json_output:
+                click.echo(f"SSH log fetch failed: {e}", err=True)
+                click.echo("Falling back to Gitea workflow...", err=True)
+
+        # Handle --path mode (just show path, no fetch)
+        if path:
+            if ctx.json_output:
+                click.echo(json_formatter.format_json({
+                    "job_id": job_id,
+                    "log_path": str(remote_log_path_str),
+                }))
+            else:
+                click.echo(str(remote_log_path_str))
+            sys.exit(EXIT_SUCCESS)
+
+        # Handle --follow mode (Gitea fallback)
         if follow:
             _follow_logs(
                 ctx=ctx,
@@ -1282,6 +1403,85 @@ def _bulk_update_logs(
         _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
     except Exception as e:
         _handle_error(ctx, "Error", str(e), EXIT_GENERAL_ERROR)
+
+
+def _fetch_log_via_ssh(
+    remote_log_path: str,
+    tail: Optional[int] = None,
+    head: Optional[int] = None,
+) -> str:
+    """Fetch log content via SSH tunnel.
+
+    Args:
+        remote_log_path: Path to log file on Bridge
+        tail: If set, return last N lines
+        head: If set, return first N lines
+
+    Returns:
+        Log content as string
+
+    Raises:
+        TunnelNotAvailableError: If tunnel is not available
+        IOError: If log file cannot be read
+    """
+    if tail:
+        command = f"tail -n {tail} '{remote_log_path}'"
+    elif head:
+        command = f"head -n {head} '{remote_log_path}'"
+    else:
+        command = f"cat '{remote_log_path}'"
+
+    result = run_ssh_command(command=command, capture_output=True)
+
+    if result.returncode != 0:
+        raise IOError(f"Failed to read log file: {result.stderr}")
+
+    return result.stdout
+
+
+def _follow_logs_via_ssh(
+    remote_log_path: str,
+    tail_lines: int = 50,
+) -> None:
+    """Stream log content via SSH tail -f.
+
+    This uses SSH's tail -f for real-time streaming.
+
+    Args:
+        remote_log_path: Path to log file on Bridge
+        tail_lines: Initial number of lines to show
+    """
+    import subprocess
+    from inspire.cli.utils.tunnel import get_ssh_command_args
+
+    # Build command: show last N lines then follow
+    command = f"tail -n {tail_lines} -f '{remote_log_path}'"
+    ssh_args = get_ssh_command_args(remote_command=command)
+
+    click.echo(f"Streaming logs from: {remote_log_path}")
+    click.echo(f"(showing last {tail_lines} lines, then following new content)")
+    click.echo("Press Ctrl+C to stop\n")
+
+    try:
+        # Run SSH with real-time output
+        process = subprocess.Popen(
+            ssh_args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+            universal_newlines=True,
+        )
+
+        # Stream output line by line
+        for line in iter(process.stdout.readline, ''):
+            click.echo(line, nl=False)
+
+    except KeyboardInterrupt:
+        click.echo("\n\nStopped following logs.")
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait()
 
 
 def _handle_error(ctx: Context, error_type: str, message: str, exit_code: int):

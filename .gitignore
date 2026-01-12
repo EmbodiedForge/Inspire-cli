@@ -39,3 +39,6 @@ htmlcov/
 
 # Local cache
 .inspire/
+docs/rtunnel-ssh-setup.md
+scripts/bridge-tunnel-setup.sh
+scripts/inspire-tunnel

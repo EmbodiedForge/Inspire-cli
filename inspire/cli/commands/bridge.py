@@ -28,6 +28,13 @@ from inspire.cli.utils.gitea import (
     download_bridge_artifact,
     fetch_bridge_output_log,
 )
+from inspire.cli.utils.tunnel import (
+    is_tunnel_available,
+    run_ssh_command,
+    get_ssh_command_args,
+    load_tunnel_config,
+    TunnelNotAvailableError,
+)
 
 
 def _split_denylist(items: tuple[str, ...]) -> list[str]:
@@ -67,6 +74,7 @@ def bridge() -> None:
 )
 @click.option("wait", "--wait/--no-wait", default=True, help="Wait for completion (default: wait)")
 @click.option("timeout", "--timeout", type=int, default=None, help="Timeout in seconds (default: config value)")
+@click.option("--no-tunnel", is_flag=True, help="Force use of Gitea workflow (skip SSH tunnel)")
 @pass_context
 def exec_command(
     ctx: Context,
@@ -76,8 +84,11 @@ def exec_command(
     download: Optional[str],
     wait: bool,
     timeout: Optional[int],
+    no_tunnel: bool,
 ) -> None:
-    """Execute a command on the Bridge runner (self-hosted Gitea runner).
+    """Execute a command on the Bridge runner.
+
+    Uses SSH tunnel if available (instant), otherwise falls back to Gitea Actions.
 
     COMMAND is the shell command to run on Bridge (in INSPIRE_TARGET_DIR).
     Command output (stdout/stderr) is automatically displayed after completion.
@@ -89,6 +100,7 @@ def exec_command(
         inspire bridge exec "uv venv .venv" \\
             --artifact-path .venv --download ./local
         inspire bridge exec "python train.py" --no-wait
+        inspire bridge exec "ls" --no-tunnel  # Force Gitea workflow
     """
 
     try:
@@ -99,6 +111,74 @@ def exec_command(
         else:
             click.echo(f"Configuration error: {e}", err=True)
         sys.exit(EXIT_CONFIG_ERROR)
+
+    action_timeout = timeout or config.bridge_action_timeout or 300
+
+    # Try SSH tunnel first (unless --no-tunnel or artifacts requested)
+    if not no_tunnel and not artifact_path and not download:
+        try:
+            if is_tunnel_available():
+                if not ctx.json_output:
+                    click.echo("Using SSH tunnel (fast path)")
+                    click.echo(f"Command: {command}")
+                    click.echo(f"Working dir: {config.target_dir}")
+
+                # Build full command with cd to target dir
+                full_command = f'cd "{config.target_dir}" && {command}'
+
+                # Execute via SSH
+                result = run_ssh_command(
+                    command=full_command,
+                    timeout=action_timeout,
+                    capture_output=True,
+                )
+
+                # Display output
+                if not ctx.json_output:
+                    click.echo("")
+                    click.echo("--- Command Output ---")
+                    if result.stdout:
+                        click.echo(result.stdout, nl=False)
+                    if result.stderr:
+                        click.echo(result.stderr, nl=False)
+                    click.echo("")
+                    click.echo("--- End Output ---")
+                    click.echo("")
+
+                if result.returncode != 0:
+                    if ctx.json_output:
+                        click.echo(json.dumps({
+                            "status": "failed",
+                            "method": "ssh_tunnel",
+                            "returncode": result.returncode,
+                            "stdout": result.stdout,
+                            "stderr": result.stderr,
+                        }))
+                    else:
+                        click.echo(f"Command failed with exit code {result.returncode}", err=True)
+                    sys.exit(EXIT_GENERAL_ERROR)
+
+                if ctx.json_output:
+                    click.echo(json.dumps({
+                        "status": "success",
+                        "method": "ssh_tunnel",
+                        "returncode": result.returncode,
+                        "output": result.stdout + result.stderr,
+                    }))
+                else:
+                    click.echo("OK Command completed successfully (via SSH)")
+
+                sys.exit(EXIT_SUCCESS)
+
+        except TunnelNotAvailableError:
+            if not ctx.json_output:
+                click.echo("Tunnel not available, using Gitea workflow...", err=True)
+        except Exception as e:
+            if not ctx.json_output:
+                click.echo(f"SSH execution failed: {e}", err=True)
+                click.echo("Falling back to Gitea workflow...", err=True)
+
+    # Gitea workflow path (original implementation)
 
     # Merge denylist from env + CLI
     merged_denylist: list[str] = []
@@ -246,3 +326,54 @@ def exec_command(
             click.echo("Artifacts downloaded")
 
     sys.exit(EXIT_SUCCESS)
+
+
+@bridge.command("ssh")
+@pass_context
+def bridge_ssh(ctx: Context) -> None:
+    """Open an interactive SSH shell to Bridge.
+
+    Requires an active SSH tunnel. Start with: inspire tunnel start
+
+    \b
+    Example:
+        inspire tunnel start
+        inspire bridge ssh
+    """
+    try:
+        config = Config.from_env_for_sync()
+    except ConfigError as e:
+        if ctx.json_output:
+            click.echo(json.dumps({"error": str(e), "type": "config_error"}))
+        else:
+            click.echo(f"Configuration error: {e}", err=True)
+        sys.exit(EXIT_CONFIG_ERROR)
+
+    tunnel_config = load_tunnel_config()
+
+    if not is_tunnel_available(tunnel_config):
+        if ctx.json_output:
+            click.echo(json.dumps({
+                "error": "SSH tunnel not available",
+                "type": "tunnel_error",
+                "hint": "Run 'inspire tunnel start' first",
+            }))
+        else:
+            click.echo("Error: SSH tunnel not available", err=True)
+            click.echo("Hint: Run 'inspire tunnel start' first", err=True)
+        sys.exit(EXIT_GENERAL_ERROR)
+
+    # Build interactive SSH command with cd to target dir
+    ssh_args = get_ssh_command_args(
+        config=tunnel_config,
+        remote_command=f'cd "{config.target_dir}" && exec $SHELL -l',
+    )
+
+    if not ctx.json_output:
+        click.echo(f"Opening SSH connection to Bridge...")
+        click.echo(f"Working directory: {config.target_dir}")
+        click.echo("Press Ctrl+D or type 'exit' to disconnect")
+        click.echo("")
+
+    # Replace current process with SSH
+    os.execvp(ssh_args[0], ssh_args)
