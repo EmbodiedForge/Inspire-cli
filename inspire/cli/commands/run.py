@@ -9,6 +9,7 @@ Usage:
 import os
 import sys
 import subprocess
+import time
 from datetime import datetime
 import shutil
 
@@ -198,6 +199,9 @@ def run(
         if exit_code != EXIT_SUCCESS:
             _handle_error(ctx, "SyncError", "Code sync failed", EXIT_GENERAL_ERROR)
 
+        # Brief delay after sync to avoid API rate limits
+        time.sleep(0.5)
+
     try:
         config = Config.from_env(require_target_dir=True)
         api = AuthManager.get_api(config)
@@ -288,6 +292,9 @@ def run(
         # Step 4: Create job
         if not ctx.json_output:
             click.echo(f"Creating job '{name}'...")
+
+        # Brief delay before job creation to avoid API rate limits
+        time.sleep(0.5)
 
         # Import job creation logic
         from inspire.cli.commands.job import _wrap_in_bash
