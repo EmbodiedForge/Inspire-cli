@@ -140,13 +140,16 @@ inspire resources list --all
 
 ### Code Sync
 
-> **Note**: `inspire sync` currently requires Gitea Actions with a self-hosted runner. Future versions may support direct SSH tunnel sync for faster execution.
+`inspire sync` automatically uses SSH tunnel when available (fast), otherwise falls back to Gitea Actions.
 
 ```bash
 inspire sync                    # Sync current branch via origin
 inspire sync --remote upstream  # Sync via upstream remote
 inspire sync --force            # Force sync, discard local changes on Bridge
 ```
+
+**With SSH tunnel running**: Sync completes in ~2-3 seconds
+**Without SSH tunnel**: Falls back to Gitea Actions (~30 seconds)
 
 ### Job Management
 

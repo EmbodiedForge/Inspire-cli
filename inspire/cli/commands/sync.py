@@ -5,7 +5,7 @@ Usage:
 
 This command:
 1. Pushes the current (or specified) branch to the remote
-2. Triggers a Gitea workflow on the Bridge runner to sync the code
+2. Syncs code on Bridge via SSH tunnel (if available) or Gitea Actions
 3. Returns the synced commit SHA
 """
 
@@ -30,6 +30,11 @@ from inspire.cli.utils.gitea import (
     GiteaAuthError,
     trigger_sync_workflow,
     wait_for_workflow_completion,
+)
+from inspire.cli.utils.tunnel import (
+    is_tunnel_available,
+    sync_via_ssh,
+    TunnelNotAvailableError,
 )
 
 
@@ -220,7 +225,88 @@ def sync(
                 }))
             raise
 
-    # Trigger sync workflow
+    # Try SSH tunnel first (much faster), fall back to Gitea Actions
+    if is_tunnel_available():
+        _sync_via_tunnel(ctx, config, branch, commit_sha, commit_msg, remote, force, timeout)
+    else:
+        _sync_via_gitea(ctx, config, branch, commit_sha, commit_msg, remote, force, wait, timeout)
+
+    sys.exit(EXIT_SUCCESS)
+
+
+def _sync_via_tunnel(
+    ctx: Context,
+    config: Config,
+    branch: str,
+    commit_sha: str,
+    commit_msg: str,
+    remote: str,
+    force: bool,
+    timeout: int,
+) -> None:
+    """Sync code via SSH tunnel (fast path)."""
+    if not ctx.json_output:
+        click.echo("Syncing via SSH tunnel...")
+
+    try:
+        result = sync_via_ssh(
+            target_dir=config.target_dir,
+            branch=branch,
+            commit_sha=commit_sha,
+            force=force,
+            timeout=timeout,
+        )
+
+        if result["success"]:
+            synced_sha = result["synced_sha"] or commit_sha[:7]
+            if ctx.json_output:
+                click.echo(json.dumps({
+                    "status": "success",
+                    "method": "ssh_tunnel",
+                    "branch": branch,
+                    "remote": remote,
+                    "commit": commit_sha[:7],
+                    "commit_full": commit_sha,
+                    "synced_sha": synced_sha,
+                    "message": commit_msg,
+                    "target_dir": config.target_dir,
+                }))
+            else:
+                click.echo(click.style("OK", fg="green") + f" Synced branch '{branch}' ({synced_sha[:7]}) to {config.target_dir}")
+                click.echo(f"  Commit: {commit_msg}")
+                click.echo(f"  Method: SSH tunnel (fast)")
+        else:
+            if ctx.json_output:
+                click.echo(json.dumps({
+                    "status": "failed",
+                    "method": "ssh_tunnel",
+                    "branch": branch,
+                    "commit": commit_sha[:7],
+                    "error": result["error"],
+                }))
+            else:
+                click.echo(f"Sync failed: {result['error']}", err=True)
+            sys.exit(EXIT_GENERAL_ERROR)
+
+    except TunnelNotAvailableError as e:
+        # Fall back to Gitea Actions
+        if not ctx.json_output:
+            click.echo(f"SSH tunnel unavailable ({e}), falling back to Gitea Actions...")
+        _sync_via_gitea(ctx, config, branch, commit_sha, commit_msg, remote, force, True, timeout)
+
+
+def _sync_via_gitea(
+    ctx: Context,
+    config: Config,
+    branch: str,
+    commit_sha: str,
+    commit_msg: str,
+    remote: str,
+    force: bool,
+    wait: bool,
+    timeout: int,
+) -> None:
+    """Sync code via Gitea Actions workflow (slower fallback)."""
     if not ctx.json_output:
         click.echo("Triggering sync workflow...")
 
@@ -246,6 +332,7 @@ def sync(
             if ctx.json_output:
                 click.echo(json.dumps({
                     "status": "timeout",
+                    "method": "gitea_actions",
                     "branch": branch,
                     "commit": commit_sha[:7],
                     "error": f"Sync workflow did not complete within {timeout}s",
@@ -259,6 +346,7 @@ def sync(
             if ctx.json_output:
                 click.echo(json.dumps({
                     "status": "success",
+                    "method": "gitea_actions",
                     "branch": branch,
                     "remote": remote,
                     "commit": commit_sha[:7],
@@ -275,6 +363,7 @@ def sync(
             if ctx.json_output:
                 click.echo(json.dumps({
                     "status": "failed",
+                    "method": "gitea_actions",
                     "branch": branch,
                     "commit": commit_sha[:7],
                     "conclusion": result.get("conclusion"),
@@ -290,6 +379,7 @@ def sync(
         if ctx.json_output:
             click.echo(json.dumps({
                 "status": "triggered",
+                "method": "gitea_actions",
                 "branch": branch,
                 "remote": remote,
                 "commit": commit_sha[:7],
@@ -300,5 +390,3 @@ def sync(
             click.echo(click.style("OK", fg="green") + f" Pushed {branch} to {remote}")
             click.echo(click.style("OK", fg="green") + " Triggered sync workflow" + (f" (run {run_id})" if run_id else ""))
             click.echo(f"  Commit: {commit_sha[:7]} - {commit_msg}")
-
-    sys.exit(EXIT_SUCCESS)
