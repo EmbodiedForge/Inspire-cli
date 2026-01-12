@@ -264,7 +264,19 @@ def format_success(message: str) -> str:
     Returns:
         Formatted success string
     """
-    return f"\n\u2705 {message}"
+    return f"\u2705 {message}"
+
+
+def format_warning(message: str) -> str:
+    """Format a warning message.
+
+    Args:
+        message: Warning message
+
+    Returns:
+        Formatted warning string
+    """
+    return f"\u26a0\ufe0f {message}"
 
 
 def print_error(message: str, hint: Optional[str] = None) -> None:

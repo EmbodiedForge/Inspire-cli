@@ -946,8 +946,8 @@ class InspireAPI:
         
         if page_num < 1:
             raise ValidationError("Page number must be at least 1")
-        if page_size < 1 or page_size > 100:
-            raise ValidationError("Page size must be between 1 and 100")
+        if page_size < 1 or page_size > 1000:
+            raise ValidationError("Page size must be between 1 and 1000")
         
         valid_pools = ['online', 'backup', 'fault', 'unknown']
         if resource_pool and resource_pool not in valid_pools:
