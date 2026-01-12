@@ -140,6 +140,8 @@ inspire resources list --all
 
 ### Code Sync
 
+> **Note**: `inspire sync` currently requires Gitea Actions with a self-hosted runner. Future versions may support direct SSH tunnel sync for faster execution.
+
 ```bash
 inspire sync                    # Sync current branch via origin
 inspire sync --remote upstream  # Sync via upstream remote
