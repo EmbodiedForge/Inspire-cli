@@ -27,10 +27,10 @@ Set the required environment variables:
 export INSPIRE_USERNAME="your_username"
 export INSPIRE_PASSWORD="your_password"
 
-# Required for sync/bridge/log operations (shared filesystem root)
+# Required for sync/bridge/log operations (shared filesystem root) 
 export INSPIRE_TARGET_DIR="/path/to/shared/filesystem"
 
-# Gitea Actions (required for sync/bridge exec/remote logs)
+# Gitea Actions (required for sync/bridge exec/remote logs, if SSH works, ignore it)
 export INSP_GITEA_REPO="owner/repo"
 export INSP_GITEA_TOKEN="..."          # Gitea personal access token
 export INSP_GITEA_SERVER="https://gitea.example.com"
