@@ -141,6 +141,12 @@ def _exec_inspire_subcommand(args: list[str]) -> None:
     is_flag=True,
     help="Bypass availability cache and fetch fresh data",
 )
+@click.option(
+    "--nodes",
+    type=int,
+    default=1,
+    help="Number of nodes for multi-node training (default: 1)",
+)
 @pass_context
 def run(
     ctx: Context,
@@ -155,6 +161,7 @@ def run(
     max_time: float,
     image: str,
     no_cache: bool,
+    nodes: int,
 ):
     """Quick job submission with smart resource allocation.
 
@@ -326,6 +333,7 @@ def run(
             prefer_location=location,
             image=image,
             task_priority=priority,
+            instance_count=nodes,
             max_running_time_ms=max_time_ms,
         )
 
@@ -365,6 +373,8 @@ def run(
             click.echo(human_formatter.format_success(f"Job created: {job_id}"))
             click.echo(f"\nName:     {name}")
             click.echo(f"Resource: {resource_str}")
+            if nodes > 1:
+                click.echo(f"Nodes:    {nodes}")
             click.echo(f"Command:  {command[:80]}{'...' if len(command) > 80 else ''}")
             if log_path:
                 click.echo(f"Log file: {log_path}")

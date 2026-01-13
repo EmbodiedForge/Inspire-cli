@@ -85,6 +85,12 @@ def _wrap_in_bash(command: str) -> str:
 @click.option("--auto", is_flag=True, help="Auto-select best location based on GPU availability")
 @click.option("--no-cache", is_flag=True, help="Bypass availability cache when using --auto")
 @click.option("--image", default=lambda: os.environ.get("INSP_IMAGE"), help="Custom Docker image")
+@click.option(
+    "--nodes",
+    type=int,
+    default=1,
+    help="Number of nodes for multi-node training (default: 1)",
+)
 @pass_context
 def create(
     ctx: Context,
@@ -98,6 +104,7 @@ def create(
     auto: bool,
     no_cache: bool,
     image: str,
+    nodes: int,
 ):
     """Create a new training job.
 
@@ -202,6 +209,7 @@ def create(
             prefer_location=location,
             image=image,
             task_priority=priority,
+            instance_count=nodes,
             max_running_time_ms=max_time_ms,
         )
 
@@ -230,6 +238,8 @@ def create(
                 click.echo(human_formatter.format_success(f"Job created: {job_id}"))
                 click.echo(f"\nName:     {name}")
                 click.echo(f"Resource: {resource}")
+                if nodes > 1:
+                    click.echo(f"Nodes:    {nodes}")
                 max_cmd_len = 80
                 if len(command) > max_cmd_len:
                     display_cmd = command[:max_cmd_len]
