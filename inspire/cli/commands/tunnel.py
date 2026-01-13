@@ -143,6 +143,14 @@ def tunnel_status(ctx: Context) -> None:
         if status["error"]:
             click.echo(f"\nNote: {status['error']}")
 
+        # Show rtunnel log tail when SSH fails for debugging
+        if status.get("log_tail"):
+            click.echo("\nRecent rtunnel log:")
+            click.echo("-" * 40)
+            click.echo(status["log_tail"])
+            click.echo("-" * 40)
+            click.echo("\nTip: Try 'inspire tunnel stop && inspire tunnel start' to reconnect")
+
 
 @tunnel.command("set-url")
 @click.argument("url")

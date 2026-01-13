@@ -413,6 +413,7 @@ def get_tunnel_status(config: Optional[TunnelConfig] = None) -> dict:
         - proxy_url: Optional[str]
         - local_port: int
         - error: Optional[str]
+        - log_tail: Optional[str] (last 10 lines of rtunnel log when SSH fails)
     """
     if config is None:
         config = load_tunnel_config()
@@ -424,6 +425,7 @@ def get_tunnel_status(config: Optional[TunnelConfig] = None) -> dict:
         "proxy_url": config.proxy_url,
         "local_port": config.local_port,
         "error": None,
+        "log_tail": None,
     }
 
     pid = _get_tunnel_pid(config)
@@ -435,6 +437,14 @@ def get_tunnel_status(config: Optional[TunnelConfig] = None) -> dict:
         status["ssh_works"] = _test_ssh_connection(config)
         if not status["ssh_works"]:
             status["error"] = "Tunnel running but SSH connection failed"
+            # Include log tail for debugging
+            if config.log_file.exists():
+                try:
+                    lines = config.log_file.read_text().strip().split("\n")
+                    # Get last 10 lines
+                    status["log_tail"] = "\n".join(lines[-10:])
+                except Exception:
+                    pass
     else:
         if not config.proxy_url:
             status["error"] = "No proxy URL configured"
