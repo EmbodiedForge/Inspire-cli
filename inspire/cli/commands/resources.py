@@ -47,6 +47,11 @@ def resources():
     help="Thorough check: show all accessible compute groups",
 )
 @click.option(
+    "--gpu-type",
+    type=str,
+    help="Filter by GPU type (e.g., H100, H200)",
+)
+@click.option(
     "--watch",
     "-w",
     is_flag=True,
@@ -70,6 +75,7 @@ def list_resources(
     ctx: Context,
     no_cache: bool,
     show_all: bool,
+    gpu_type: str,
     watch: bool,
     interval: int,
     workspace: bool = False,
@@ -85,6 +91,7 @@ def list_resources(
     \b
     Examples:
         inspire resources list              # Global OpenAPI view (default)
+        inspire resources list --gpu-type H200  # Filter by GPU type
         inspire resources list --workspace  # Workspace-scoped (browser API)
         inspire resources list --all        # Include all compute groups
         inspire resources list --no-cache
@@ -99,12 +106,12 @@ def list_resources(
             ), err=True)
             sys.exit(EXIT_CONFIG_ERROR)
 
-        _watch_resources(ctx, show_all, interval, workspace)
+        _watch_resources(ctx, show_all, interval, workspace, gpu_type)
         return
 
     # --workspace: browser API for workspace-scoped view
     if workspace:
-        _list_workspace_resources(ctx, show_all)
+        _list_workspace_resources(ctx, show_all, gpu_type)
         return
 
     # Default: OpenAPI global view
@@ -120,6 +127,11 @@ def list_resources(
             config,
             known_only=not show_all,
         )
+
+        # Filter by GPU type if specified
+        if gpu_type:
+            availability = [a for a in availability
+                          if a.gpu_type.upper() == gpu_type.upper()]
 
         if not availability:
             if ctx.json_output:
@@ -156,7 +168,56 @@ def list_resources(
         _handle_error(ctx, "APIError", str(e), EXIT_API_ERROR)
 
 
-def _list_workspace_resources(ctx: Context, show_all: bool) -> None:
+@resources.command("nodes")
+@click.option("--pool", type=click.Choice(["online", "backup", "fault", "unknown"]),
+              help="Filter by resource pool")
+@click.option("--page", type=int, default=1, help="Page number (default: 1)")
+@click.option("--size", type=int, default=20, help="Page size (default: 20)")
+@pass_context
+def list_nodes(ctx: Context, pool: str, page: int, size: int):
+    """List individual cluster nodes.
+
+    Shows available nodes in the cluster, optionally filtered by resource pool.
+
+    \b
+    Examples:
+        inspire resources nodes
+        inspire resources nodes --pool online
+        inspire resources nodes --pool fault --size 50
+    """
+    try:
+        config = Config.from_env()
+        api = AuthManager.get_api(config)
+
+        result = api.list_cluster_nodes(
+            page_num=page,
+            page_size=size,
+            resource_pool=pool,
+        )
+
+        nodes_data = result.get("data", {}).get("nodes", [])
+        total = result.get("data", {}).get("total", len(nodes_data))
+
+        if ctx.json_output:
+            click.echo(json_formatter.format_json({
+                "nodes": nodes_data,
+                "total": total,
+                "page": page,
+                "page_size": size,
+                "pool_filter": pool,
+            }))
+        else:
+            click.echo(human_formatter.format_nodes(nodes_data, total))
+
+    except ConfigError as e:
+        _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
+    except AuthenticationError as e:
+        _handle_error(ctx, "AuthenticationError", str(e), EXIT_AUTH_ERROR)
+    except Exception as e:
+        _handle_error(ctx, "APIError", str(e), EXIT_API_ERROR)
+
+
+def _list_workspace_resources(ctx: Context, show_all: bool, gpu_type: Optional[str] = None) -> None:
     """List workspace-specific GPU availability using browser API.
 
     In workspace mode, we show all accessible groups by default since the
@@ -242,6 +303,11 @@ def _list_workspace_resources(ctx: Context, show_all: bool) -> None:
         # Sort by free_gpus descending
         availability_list.sort(key=lambda x: x.free_gpus, reverse=True)
 
+        # Filter by GPU type if specified
+        if gpu_type:
+            availability_list = [a for a in availability_list
+                                if a.gpu_type.upper() == gpu_type.upper()]
+
         # Add workspace indicator
         _format_availability_table(availability_list, workspace_mode=True)
 
@@ -258,6 +324,7 @@ def _watch_resources(
     show_all: bool,
     interval: int,
     workspace: bool,
+    gpu_type: Optional[str] = None,
 ) -> None:
     """Watch resources with periodic refresh and progress bar."""
     from datetime import datetime
@@ -454,6 +521,11 @@ def _watch_resources(
                         known_only=not show_all,
                         progress_callback=on_progress,
                     )
+
+                # Filter by GPU type if specified
+                if gpu_type:
+                    availability = [a for a in availability
+                                  if a.gpu_type.upper() == gpu_type.upper()]
             except AuthenticationError as e:
                 api_logger.setLevel(original_level)
                 click.echo(human_formatter.format_error(str(e)), err=True)

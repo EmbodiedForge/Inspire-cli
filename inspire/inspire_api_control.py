@@ -376,7 +376,6 @@ class APIEndpoints:
     TRAIN_JOB_CREATE = "/openapi/v1/train_job/create"
     TRAIN_JOB_DETAIL = "/openapi/v1/train_job/detail"
     TRAIN_JOB_STOP = "/openapi/v1/train_job/stop"
-    SPECS_LIST = "/openapi/v1/specs/list"
     CLUSTER_NODES_LIST = "/openapi/v1/cluster_nodes/list"
 
 
@@ -920,22 +919,6 @@ class InspireAPI:
             if error_code == 100002:
                 raise JobNotFoundError(f"Failed to stop job '{job_id}': {friendly_msg}")
             raise InspireAPIError(f"Failed to stop training job: {friendly_msg}")
-    
-    def list_available_specs(self, logic_compute_group_id: str) -> Dict[str, Any]:
-        """获取可用的规格列表"""
-        self._check_authentication()
-        self._validate_required_params(logic_compute_group_id=logic_compute_group_id)
-        
-        payload = {"logic_compute_group_id": logic_compute_group_id}
-        
-        result = self._make_request('POST', APIEndpoints.SPECS_LIST, payload)
-        
-        if result.get('code') == 0:
-            logger.info("📊 Retrieved available specs successfully.")
-            return result
-        else:
-            error_msg = result.get('message', 'Unknown error')
-            raise InspireAPIError(f"Failed to get specs: {error_msg}")
 
     def list_cluster_nodes(self,
                           page_num: int = 1, 
@@ -1049,14 +1032,7 @@ def main():
     # 停止训练任务
     stop_parser = subparsers.add_parser('stop', help='🛑 停止训练任务')
     stop_parser.add_argument('--job-id', required=True, type=str, help='任务ID')
-    
-    # 列出可用规格
-    specs_parser = subparsers.add_parser('list-specs', help='📊 列出可用的计算规格')
-    specs_parser.add_argument('--resource', type=str, 
-                             help='资源类型 (如: "H200", "H100")，用于自动选择计算组')
-    specs_parser.add_argument('--compute-group-id', type=str, 
-                             help='指定计算资源组ID')
-    
+
     # 列出集群节点
     list_parser = subparsers.add_parser('list-nodes', help='🖥️  列出集群节点')
     list_parser.add_argument('--page', type=int, default=1, help='页码 (默认: 1)')
@@ -1123,26 +1099,7 @@ def main():
         elif args.command == 'stop':
             api.stop_training_job(args.job_id)
             print("🛑 任务已停止")
-        
-        elif args.command == 'list-specs':
-            # 智能选择计算组ID
-            compute_group_id = args.compute_group_id
-            if not compute_group_id and args.resource:
-                try:
-                    _, compute_group_id = api.resource_manager.get_recommended_config(args.resource)
-                    logger.info(f"🎯 Auto-selected compute group ID: {compute_group_id}")
-                except ValueError as e:
-                    logger.error(f"❌ Resource parsing failed: {e}")
-                    return 1
-            
-            if not compute_group_id:
-                logger.error("❌ Please specify either --resource or --compute-group-id")
-                return 1
-            
-            result = api.list_available_specs(compute_group_id)
-            print("\n📊 可用规格:")
-            print(json.dumps(result, indent=2, ensure_ascii=False))
-        
+
         elif args.command == 'list-nodes':
             result = api.list_cluster_nodes(
                 page_num=args.page,
