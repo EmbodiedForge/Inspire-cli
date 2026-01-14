@@ -42,3 +42,6 @@ htmlcov/
 docs/rtunnel-ssh-setup.md
 scripts/bridge-tunnel-setup.sh
 scripts/inspire-tunnel
+
+# Internal documentation and testing (not for public)
+internal/
