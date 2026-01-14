@@ -174,3 +174,99 @@ def tunnel_set_url(ctx: Context, url: str) -> None:
     else:
         click.echo(f"Proxy URL saved: {url}")
         click.echo("\nStart tunnel with: inspire tunnel start")
+
+
+@tunnel.command("ssh-config")
+@click.option("--host", default="inspire-bridge", help="SSH host alias to use")
+@click.option("--install", is_flag=True, help="Automatically append to ~/.ssh/config")
+@pass_context
+def tunnel_ssh_config(ctx: Context, host: str, install: bool) -> None:
+    """Generate SSH config for ProxyCommand mode.
+
+    ProxyCommand mode eliminates the need for 'inspire tunnel start'.
+    SSH will automatically establish the tunnel for each connection.
+
+    \b
+    Benefits:
+        - No background tunnel process to manage
+        - Works with scp, rsync, git, and all SSH-based tools
+        - Each connection gets a fresh tunnel
+
+    \b
+    Examples:
+        inspire tunnel ssh-config                    # Show config to copy
+        inspire tunnel ssh-config --install          # Auto-add to ~/.ssh/config
+        inspire tunnel ssh-config --host bridge      # Use custom host alias
+
+    \b
+    After setup, use:
+        ssh inspire-bridge
+        scp file.txt inspire-bridge:/path/
+        rsync -av ./local/ inspire-bridge:/remote/
+    """
+    from inspire.cli.utils.tunnel import (
+        generate_ssh_config,
+        install_ssh_config,
+        get_rtunnel_path,
+    )
+
+    try:
+        config = load_tunnel_config()
+
+        if not config.proxy_url:
+            click.echo(human_formatter.format_error(
+                "No proxy URL configured. Run 'inspire tunnel set-url <URL>' first."
+            ), err=True)
+            sys.exit(EXIT_CONFIG_ERROR)
+
+        # Ensure rtunnel is available
+        rtunnel_path = get_rtunnel_path(config)
+
+        # Generate SSH config
+        ssh_config = generate_ssh_config(
+            config=config,
+            host_alias=host,
+            rtunnel_path=rtunnel_path,
+        )
+
+        if ctx.json_output:
+            click.echo(json.dumps({
+                "host": host,
+                "config": ssh_config,
+                "rtunnel_path": str(rtunnel_path),
+                "proxy_url": config.proxy_url,
+            }))
+            return
+
+        if install:
+            # Auto-install to ~/.ssh/config
+            result = install_ssh_config(ssh_config, host)
+            if result["updated"]:
+                click.echo(human_formatter.format_success(
+                    f"Updated existing '{host}' entry in ~/.ssh/config"
+                ))
+            else:
+                click.echo(human_formatter.format_success(
+                    f"Added '{host}' to ~/.ssh/config"
+                ))
+            click.echo("")
+            click.echo("You can now use:")
+            click.echo(f"  ssh {host}")
+            click.echo(f"  scp file.txt {host}:/path/")
+            click.echo(f"  rsync -av ./local/ {host}:/remote/")
+        else:
+            # Just print the config
+            click.echo("Add the following to your ~/.ssh/config:\n")
+            click.echo("-" * 50)
+            click.echo(ssh_config)
+            click.echo("-" * 50)
+            click.echo("")
+            click.echo("Or run with --install to auto-add:")
+            click.echo(f"  inspire tunnel ssh-config --install")
+
+    except TunnelError as e:
+        if ctx.json_output:
+            click.echo(json_formatter.format_json_error("TunnelError", str(e), EXIT_GENERAL_ERROR))
+        else:
+            click.echo(human_formatter.format_error(str(e)), err=True)
+        sys.exit(EXIT_GENERAL_ERROR)

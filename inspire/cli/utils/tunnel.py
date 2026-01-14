@@ -28,7 +28,8 @@ class TunnelNotAvailableError(TunnelError):
 DEFAULT_LOCAL_PORT = 2222
 DEFAULT_SSH_USER = "root"
 DEFAULT_SSH_HOST = "localhost"
-RTUNNEL_DOWNLOAD_URL = "https://github.com/Sarfflow/rtunnel/releases/download/v1.0.0/rtunnel-linux"
+# nightly release includes stdio:// mode for SSH ProxyCommand support
+RTUNNEL_DOWNLOAD_URL = "https://github.com/Sarfflow/rtunnel/releases/download/nightly/rtunnel-linux-amd64.tar.gz"
 
 
 @dataclass
@@ -275,9 +276,29 @@ def _ensure_rtunnel_binary(config: TunnelConfig) -> Path:
     config.rtunnel_bin.parent.mkdir(parents=True, exist_ok=True)
 
     try:
+        import tarfile
+        import tempfile
         import urllib.request
-        urllib.request.urlretrieve(RTUNNEL_DOWNLOAD_URL, config.rtunnel_bin)
-        config.rtunnel_bin.chmod(0o755)
+
+        # Download tar.gz and extract
+        with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
+            urllib.request.urlretrieve(RTUNNEL_DOWNLOAD_URL, tmp.name)
+            with tarfile.open(tmp.name, "r:gz") as tar:
+                # Extract the rtunnel binary (should be the only file or named rtunnel*)
+                for member in tar.getmembers():
+                    if member.isfile() and "rtunnel" in member.name:
+                        # Extract to a temp location first
+                        extracted = tar.extractfile(member)
+                        if extracted:
+                            config.rtunnel_bin.write_bytes(extracted.read())
+                            config.rtunnel_bin.chmod(0o755)
+                            break
+            # Clean up temp file
+            Path(tmp.name).unlink(missing_ok=True)
+
+        if not config.rtunnel_bin.exists():
+            raise TunnelError("rtunnel binary not found in archive")
+
         return config.rtunnel_bin
     except Exception as e:
         raise TunnelError(f"Failed to download rtunnel: {e}")
@@ -450,6 +471,110 @@ def get_tunnel_status(config: Optional[TunnelConfig] = None) -> dict:
             status["error"] = "No proxy URL configured"
 
     return status
+
+
+def get_rtunnel_path(config: Optional[TunnelConfig] = None) -> Path:
+    """Get rtunnel binary path, downloading if needed.
+
+    Args:
+        config: Tunnel configuration
+
+    Returns:
+        Path to rtunnel binary
+
+    Raises:
+        TunnelError: If rtunnel cannot be found or downloaded
+    """
+    if config is None:
+        config = load_tunnel_config()
+    return _ensure_rtunnel_binary(config)
+
+
+def generate_ssh_config(
+    config: TunnelConfig,
+    host_alias: str = "inspire-bridge",
+    rtunnel_path: Optional[Path] = None,
+) -> str:
+    """Generate SSH config for ProxyCommand mode.
+
+    Args:
+        config: Tunnel configuration with proxy_url
+        host_alias: SSH host alias to use
+        rtunnel_path: Path to rtunnel binary
+
+    Returns:
+        SSH config string to add to ~/.ssh/config
+    """
+    if rtunnel_path is None:
+        rtunnel_path = config.rtunnel_bin
+
+    # Convert https:// URL to wss:// for websocket
+    proxy_url = config.proxy_url or ""
+    if proxy_url.startswith("https://"):
+        ws_url = "wss://" + proxy_url[8:]
+    elif proxy_url.startswith("http://"):
+        ws_url = "ws://" + proxy_url[7:]
+    else:
+        ws_url = proxy_url
+
+    # The target is the sshd on the Bridge (localhost:22222 from rtunnel server's perspective)
+    # In stdio mode, we use stdio://%h:%p which will be replaced by SSH with the target host:port
+    # But since we're tunneling to a fixed sshd, we use the actual target
+    ssh_config = f"""Host {host_alias}
+    HostName localhost
+    User {config.ssh_user}
+    Port 22222
+    ProxyCommand {rtunnel_path} {ws_url} stdio://%h:%p
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    LogLevel ERROR"""
+
+    return ssh_config
+
+
+def install_ssh_config(ssh_config: str, host_alias: str) -> dict:
+    """Install SSH config to ~/.ssh/config.
+
+    Args:
+        ssh_config: SSH config block to add
+        host_alias: Host alias to look for (for updating existing entries)
+
+    Returns:
+        Dict with keys:
+        - success: bool
+        - updated: bool (True if existing entry was updated)
+        - error: Optional[str]
+    """
+    import re
+
+    ssh_config_path = Path.home() / ".ssh" / "config"
+    ssh_config_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    existing_content = ""
+    if ssh_config_path.exists():
+        existing_content = ssh_config_path.read_text()
+
+    # Check if host alias already exists
+    # Match "Host <alias>" at start of line, possibly with other hosts on same line
+    host_pattern = rf"^Host\s+.*?\b{re.escape(host_alias)}\b.*$"
+    match = re.search(host_pattern, existing_content, re.MULTILINE)
+
+    if match:
+        # Find the full block to replace (from Host line to next Host line or end)
+        block_pattern = rf"(^Host\s+.*?\b{re.escape(host_alias)}\b.*$)((?:\n(?!Host\s).*)*)"
+        new_content = re.sub(block_pattern, ssh_config, existing_content, flags=re.MULTILINE)
+
+        ssh_config_path.write_text(new_content)
+        return {"success": True, "updated": True, "error": None}
+    else:
+        # Append new entry
+        if existing_content and not existing_content.endswith("\n"):
+            existing_content += "\n"
+        if existing_content:
+            existing_content += "\n"
+
+        ssh_config_path.write_text(existing_content + ssh_config + "\n")
+        return {"success": True, "updated": False, "error": None}
 
 
 def sync_via_ssh(
