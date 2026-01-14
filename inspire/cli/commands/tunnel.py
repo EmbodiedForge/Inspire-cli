@@ -1,4 +1,4 @@
-"""Tunnel commands for SSH access to Bridge."""
+"""Tunnel commands for SSH access to Bridge via ProxyCommand."""
 
 import json
 import sys
@@ -19,8 +19,6 @@ from inspire.cli.utils.tunnel import (
     TunnelNotAvailableError,
     load_tunnel_config,
     save_tunnel_config,
-    start_tunnel,
-    stop_tunnel,
     get_tunnel_status,
     is_tunnel_available,
 )
@@ -30,91 +28,28 @@ from inspire.cli.utils.tunnel import (
 def tunnel() -> None:
     """Manage SSH tunnel for fast Bridge access.
 
-    The SSH tunnel provides ~100x faster command execution compared to
-    Gitea Actions. Once started, commands like 'bridge exec' and 'job logs'
-    will automatically use the tunnel.
+    The SSH tunnel uses ProxyCommand mode - no background process needed.
+    Commands like 'bridge exec' and 'job logs' automatically use SSH
+    when a proxy URL is configured.
 
     \b
     Quick Start:
-        1. Set up tunnel on Bridge (see docs/rtunnel-ssh-setup.md)
-        2. inspire tunnel start "https://nat-notebook-inspire.../proxy/31337/"
-        3. inspire bridge exec "hostname"  # Now instant!
-    """
-
-
-@tunnel.command("start")
-@click.argument("url", required=False)
-@pass_context
-def tunnel_start(ctx: Context, url: str) -> None:
-    """Start the SSH tunnel client.
-
-    URL is the rtunnel proxy URL from the Bridge notebook's Ports tab.
-    If not provided, uses the previously saved URL.
+        1. Set up rtunnel server on Bridge (see docs/rtunnel-ssh-setup.md)
+        2. inspire tunnel set-url "https://nat-notebook-inspire.../proxy/31337/"
+        3. inspire tunnel status              # Verify connection
+        4. inspire bridge exec "hostname"     # Now uses fast SSH!
 
     \b
-    Examples:
-        inspire tunnel start "https://nat-notebook-inspire.../proxy/31337/"
-        inspire tunnel start  # Use saved URL
+    For direct SSH access (scp, rsync, git):
+        inspire tunnel ssh-config --install
+        ssh inspire-bridge
     """
-    try:
-        pid = start_tunnel(proxy_url=url)
-
-        config = load_tunnel_config()
-        status = get_tunnel_status(config)
-
-        if ctx.json_output:
-            click.echo(json.dumps({
-                "status": "started",
-                "pid": pid,
-                "ssh_works": status["ssh_works"],
-                "proxy_url": config.proxy_url,
-                "local_port": config.local_port,
-            }))
-        else:
-            click.echo(f"Tunnel started (PID: {pid})")
-            click.echo(f"  URL: {config.proxy_url}")
-            click.echo(f"  Local port: {config.local_port}")
-
-            if status["ssh_works"]:
-                click.echo(human_formatter.format_success("SSH connection verified"))
-            else:
-                click.echo(human_formatter.format_warning(
-                    "Tunnel started but SSH connection not verified yet. "
-                    "Ensure Bridge sshd is running."
-                ))
-
-    except TunnelError as e:
-        if ctx.json_output:
-            click.echo(json_formatter.format_json_error("TunnelError", str(e), EXIT_GENERAL_ERROR))
-        else:
-            click.echo(human_formatter.format_error(str(e)), err=True)
-        sys.exit(EXIT_GENERAL_ERROR)
-
-
-@tunnel.command("stop")
-@pass_context
-def tunnel_stop(ctx: Context) -> None:
-    """Stop the SSH tunnel client.
-
-    \b
-    Example:
-        inspire tunnel stop
-    """
-    stopped = stop_tunnel()
-
-    if ctx.json_output:
-        click.echo(json.dumps({"status": "stopped" if stopped else "not_running"}))
-    else:
-        if stopped:
-            click.echo("Tunnel stopped")
-        else:
-            click.echo("Tunnel was not running")
 
 
 @tunnel.command("status")
 @pass_context
 def tunnel_status(ctx: Context) -> None:
-    """Check tunnel status and SSH connectivity.
+    """Check tunnel configuration and SSH connectivity.
 
     \b
     Example:
@@ -125,31 +60,31 @@ def tunnel_status(ctx: Context) -> None:
     if ctx.json_output:
         click.echo(json.dumps(status))
     else:
-        click.echo("Inspire SSH Tunnel Status")
-        click.echo("=" * 40)
+        click.echo("Inspire SSH Tunnel Status (ProxyCommand Mode)")
+        click.echo("=" * 50)
         click.echo(f"Proxy URL: {status['proxy_url'] or '(not set)'}")
-        click.echo(f"Local port: {status['local_port']}")
+        click.echo(f"rtunnel:   {status['rtunnel_path'] or '(not installed)'}")
         click.echo("")
 
-        if status["running"]:
-            click.echo(f"Tunnel: Running (PID: {status['pid']})")
+        if status["configured"]:
             if status["ssh_works"]:
                 click.echo(human_formatter.format_success("SSH: Connected"))
             else:
                 click.echo(human_formatter.format_warning("SSH: Not responding"))
+                click.echo("")
+                click.echo("Troubleshooting:")
+                click.echo("  1. Ensure VS Code is open on the Bridge notebook")
+                click.echo("  2. Ensure rtunnel server is running on Bridge:")
+                click.echo("     ~/.local/bin/rtunnel localhost:22222 0.0.0.0:31337")
+                click.echo("  3. Check that port 31337 is forwarded in VS Code Ports tab")
         else:
-            click.echo("Tunnel: Not running")
+            click.echo("Status: Not configured")
+            click.echo("")
+            click.echo("To configure, run:")
+            click.echo("  inspire tunnel set-url <PROXY_URL>")
 
-        if status["error"]:
-            click.echo(f"\nNote: {status['error']}")
-
-        # Show rtunnel log tail when SSH fails for debugging
-        if status.get("log_tail"):
-            click.echo("\nRecent rtunnel log:")
-            click.echo("-" * 40)
-            click.echo(status["log_tail"])
-            click.echo("-" * 40)
-            click.echo("\nTip: Try 'inspire tunnel stop && inspire tunnel start' to reconnect")
+        if status["error"] and status["configured"]:
+            click.echo(f"\nError: {status['error']}")
 
 
 @tunnel.command("set-url")
@@ -158,8 +93,7 @@ def tunnel_status(ctx: Context) -> None:
 def tunnel_set_url(ctx: Context, url: str) -> None:
     """Save the tunnel proxy URL to configuration.
 
-    This saves the URL for future 'tunnel start' commands.
-    Get the URL from the Bridge notebook's VSCode Ports tab.
+    Get the URL from the Bridge notebook's VSCode Ports tab (port 31337).
 
     \b
     Example:
@@ -173,7 +107,9 @@ def tunnel_set_url(ctx: Context, url: str) -> None:
         click.echo(json.dumps({"status": "saved", "proxy_url": url}))
     else:
         click.echo(f"Proxy URL saved: {url}")
-        click.echo("\nStart tunnel with: inspire tunnel start")
+        click.echo("")
+        click.echo("Test connection with: inspire tunnel status")
+        click.echo("Or for direct SSH:    inspire tunnel ssh-config --install")
 
 
 @tunnel.command("ssh-config")
@@ -181,16 +117,16 @@ def tunnel_set_url(ctx: Context, url: str) -> None:
 @click.option("--install", is_flag=True, help="Automatically append to ~/.ssh/config")
 @pass_context
 def tunnel_ssh_config(ctx: Context, host: str, install: bool) -> None:
-    """Generate SSH config for ProxyCommand mode.
+    """Generate SSH config for direct SSH access.
 
-    ProxyCommand mode eliminates the need for 'inspire tunnel start'.
-    SSH will automatically establish the tunnel for each connection.
+    This allows using 'ssh inspire-bridge', 'scp', 'rsync', etc.
+    directly without going through inspire-cli.
 
     \b
     Benefits:
-        - No background tunnel process to manage
         - Works with scp, rsync, git, and all SSH-based tools
         - Each connection gets a fresh tunnel
+        - No background process to manage
 
     \b
     Examples:
@@ -269,4 +205,62 @@ def tunnel_ssh_config(ctx: Context, host: str, install: bool) -> None:
             click.echo(json_formatter.format_json_error("TunnelError", str(e), EXIT_GENERAL_ERROR))
         else:
             click.echo(human_formatter.format_error(str(e)), err=True)
+        sys.exit(EXIT_GENERAL_ERROR)
+
+
+@tunnel.command("test")
+@pass_context
+def tunnel_test(ctx: Context) -> None:
+    """Test SSH connection and show timing.
+
+    \b
+    Example:
+        inspire tunnel test
+    """
+    import time
+    from inspire.cli.utils.tunnel import run_ssh_command
+
+    config = load_tunnel_config()
+
+    if not config.proxy_url:
+        if ctx.json_output:
+            click.echo(json.dumps({"error": "No proxy URL configured"}))
+        else:
+            click.echo(human_formatter.format_error(
+                "No proxy URL configured. Run 'inspire tunnel set-url <URL>' first."
+            ), err=True)
+        sys.exit(EXIT_CONFIG_ERROR)
+
+    try:
+        start = time.time()
+        result = run_ssh_command("hostname", config=config, timeout=30)
+        elapsed = time.time() - start
+
+        hostname = result.stdout.strip()
+
+        if ctx.json_output:
+            click.echo(json.dumps({
+                "success": result.returncode == 0,
+                "hostname": hostname,
+                "elapsed_ms": int(elapsed * 1000),
+            }))
+        else:
+            if result.returncode == 0:
+                click.echo(human_formatter.format_success(f"Connected to: {hostname}"))
+                click.echo(f"Response time: {elapsed:.2f}s")
+            else:
+                click.echo(human_formatter.format_error(f"Connection failed: {result.stderr}"))
+                sys.exit(EXIT_GENERAL_ERROR)
+
+    except TunnelNotAvailableError as e:
+        if ctx.json_output:
+            click.echo(json.dumps({"error": str(e)}))
+        else:
+            click.echo(human_formatter.format_error(str(e)), err=True)
+        sys.exit(EXIT_GENERAL_ERROR)
+    except Exception as e:
+        if ctx.json_output:
+            click.echo(json.dumps({"error": str(e)}))
+        else:
+            click.echo(human_formatter.format_error(f"Connection failed: {e}"), err=True)
         sys.exit(EXIT_GENERAL_ERROR)
