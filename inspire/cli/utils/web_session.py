@@ -128,20 +128,50 @@ def login_with_playwright(
         # Navigate to login page; wait for networkidle to ensure all redirects settle.
         page.goto(f"{base_url}/login", wait_until="networkidle", timeout=60000)
 
-        # CAS password login
+        # Try different login form selectors (CAS vs Keycloak vs qz.sii.edu.cn)
+        # The login page may redirect to CAS which has different form fields
+        selectors_to_try = [
+            ('input[placeholder="Username/alias"]', 'input[placeholder="Password"]'),
+            ('input[name="username"]', 'input[name="password"]'),
+            ('input#username', 'input#passwordShow'),  # CAS login with visible password field
+            ('input#username', 'input#password'),
+        ]
+
+        username_filled = False
+        password_selector = None
+        for user_sel, pass_sel in selectors_to_try:
+            try:
+                page.wait_for_selector(user_sel, timeout=5000)
+                page.locator(user_sel).first.fill(username)
+                page.locator(pass_sel).first.fill(password)
+                password_selector = pass_sel
+                username_filled = True
+                break
+            except Exception:
+                continue
+
+        if not username_filled:
+            # Fallback: try clicking "Account login" first, then use original selectors
+            try:
+                page.get_by_text("Account login", exact=True).click(timeout=5000, force=True)
+                page.wait_for_timeout(500)
+                page.wait_for_selector('input[placeholder="Username/alias"]', timeout=20000)
+                page.locator('input[placeholder="Username/alias"]').first.fill(username)
+                page.locator('input[placeholder="Password"]').first.fill(password)
+                password_selector = 'input[placeholder="Password"]'
+                username_filled = True
+            except Exception:
+                raise ValueError("Could not find login form on page")
+
+        # Submit the form
         try:
-            page.get_by_text("Account login", exact=True).click(timeout=5000, force=True)
+            page.locator('button[type="submit"]').first.click(timeout=5000)
         except Exception:
-            pass
-        page.wait_for_timeout(500)
-
-        # Wait for username/password inputs to be present
-        page.wait_for_selector('input[placeholder="Username/alias"]', timeout=20000)
-        page.wait_for_selector('input[placeholder="Password"]', timeout=20000)
-
-        page.locator('input[placeholder="Username/alias"]').first.fill(username)
-        page.locator('input[placeholder="Password"]').first.fill(password)
-        page.locator('input[placeholder="Password"]').first.press("Enter")
+            try:
+                page.locator('input[type="submit"]').first.click(timeout=5000)
+            except Exception:
+                if password_selector:
+                    page.locator(password_selector).first.press("Enter")
 
         # Wait for SSO redirects to complete (CAS -> Keycloak -> qz)
         start = time.time()
