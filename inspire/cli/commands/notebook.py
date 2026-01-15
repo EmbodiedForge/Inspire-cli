@@ -174,6 +174,10 @@ def _print_notebook_list(items: list, json_output: bool, ctx: Context) -> None:
                 gpu_type = spec.get("gpu_type", "")
                 if gpu_count and gpu_type:
                     gpu_info = f"{gpu_count}x{gpu_type}"
+                elif gpu_count == 0:
+                    cpu_count = spec.get("cpu_count")
+                    if cpu_count:
+                        gpu_info = f"{cpu_count}xCPU"
 
             # Created time
             created = item.get("created_at", "N/A")[:20]
@@ -282,35 +286,64 @@ def _print_notebook_detail(notebook: dict) -> None:
     click.echo(f"{'='*60}\n")
 
 
-def _parse_resource_string(resource: str) -> tuple[int, str]:
-    """Parse a resource string like '1xH200' into (gpu_count, gpu_type).
+def _parse_resource_string(resource: str) -> tuple[int, str, Optional[int]]:
+    """Parse a resource string like '1xH200' into (gpu_count, gpu_type, cpu_count).
 
     Supported formats:
     - "1xH200", "4xH200", "8xH100"
     - "H200", "H100" (defaults to 1 GPU)
     - "1 H200", "4 H100"
+    - "4CPU", "4xCPU", "4 CPU" (CPU-only)
+    - "CPU" (CPU-only, count resolved from quota)
 
     Returns:
-        Tuple of (gpu_count, gpu_type_pattern).
+        Tuple of (gpu_count, gpu_type_pattern, cpu_count). cpu_count is None
+        when the CPU count is unspecified (e.g., "CPU").
     """
     resource = resource.strip().upper()
+
+    cpu_aliases = {"CPU", "CPUONLY", "CPU_ONLY", "CPU-ONLY"}
 
     # Pattern: NxGPU (e.g., "1xH200", "4xH100")
     match = re.match(r"^(\d+)\s*[xX]\s*(\w+)$", resource)
     if match:
-        return int(match.group(1)), match.group(2)
+        count = int(match.group(1))
+        pattern = match.group(2)
+        if pattern in cpu_aliases:
+            return 0, "CPU", count
+        return count, pattern, None
 
     # Pattern: N GPU (e.g., "1 H200", "4 H100")
     match = re.match(r"^(\d+)\s+(\w+)$", resource)
     if match:
-        return int(match.group(1)), match.group(2)
+        count = int(match.group(1))
+        pattern = match.group(2)
+        if pattern in cpu_aliases:
+            return 0, "CPU", count
+        return count, pattern, None
 
     # Pattern: GPU only (e.g., "H200") - defaults to 1
     match = re.match(r"^(\w+)$", resource)
     if match:
-        return 1, match.group(1)
+        pattern = match.group(1)
+        if pattern in cpu_aliases:
+            return 0, "CPU", None
+        return 1, pattern, None
 
     raise ValueError(f"Invalid resource format: {resource}")
+
+
+def _format_resource_display(
+    gpu_count: int,
+    gpu_pattern: str,
+    cpu_count: Optional[int],
+) -> str:
+    """Format a resource string for display."""
+    if gpu_count == 0 and gpu_pattern.upper() == "CPU":
+        if cpu_count:
+            return f"{cpu_count}xCPU"
+        return "CPU"
+    return f"{gpu_count}x{gpu_pattern}"
 
 
 def _match_gpu_type(pattern: str, gpu_type_display: str) -> bool:
@@ -359,7 +392,7 @@ def _load_ssh_public_key(pubkey_path: Optional[str] = None) -> str:
 @click.option(
     "--resource", "-r",
     default=lambda: os.environ.get("INSPIRE_NOTEBOOK_RESOURCE", "1xH200"),
-    help="Resource spec (e.g., 1xH200, 4xH100)",
+    help="Resource spec (e.g., 1xH200, 4xH100, 4CPU)",
 )
 @click.option(
     "--project", "-p",
@@ -403,6 +436,7 @@ def create_notebook_cmd(
         inspire notebook create                     # Interactive mode
         inspire notebook create -r 1xH200           # 1 GPU H200
         inspire notebook create -r 4xH100 -n mytest # 4 GPUs H100
+        inspire notebook create -r 4CPU             # 4 CPUs
     """
     from inspire.cli.utils.web_session import get_web_session
     from inspire.cli.utils.browser_api import (
@@ -438,14 +472,17 @@ def create_notebook_cmd(
 
     # Parse resource string
     try:
-        gpu_count, gpu_pattern = _parse_resource_string(resource)
+        gpu_count, gpu_pattern, cpu_count = _parse_resource_string(resource)
     except ValueError as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(EXIT_CONFIG_ERROR)
         return
 
+    requested_cpu_count = cpu_count
+    resource_display = _format_resource_display(gpu_count, gpu_pattern, requested_cpu_count)
+
     if not json_output:
-        click.echo(f"Creating notebook with {gpu_count}x {gpu_pattern}...")
+        click.echo(f"Creating notebook with {resource_display}...")
 
     # 1. Get compute groups and find matching one
     try:
@@ -458,9 +495,9 @@ def create_notebook_cmd(
         sys.exit(EXIT_API_ERROR)
         return
 
-    # Find compute group with matching GPU type
+    # Find compute group with matching resource type
     selected_group = None
-    selected_gpu_type = None
+    selected_gpu_type = ""
     for group in compute_groups:
         gpu_stats_list = group.get("gpu_type_stats", [])
         for gpu_stats in gpu_stats_list:
@@ -473,13 +510,30 @@ def create_notebook_cmd(
         if selected_group:
             break
 
+    if not selected_group and gpu_count == 0:
+        for group in compute_groups:
+            if not group.get("gpu_type_stats"):
+                selected_group = group
+                selected_gpu_type = ""
+                break
+
     if not selected_group:
-        click.echo(f"Error: No compute group found with GPU type matching '{gpu_pattern}'", err=True)
-        click.echo("\nAvailable GPU types:", err=True)
+        click.echo(
+            f"Error: No compute group found with resource type matching '{gpu_pattern}'",
+            err=True,
+        )
+        click.echo("\nAvailable resource types:", err=True)
+        available = set()
         for group in compute_groups:
             for stats in group.get("gpu_type_stats", []):
                 gpu_type = stats.get("gpu_info", {}).get("gpu_type_display", "Unknown")
+                if gpu_type:
+                    available.add(gpu_type)
+        if available:
+            for gpu_type in sorted(available):
                 click.echo(f"  - {gpu_type}", err=True)
+        elif gpu_count == 0:
+            click.echo("  - CPU", err=True)
         sys.exit(EXIT_CONFIG_ERROR)
         return
 
@@ -499,24 +553,60 @@ def create_notebook_cmd(
     if isinstance(quota_list, str):
         quota_list = json_mod.loads(quota_list) if quota_list else []
 
-    # Find quota matching GPU type and count
+    # Find quota matching GPU/CPU request
     selected_quota = None
-    for quota in quota_list:
-        if quota.get("gpu_type") == selected_gpu_type and quota.get("gpu_count") == gpu_count:
-            selected_quota = quota
-            break
+    cpu_quotas: list[dict] = []
+    if gpu_count == 0:
+        cpu_quotas = [q for q in quota_list if q.get("gpu_count", 0) == 0]
+        if requested_cpu_count is None:
+            for quota in cpu_quotas:
+                quota_cpu = quota.get("cpu_count")
+                if quota_cpu is None:
+                    continue
+                if selected_quota is None or quota_cpu < selected_quota.get("cpu_count", 0):
+                    selected_quota = quota
+            if selected_quota is None and cpu_quotas:
+                selected_quota = cpu_quotas[0]
+        else:
+            for quota in cpu_quotas:
+                if quota.get("cpu_count") == requested_cpu_count:
+                    selected_quota = quota
+                    break
+    else:
+        for quota in quota_list:
+            if quota.get("gpu_type") == selected_gpu_type and quota.get("gpu_count") == gpu_count:
+                selected_quota = quota
+                break
 
     if not selected_quota:
-        click.echo(f"Error: No quota found for {gpu_count}x {selected_gpu_type}", err=True)
-        click.echo("\nAvailable quotas:", err=True)
-        for q in quota_list:
-            click.echo(f"  - {q.get('gpu_count')}x {q.get('gpu_type')} ({q.get('name')})", err=True)
+        if gpu_count == 0:
+            requested_label = (
+                f"{requested_cpu_count}xCPU" if requested_cpu_count is not None else "CPU"
+            )
+            click.echo(f"Error: No quota found for {requested_label}", err=True)
+            click.echo("\nAvailable CPU quotas:", err=True)
+            for quota in cpu_quotas:
+                quota_cpu = quota.get("cpu_count")
+                quota_name = quota.get("name")
+                label = f"{quota_cpu}xCPU" if quota_cpu else "CPU"
+                if quota_name:
+                    click.echo(f"  - {label} ({quota_name})", err=True)
+                else:
+                    click.echo(f"  - {label}", err=True)
+        else:
+            click.echo(f"Error: No quota found for {gpu_count}x {selected_gpu_type}", err=True)
+            click.echo("\nAvailable quotas:", err=True)
+            for q in quota_list:
+                click.echo(f"  - {q.get('gpu_count')}x {q.get('gpu_type')} ({q.get('name')})", err=True)
         sys.exit(EXIT_CONFIG_ERROR)
         return
 
     quota_id = selected_quota.get("id", "")
     cpu_count = selected_quota.get("cpu_count", 20)
     memory_size = selected_quota.get("memory_size", 200)
+    if gpu_count == 0:
+        selected_gpu_type = selected_quota.get("gpu_type", "") or ""
+        resource_display = _format_resource_display(gpu_count, gpu_pattern, cpu_count)
 
     # 3. Get projects
     try:
@@ -655,7 +745,7 @@ def create_notebook_cmd(
             click.echo(json.dumps({
                 "notebook_id": notebook_id,
                 "name": name,
-                "resource": f"{gpu_count}x{gpu_pattern}",
+                "resource": resource_display,
                 "project": selected_project.name,
                 "image": selected_image.name,
             }, indent=2))
@@ -663,7 +753,7 @@ def create_notebook_cmd(
             click.echo(f"\nNotebook created successfully!")
             click.echo(f"  ID: {notebook_id}")
             click.echo(f"  Name: {name}")
-            click.echo(f"  Resource: {gpu_count}x {gpu_pattern}")
+            click.echo(f"  Resource: {resource_display}")
             click.echo(f"\nUse 'inspire notebook status {notebook_id}' to check status.")
 
     except Exception as e:
