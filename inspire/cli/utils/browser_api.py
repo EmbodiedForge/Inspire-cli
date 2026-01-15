@@ -957,7 +957,11 @@ def setup_notebook_rtunnel(
             lab_frame = None
             while time.time() - start < 60:
                 for fr in page.frames:
-                    if "notebook-inspire" in fr.url and fr.url.endswith("/lab"):
+                    url = fr.url or ""
+                    if "notebook-inspire" in url and url.rstrip("/").endswith("/lab"):
+                        lab_frame = fr
+                        break
+                    if "/api/v1/notebook/lab/" in url:
                         lab_frame = fr
                         break
                 if lab_frame:
@@ -965,9 +969,29 @@ def setup_notebook_rtunnel(
                 page.wait_for_timeout(500)
 
             if lab_frame is None:
-                raise ValueError("Failed to locate JupyterLab frame")
+                direct_lab_url = f"{BASE_URL}/api/v1/notebook/lab/{notebook_id}/"
+                page.goto(
+                    direct_lab_url,
+                    timeout=60000,
+                    wait_until="domcontentloaded",
+                )
+                lab_frame = page
 
-            jupyter_proxy_url = lab_frame.url.removesuffix("/lab") + f"/proxy/{port}/"
+            jupyter_url = lab_frame.url
+            if "/api/v1/notebook/lab/" in jupyter_url:
+                from urllib.parse import urlsplit, urlunsplit
+
+                parsed = urlsplit(jupyter_url)
+                base_path = parsed.path
+                if not base_path.endswith("/"):
+                    base_path = base_path + "/"
+                base_url = urlunsplit((parsed.scheme, parsed.netloc, base_path, "", ""))
+                jupyter_proxy_url = f"{base_url}proxy/{port}/"
+            else:
+                jupyter_proxy_url = jupyter_url.rstrip("/")
+                if jupyter_proxy_url.endswith("/lab"):
+                    jupyter_proxy_url = jupyter_proxy_url[:-4]
+                jupyter_proxy_url = f"{jupyter_proxy_url}/proxy/{port}/"
 
             # Wait for JupyterLab UI to be ready (menu bar should exist).
             lab_frame.get_by_role("menuitem", name="File").first.wait_for(
@@ -1036,6 +1060,17 @@ def setup_notebook_rtunnel(
             except Exception:
                 pass
 
+            # Focus terminal input to ensure keystrokes land in the shell.
+            try:
+                term_focus = lab_frame.locator(
+                    "textarea.xterm-helper-textarea, .xterm, .jp-Terminal"
+                ).first
+                if term_focus.count() > 0:
+                    term_focus.click(timeout=2000)
+                    page.wait_for_timeout(250)
+            except Exception:
+                pass
+
             # Run setup via terminal commands.
 
             # Use the same nightly tarball as the local tunnel client.
@@ -1084,10 +1119,9 @@ def setup_notebook_rtunnel(
                 )
 
             if rtunnel_bin:
+                cmd_lines.append(f"RTUNNEL_BIN_PATH={shlex.quote(rtunnel_bin)}")
                 cmd_lines.append(
-                    "if [ -x {bin_path} ]; then cp {bin_path} /tmp/rtunnel && chmod +x /tmp/rtunnel; fi".format(
-                        bin_path=shlex.quote(rtunnel_bin)
-                    )
+                    "if [ -x \"$RTUNNEL_BIN_PATH\" ]; then cp \"$RTUNNEL_BIN_PATH\" /tmp/rtunnel && chmod +x /tmp/rtunnel; fi"
                 )
 
             if ssh_public_key:
@@ -1106,11 +1140,13 @@ def setup_notebook_rtunnel(
                     f"RTUNNEL_URL={RTUNNEL_DOWNLOAD_URL!r}",
                     f"PORT={port}",
                     f"SSH_PORT={ssh_port}",
+                    "RTUNNEL_BIN=/tmp/rtunnel",
+                    "if [ -n \"${RTUNNEL_BIN_PATH:-}\" ] && [ -x \"$RTUNNEL_BIN_PATH\" ]; then RTUNNEL_BIN=\"$RTUNNEL_BIN_PATH\"; fi",
                     "if [ ! -x /usr/sbin/sshd ]; then export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq openssh-server; fi",
                     "pkill -f '/tmp/rtunnel' 2>/dev/null || true; pkill -f 'sshd -p' 2>/dev/null || true",
                     "if [ -x /usr/sbin/sshd ]; then mkdir -p /run/sshd; ssh-keygen -A >/dev/null 2>&1; /usr/sbin/sshd -p \"$SSH_PORT\" -E /tmp/sshd.log -o ListenAddress=127.0.0.1 -o PermitRootLogin=yes -o PasswordAuthentication=no -o PubkeyAuthentication=yes >/dev/null 2>&1 & fi",
-                    "if [ ! -x /tmp/rtunnel ]; then rm -rf /tmp/rtunnel.d /tmp/rtunnel.tgz; mkdir -p /tmp/rtunnel.d; curl -fsSL \"$RTUNNEL_URL\" -o /tmp/rtunnel.tgz || echo 'WARN: rtunnel download failed'; tar -xzf /tmp/rtunnel.tgz -C /tmp/rtunnel.d 2>/dev/null || true; rtbin=$(find /tmp/rtunnel.d -maxdepth 4 -type f -name '*rtunnel*' 2>/dev/null | head -n 1); if [ -n \"$rtbin\" ]; then cp \"$rtbin\" /tmp/rtunnel && chmod +x /tmp/rtunnel; fi; fi",
-                    "nohup /tmp/rtunnel \"127.0.0.1:$SSH_PORT\" \"0.0.0.0:$PORT\" >/tmp/rtunnel-server.log 2>&1 &",
+                    "if [ ! -x \"$RTUNNEL_BIN\" ]; then rm -rf /tmp/rtunnel.d /tmp/rtunnel.tgz; mkdir -p /tmp/rtunnel.d; curl -fsSL \"$RTUNNEL_URL\" -o /tmp/rtunnel.tgz || echo 'WARN: rtunnel download failed'; tar -xzf /tmp/rtunnel.tgz -C /tmp/rtunnel.d 2>/dev/null || true; rtbin=$(find /tmp/rtunnel.d -maxdepth 4 -type f -name '*rtunnel*' 2>/dev/null | head -n 1); if [ -n \"$rtbin\" ]; then cp \"$rtbin\" /tmp/rtunnel && chmod +x /tmp/rtunnel; fi; RTUNNEL_BIN=/tmp/rtunnel; fi",
+                    "nohup \"$RTUNNEL_BIN\" \"127.0.0.1:$SSH_PORT\" \"0.0.0.0:$PORT\" >/tmp/rtunnel-server.log 2>&1 &",
                 ]
             )
 
