@@ -358,15 +358,21 @@ def _load_ssh_public_key(pubkey_path: Optional[str] = None) -> str:
 )
 @click.option(
     "--resource", "-r",
-    default="1xH200",
+    default=lambda: os.environ.get("INSPIRE_NOTEBOOK_RESOURCE", "1xH200"),
     help="Resource spec (e.g., 1xH200, 4xH100)",
 )
 @click.option(
     "--project", "-p",
+    default=lambda: os.environ.get("INSPIRE_PROJECT_ID"),
     help="Project name or ID",
 )
 @click.option(
     "--image", "-i",
+    default=lambda: (
+        os.environ.get("INSPIRE_NOTEBOOK_IMAGE")
+        or os.environ.get("INSP_IMAGE")
+        or os.environ.get("INSPIRE_IMAGE")
+    ),
     help="Image name/URL (prompts interactively if omitted)",
 )
 @click.option(

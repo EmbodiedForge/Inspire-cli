@@ -11,6 +11,7 @@ import sys
 import click
 
 from inspire import __version__
+from inspire.cli.utils.profile import apply_env_profile
 from inspire.cli.context import (
     Context,
     pass_context,
@@ -76,6 +77,7 @@ main.add_command(notebook)
 
 def cli() -> None:
     """Entry point for the CLI."""
+    apply_env_profile()
     try:
         main()
     except Exception as e:  # pragma: no cover - top-level safety net

@@ -44,6 +44,20 @@ export INSPIRE_JOB_CACHE="~/.inspire/jobs.json"  # default
 export INSPIRE_TIMEOUT="30"  # API timeout in seconds
 export INSPIRE_MAX_RETRIES="3"  # Max API retries
 export INSPIRE_RETRY_DELAY="1.0"  # Retry delay in seconds
+
+# Optional profile shortcuts (env-only)
+# INSPIRE_PROFILE name is uppercased and non-alphanumeric chars become underscores.
+export INSPIRE_PROFILE="4090"
+export INSPIRE_PROFILE_4090_WORKSPACE_ID="ws-..."
+export INSPIRE_PROFILE_4090_PROJECT_ID="project-..."
+export INSPIRE_PROFILE_4090_NOTEBOOK_RESOURCE="1x4090"
+export INSPIRE_PROFILE_4090_IMAGE="pytorch:tag"
+export INSPIRE_PROFILE_4090_TARGET_DIR="/inspire/hdd/global_user/..."
+export INSPIRE_PROFILE_4090_PRIORITY="6"
+export INSPIRE_PROFILE_4090_RTUNNEL_BIN="/inspire/hdd/global_user/.../rtunnel"
+export INSPIRE_PROFILE_4090_APT_MIRROR_URL="http://nexus.sii.shaipower.online/repository/ubuntu/"
+export INSPIRE_PROFILE_4090_PIP_INDEX_URL="http://nexus.sii.shaipower.online/repository/pypi/simple"
+export INSPIRE_PROFILE_4090_PIP_TRUSTED_HOST="nexus.sii.shaipower.online"
 ```
 
 ## Quick Start
