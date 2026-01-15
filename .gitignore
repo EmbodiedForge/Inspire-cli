@@ -45,3 +45,6 @@ scripts/inspire-tunnel
 
 # Internal documentation and testing (not for public)
 internal/
+
+# Development/exploration scripts (contain hardcoded IDs)
+scripts/
