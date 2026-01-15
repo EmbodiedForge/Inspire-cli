@@ -8,5 +8,6 @@ from inspire.cli.commands.sync import sync
 from inspire.cli.commands.bridge import bridge
 from inspire.cli.commands.tunnel import tunnel
 from inspire.cli.commands.run import run
+from inspire.cli.commands.notebook import notebook
 
-__all__ = ["job", "resources", "nodes", "config", "sync", "bridge", "tunnel", "run"]
+__all__ = ["job", "resources", "nodes", "config", "sync", "bridge", "tunnel", "run", "notebook"]
