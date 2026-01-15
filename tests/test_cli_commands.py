@@ -68,12 +68,6 @@ class DummyAPI:
         self.calls.setdefault("stop_training_job", []).append(job_id)
 
     # Resource / nodes ----------------------------------------------------
-    def list_available_specs(self, compute_group_id: str) -> Dict[str, Any]:
-        self.calls.setdefault("list_available_specs", []).append(compute_group_id)
-        return {
-            "data": {"specs": [{"name": "spec-1", "gpu_count": 1, "cpu_cores": 4, "memory_gb": 32}]}
-        }
-
     def list_cluster_nodes(
         self,
         page_num: int,
