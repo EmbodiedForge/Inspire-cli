@@ -28,7 +28,20 @@ from inspire.cli.context import (
 from inspire.cli.commands import job, resources, config, sync, bridge, tunnel, run, notebook
 
 
+def _apply_profile_option(ctx: click.Context, param: click.Parameter, value: str | None) -> str | None:
+    if value:
+        apply_env_profile(value)
+    return value
+
+
 @click.group()
+@click.option(
+    "--profile",
+    help="Apply env profile (INSPIRE_PROFILE_<NAME>_*)",
+    expose_value=False,
+    is_eager=True,
+    callback=_apply_profile_option,
+)
 @click.version_option(version=__version__, prog_name="inspire")
 @click.option(
     "--json",
@@ -77,7 +90,6 @@ main.add_command(notebook)
 
 def cli() -> None:
     """Entry point for the CLI."""
-    apply_env_profile()
     try:
         main()
     except Exception as e:  # pragma: no cover - top-level safety net

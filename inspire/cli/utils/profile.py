@@ -27,14 +27,8 @@ def _normalize_profile_name(profile: str) -> str:
     return normalized.upper()
 
 
-def apply_env_profile() -> Optional[str]:
-    """Apply INSPIRE_PROFILE_* env defaults if INSPIRE_PROFILE is set.
-
-    Example:
-        INSPIRE_PROFILE=4090
-        INSPIRE_PROFILE_4090_WORKSPACE_ID=...
-    """
-    profile = os.environ.get("INSPIRE_PROFILE")
+def apply_env_profile(profile: Optional[str]) -> Optional[str]:
+    """Apply INSPIRE_PROFILE_<NAME>_* env defaults for the given profile."""
     if not profile:
         return None
 

@@ -46,8 +46,7 @@ export INSPIRE_MAX_RETRIES="3"  # Max API retries
 export INSPIRE_RETRY_DELAY="1.0"  # Retry delay in seconds
 
 # Optional profile shortcuts (env-only)
-# INSPIRE_PROFILE name is uppercased and non-alphanumeric chars become underscores.
-export INSPIRE_PROFILE="4090"
+# Use: inspire --profile 4090 <command>
 export INSPIRE_PROFILE_4090_WORKSPACE_ID="ws-..."
 export INSPIRE_PROFILE_4090_PROJECT_ID="project-..."
 export INSPIRE_PROFILE_4090_NOTEBOOK_RESOURCE="1x4090"
