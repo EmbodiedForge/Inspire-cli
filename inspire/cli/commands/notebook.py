@@ -322,6 +322,15 @@ def _parse_resource_string(resource: str) -> tuple[int, str, Optional[int]]:
             return 0, "CPU", count
         return count, pattern, None
 
+    # Pattern: NGPU without delimiter (e.g., "4CPU", "4H200")
+    match = re.match(r"^(\d+)([A-Z0-9_-]+)$", resource)
+    if match:
+        count = int(match.group(1))
+        pattern = match.group(2)
+        if pattern in cpu_aliases:
+            return 0, "CPU", count
+        return count, pattern, None
+
     # Pattern: GPU only (e.g., "H200") - defaults to 1
     match = re.match(r"^(\w+)$", resource)
     if match:
