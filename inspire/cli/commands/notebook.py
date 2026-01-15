@@ -10,9 +10,11 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import uuid
+from pathlib import Path
 from typing import Optional
 
 import click
@@ -324,6 +326,29 @@ def _match_gpu_type(pattern: str, gpu_type_display: str) -> bool:
     pattern = pattern.upper()
     gpu_type_display = gpu_type_display.upper()
     return pattern in gpu_type_display
+
+
+def _load_ssh_public_key(pubkey_path: Optional[str] = None) -> str:
+    """Load an SSH public key to authorize notebook SSH access."""
+    candidates: list[Path]
+
+    if pubkey_path:
+        candidates = [Path(pubkey_path).expanduser()]
+    else:
+        candidates = [
+            Path.home() / ".ssh" / "id_ed25519.pub",
+            Path.home() / ".ssh" / "id_rsa.pub",
+        ]
+
+    for path in candidates:
+        if path.exists():
+            key = path.read_text(encoding="utf-8", errors="ignore").strip()
+            if key:
+                return key
+
+    raise ValueError(
+        "No SSH public key found. Provide --pubkey PATH or generate one with 'ssh-keygen'."
+    )
 
 
 @notebook.command("create")
@@ -694,3 +719,139 @@ def stop_notebook_cmd(
             click.echo(f"Error stopping notebook: {e}", err=True)
         sys.exit(EXIT_API_ERROR)
         return
+
+
+@notebook.command("ssh")
+@click.argument("notebook_id")
+@click.option(
+    "--wait/--no-wait",
+    default=True,
+    help="Wait for notebook to reach RUNNING status",
+)
+@click.option(
+    "--pubkey",
+    type=click.Path(exists=True, dir_okay=False, path_type=str),
+    help="SSH public key path to authorize (defaults to ~/.ssh/id_ed25519.pub or ~/.ssh/id_rsa.pub)",
+)
+@click.option(
+    "--save-as",
+    help="Save this notebook tunnel as a named profile (usable with 'ssh <name>' after 'inspire tunnel ssh-config --install')",
+)
+@click.option(
+    "--port",
+    default=31337,
+    show_default=True,
+    help="rtunnel server listen port inside notebook",
+)
+@click.option(
+    "--ssh-port",
+    default=22222,
+    show_default=True,
+    help="sshd port inside notebook",
+)
+@click.option(
+    "--command",
+    help="Optional remote command to run (if omitted, opens an interactive shell)",
+)
+@pass_context
+def ssh_notebook_cmd(
+    ctx: Context,
+    notebook_id: str,
+    wait: bool,
+    pubkey: Optional[str],
+    save_as: Optional[str],
+    port: int,
+    ssh_port: int,
+    command: Optional[str],
+) -> None:
+    """SSH into a running notebook instance via rtunnel ProxyCommand."""
+
+    from inspire.cli.utils.web_session import get_web_session
+    from inspire.cli.utils.browser_api import (
+        get_notebook_detail,
+        wait_for_notebook_running,
+        setup_notebook_rtunnel,
+    )
+    from inspire.cli.utils.tunnel import (
+        BridgeProfile,
+        TunnelConfig,
+        get_ssh_command_args,
+        load_tunnel_config,
+        save_tunnel_config,
+    )
+
+    try:
+        session = get_web_session()
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        click.echo(
+            "\nNote: Notebook SSH requires web authentication. "
+            "Please set INSPIRE_USERNAME and INSPIRE_PASSWORD environment variables.",
+            err=True,
+        )
+        sys.exit(EXIT_CONFIG_ERROR)
+        return
+
+    # Wait for running (optional)
+    try:
+        if wait:
+            wait_for_notebook_running(notebook_id=notebook_id, session=session)
+        else:
+            get_notebook_detail(notebook_id=notebook_id, session=session)
+    except TimeoutError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(EXIT_API_ERROR)
+        return
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(EXIT_API_ERROR)
+        return
+
+    # Load SSH public key
+    try:
+        ssh_public_key = _load_ssh_public_key(pubkey)
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(EXIT_CONFIG_ERROR)
+        return
+
+    # Set up rtunnel + sshd in notebook and derive proxy URL from Jupyter
+    try:
+        proxy_url = setup_notebook_rtunnel(
+            notebook_id=notebook_id,
+            port=port,
+            ssh_port=ssh_port,
+            ssh_public_key=ssh_public_key,
+            session=session,
+            headless=True,
+        )
+    except Exception as e:
+        click.echo(f"Error setting up notebook tunnel: {e}", err=True)
+        sys.exit(EXIT_API_ERROR)
+        return
+
+    # Build a bridge profile for this notebook
+    profile_name = save_as or f"notebook-{notebook_id[:8]}"
+    bridge = BridgeProfile(
+        name=profile_name,
+        proxy_url=proxy_url,
+        ssh_user="root",
+        ssh_port=ssh_port,
+    )
+
+    if save_as:
+        config = load_tunnel_config()
+        config.add_bridge(bridge)
+        save_tunnel_config(config)
+        click.echo(f"Saved notebook tunnel as profile: {profile_name}")
+    else:
+        config = TunnelConfig(bridges={profile_name: bridge}, default_bridge=profile_name)
+
+    args = get_ssh_command_args(
+        bridge_name=profile_name,
+        config=config,
+        remote_command=command,
+    )
+
+    # Replace current process with ssh for interactive behavior
+    os.execvp("ssh", args)

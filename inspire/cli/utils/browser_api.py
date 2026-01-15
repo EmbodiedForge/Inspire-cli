@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -820,3 +821,358 @@ def stop_notebook(
         finally:
             context.close()
             browser.close()
+
+
+def get_notebook_detail(
+    notebook_id: str,
+    session: Optional[WebSession] = None,
+) -> dict:
+    """Get detailed notebook information.
+
+    Args:
+        notebook_id: Notebook instance ID (UUID).
+        session: Optional pre-existing web session.
+
+    Returns:
+        Notebook detail dictionary.
+    """
+    from playwright.sync_api import sync_playwright
+
+    if session is None:
+        session = get_web_session()
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(storage_state=session.storage_state)
+
+        try:
+            resp = context.request.get(
+                f"{BASE_URL}/api/v1/notebook/{notebook_id}",
+                headers={
+                    "Accept": "application/json",
+                    "Referer": f"{BASE_URL}/jobs/interactiveModeling",
+                },
+                timeout=30000,
+            )
+
+            if resp.status == 401:
+                raise ValueError("Session expired or invalid")
+            if resp.status >= 400:
+                raise ValueError(f"API returned {resp.status}: {resp.text()}")
+
+            data = resp.json()
+            if data.get("code") != 0:
+                raise ValueError(f"API error: {data.get('message')}")
+
+            return data.get("data", {})
+
+        finally:
+            context.close()
+            browser.close()
+
+
+def wait_for_notebook_running(
+    notebook_id: str,
+    session: Optional[WebSession] = None,
+    timeout: int = 600,
+    poll_interval: int = 5,
+) -> dict:
+    """Wait for a notebook instance to reach RUNNING status.
+
+    Args:
+        notebook_id: Notebook instance ID.
+        session: Optional pre-existing web session.
+        timeout: Max wait time in seconds.
+        poll_interval: Poll interval in seconds.
+
+    Returns:
+        Notebook detail dictionary when RUNNING.
+
+    Raises:
+        TimeoutError: If notebook does not become RUNNING within timeout.
+    """
+    if session is None:
+        session = get_web_session()
+
+    start = time.time()
+    last_status = None
+
+    while True:
+        notebook = get_notebook_detail(notebook_id=notebook_id, session=session)
+        status = (notebook.get("status") or "").upper()
+        if status:
+            last_status = status
+
+        if status == "RUNNING":
+            return notebook
+
+        if time.time() - start >= timeout:
+            raise TimeoutError(
+                f"Notebook '{notebook_id}' did not reach RUNNING within {timeout}s "
+                f"(last status: {last_status or 'unknown'})"
+            )
+
+        time.sleep(poll_interval)
+
+
+def setup_notebook_rtunnel(
+    notebook_id: str,
+    port: int = 31337,
+    ssh_port: int = 22222,
+    ssh_public_key: Optional[str] = None,
+    session: Optional[WebSession] = None,
+    headless: bool = True,
+    timeout: int = 120,
+) -> str:
+    """Ensure the notebook exposes an rtunnel server via Jupyter proxy.
+
+    This automates the JupyterLab UI to:
+    1) Open the notebook IDE (JupyterLab)
+    2) Open a terminal
+    3) (Optional) Install an SSH public key into ~/.ssh/authorized_keys
+    4) Start sshd (port `ssh_port`) and rtunnel server (port `port`)
+
+    Returns:
+        HTTPS proxy URL for the rtunnel WebSocket endpoint (to be used as PROXY_URL).
+    """
+    from playwright.sync_api import sync_playwright
+
+    if session is None:
+        session = get_web_session()
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=headless)
+        context = browser.new_context(storage_state=session.storage_state)
+        page = context.new_page()
+
+        try:
+            page.goto(
+                f"{BASE_URL}/ide?notebook_id={notebook_id}",
+                timeout=60000,
+                wait_until="domcontentloaded",
+            )
+
+            # Find the embedded JupyterLab frame (notebook-inspire host).
+            start = time.time()
+            lab_frame = None
+            while time.time() - start < 60:
+                for fr in page.frames:
+                    if "notebook-inspire" in fr.url and fr.url.endswith("/lab"):
+                        lab_frame = fr
+                        break
+                if lab_frame:
+                    break
+                page.wait_for_timeout(500)
+
+            if lab_frame is None:
+                raise ValueError("Failed to locate JupyterLab frame")
+
+            jupyter_proxy_url = lab_frame.url.removesuffix("/lab") + f"/proxy/{port}/"
+
+            # Wait for JupyterLab UI to be ready (menu bar should exist).
+            lab_frame.get_by_role("menuitem", name="File").first.wait_for(
+                state="visible",
+                timeout=60000,
+            )
+
+            # Dismiss Jupyter news prompt if present.
+            for label in ("No", "Yes", "否", "不接收", "取消"):
+                try:
+                    btn = lab_frame.get_by_role("button", name=label)
+                    if btn.count() > 0:
+                        # Prefer closing the prompt (No), but any click removes overlay.
+                        btn.first.click(timeout=1000)
+                        break
+                except Exception:
+                    pass
+
+            # Open a terminal.
+            terminal_opened = False
+
+            # Path A: Launcher card
+            terminal_card = lab_frame.locator("div.jp-LauncherCard:has-text('Terminal')")
+            try:
+                terminal_card.first.wait_for(state="visible", timeout=20000)
+                terminal_card.first.click(timeout=8000)
+                terminal_opened = True
+            except Exception:
+                terminal_opened = False
+
+            # Path B: Open Launcher then click Terminal
+            if not terminal_opened:
+                try:
+                    launcher_btn = lab_frame.locator(
+                        "button[title*='Launcher'], button[aria-label*='Launcher']"
+                    ).first
+                    if launcher_btn.count() > 0:
+                        launcher_btn.click(timeout=2000)
+                        page.wait_for_timeout(500)
+                    terminal_card = lab_frame.locator("div.jp-LauncherCard:has-text('Terminal')")
+                    terminal_card.first.wait_for(state="visible", timeout=20000)
+                    terminal_card.first.click(timeout=8000)
+                    terminal_opened = True
+                except Exception:
+                    terminal_opened = False
+
+            # Path C: File -> New -> Terminal
+            if not terminal_opened:
+                try:
+                    lab_frame.get_by_role("menuitem", name="File").first.click(timeout=3000)
+                    lab_frame.get_by_role("menuitem", name="New").first.hover(timeout=3000)
+                    lab_frame.get_by_role("menuitem", name="Terminal").first.click(timeout=5000)
+                    terminal_opened = True
+                except Exception:
+                    terminal_opened = False
+
+            if not terminal_opened:
+                raise ValueError("Failed to open Jupyter terminal")
+
+            # Ensure terminal tab is active before typing.
+            try:
+                term_tab = lab_frame.locator("li.lm-TabBar-tab:has-text('Terminal')").first
+                if term_tab.count() > 0:
+                    term_tab.click(timeout=2000)
+                    page.wait_for_timeout(250)
+            except Exception:
+                pass
+
+            # Run setup via terminal commands.
+
+            # Use the same nightly tarball as the local tunnel client.
+            try:
+                from inspire.cli.utils.tunnel import RTUNNEL_DOWNLOAD_URL
+            except Exception:
+                RTUNNEL_DOWNLOAD_URL = "https://github.com/Sarfflow/rtunnel/releases/download/nightly/rtunnel-linux-amd64.tar.gz"
+
+            import shlex
+
+            cmd_lines: list[str] = []
+
+            pip_index_url = os.environ.get("INSPIRE_PIP_INDEX_URL")
+            pip_trusted_host = os.environ.get("INSPIRE_PIP_TRUSTED_HOST")
+            apt_mirror_url = os.environ.get("INSPIRE_APT_MIRROR_URL")
+            rtunnel_bin = os.environ.get("INSPIRE_RTUNNEL_BIN")
+
+            if pip_index_url:
+                cmd_lines.append(
+                    f"pip config set global.index-url {shlex.quote(pip_index_url)}"
+                )
+                if pip_trusted_host:
+                    cmd_lines.append(
+                        f"pip config set global.trusted-host {shlex.quote(pip_trusted_host)}"
+                    )
+            elif pip_trusted_host:
+                cmd_lines.append(
+                    f"pip config set global.trusted-host {shlex.quote(pip_trusted_host)}"
+                )
+
+            if apt_mirror_url:
+                cmd_lines.extend(
+                    [
+                        "echo '>>> configure apt source...'",
+                        "CODENAME=$( . /etc/os-release && echo \"$VERSION_CODENAME\" )",
+                        "cat >/etc/apt/sources.list.d/ubuntu.sources <<EOF",
+                        "Types: deb",
+                        f"URIs: {apt_mirror_url}",
+                        "Suites: ${CODENAME} ${CODENAME}-updates ${CODENAME}-backports ${CODENAME}-security",
+                        "Components: main restricted universe multiverse",
+                        "Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg",
+                        "EOF",
+                        "echo '>>> update apt cache...'",
+                        "apt-get update -y -qq || apt-get update -y",
+                    ]
+                )
+
+            if rtunnel_bin:
+                cmd_lines.append(
+                    "if [ -x {bin_path} ]; then cp {bin_path} /tmp/rtunnel && chmod +x /tmp/rtunnel; fi".format(
+                        bin_path=shlex.quote(rtunnel_bin)
+                    )
+                )
+
+            if ssh_public_key:
+                cmd_lines.extend(
+                    [
+                        "mkdir -p ~/.ssh && chmod 700 ~/.ssh",
+                        "cat >> ~/.ssh/authorized_keys <<'EOF'",
+                        ssh_public_key.rstrip(),
+                        "EOF",
+                        "chmod 600 ~/.ssh/authorized_keys",
+                    ]
+                )
+
+            cmd_lines.extend(
+                [
+                    f"RTUNNEL_URL={RTUNNEL_DOWNLOAD_URL!r}",
+                    f"PORT={port}",
+                    f"SSH_PORT={ssh_port}",
+                    "if [ ! -x /usr/sbin/sshd ]; then export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq openssh-server; fi",
+                    "pkill -f '/tmp/rtunnel' 2>/dev/null || true; pkill -f 'sshd -p' 2>/dev/null || true",
+                    "if [ -x /usr/sbin/sshd ]; then mkdir -p /run/sshd; ssh-keygen -A >/dev/null 2>&1; /usr/sbin/sshd -p \"$SSH_PORT\" -E /tmp/sshd.log -o ListenAddress=127.0.0.1 -o PermitRootLogin=yes -o PasswordAuthentication=no -o PubkeyAuthentication=yes >/dev/null 2>&1 & fi",
+                    "if [ ! -x /tmp/rtunnel ]; then rm -rf /tmp/rtunnel.d /tmp/rtunnel.tgz; mkdir -p /tmp/rtunnel.d; curl -fsSL \"$RTUNNEL_URL\" -o /tmp/rtunnel.tgz || echo 'WARN: rtunnel download failed'; tar -xzf /tmp/rtunnel.tgz -C /tmp/rtunnel.d 2>/dev/null || true; rtbin=$(find /tmp/rtunnel.d -maxdepth 4 -type f -name '*rtunnel*' 2>/dev/null | head -n 1); if [ -n \"$rtbin\" ]; then cp \"$rtbin\" /tmp/rtunnel && chmod +x /tmp/rtunnel; fi; fi",
+                    "nohup /tmp/rtunnel \"127.0.0.1:$SSH_PORT\" \"0.0.0.0:$PORT\" >/tmp/rtunnel-server.log 2>&1 &",
+                ]
+            )
+
+            for line in cmd_lines:
+                page.keyboard.type(line, delay=5)
+                page.keyboard.press("Enter")
+                page.wait_for_timeout(80)
+
+            # Derive proxy URL (prefer VSCode/code-server proxy).
+            proxy_url = None
+            try:
+                vscode_tab = page.locator('img[alt="vscode"]').first
+                if vscode_tab.count() > 0:
+                    vscode_tab.click(timeout=5000)
+                    page.wait_for_timeout(3000)
+
+                vscode_url = None
+                for fr in page.frames:
+                    if "/vscode/" in fr.url:
+                        vscode_url = fr.url
+                        break
+
+                if vscode_url:
+                    from urllib.parse import urlparse, parse_qs
+
+                    parsed = urlparse(vscode_url)
+                    token = parse_qs(parsed.query).get("token", [None])[0]
+                    base = vscode_url.split("?", 1)[0].rstrip("/")
+                    proxy_url = f"{base}/proxy/{port}/"
+                    if token:
+                        proxy_url = f"{proxy_url}?token={token}"
+            except Exception:
+                proxy_url = None
+
+            if not proxy_url:
+                proxy_url = jupyter_proxy_url
+
+            # Probe the proxy endpoint until it stops reporting connection refused.
+            start = time.time()
+            last_status = None
+            while time.time() - start < timeout:
+                try:
+                    resp = context.request.get(proxy_url, timeout=5000)
+                    body = ""
+                    try:
+                        body = resp.text()
+                    except Exception:
+                        body = ""
+                    last_status = f"{resp.status} {body[:200].strip()}"
+                    if "ECONNREFUSED" not in body:
+                        return proxy_url
+                except Exception as e:
+                    last_status = str(e)
+
+                page.wait_for_timeout(1000)
+
+            raise ValueError(
+                f"rtunnel server did not become reachable via proxy URL. Last response: {last_status}"
+            )
+
+        finally:
+            try:
+                context.close()
+            finally:
+                browser.close()

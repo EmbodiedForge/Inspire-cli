@@ -79,15 +79,21 @@ class WebSession:
             pass
 
     @classmethod
-    def load(cls) -> Optional["WebSession"]:
-        """Load session from cache file if valid."""
+    def load(cls, allow_expired: bool = False) -> Optional["WebSession"]:
+        """Load session from cache file.
+
+        Args:
+            allow_expired: If True, return the cached session even if older than SESSION_TTL.
+                This is useful when credentials are not available; callers can still try the
+                cached cookies and re-login only if the server rejects them.
+        """
         if not SESSION_CACHE_FILE.exists():
             return None
         try:
             with open(SESSION_CACHE_FILE) as f:
                 data = json.load(f)
             session = cls.from_dict(data)
-            if session.is_valid():
+            if allow_expired or session.is_valid():
                 return session
         except (json.JSONDecodeError, KeyError):
             pass
@@ -213,25 +219,56 @@ def login_with_playwright(
 
 
 def get_web_session(force_refresh: bool = False, require_workspace: bool = False) -> WebSession:
-    """Get a valid web session, logging in if necessary.
+    """Get a web session, logging in if necessary.
+
+    If credentials are not available in the environment, we will fall back to the
+    cached session (even if older than SESSION_TTL) and let API calls determine
+    whether it is still valid.
 
     Args:
         force_refresh: Force a new login even if cached session exists.
         require_workspace: Force re-login if workspace_id is missing.
 
     Returns:
-        A valid WebSession with storage_state and optionally workspace_id.
+        A WebSession with storage_state and optionally workspace_id.
     """
+    env_workspace_id = os.environ.get("INSPIRE_WORKSPACE_ID")
+
     if not force_refresh:
         cached = WebSession.load()
         if cached and cached.storage_state.get("cookies"):
+            # Allow overriding cached workspace_id via environment without requiring re-login.
+            if env_workspace_id and cached.workspace_id != env_workspace_id:
+                cached.workspace_id = env_workspace_id
+                try:
+                    cached.save()
+                except Exception:
+                    pass
+
             if require_workspace and not cached.workspace_id:
                 # Need workspace_id, force re-login
                 pass
             else:
                 return cached
 
-    username, password = get_credentials()
+    # If we can't refresh (missing credentials), try the cached session anyway.
+    try:
+        username, password = get_credentials()
+    except ValueError:
+        cached = WebSession.load(allow_expired=True)
+        if cached and cached.storage_state.get("cookies"):
+            if env_workspace_id and cached.workspace_id != env_workspace_id:
+                cached.workspace_id = env_workspace_id
+                try:
+                    cached.save()
+                except Exception:
+                    pass
+
+            if require_workspace and not cached.workspace_id:
+                raise
+            return cached
+        raise
+
     return login_with_playwright(username, password)
 
 

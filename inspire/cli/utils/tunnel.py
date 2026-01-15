@@ -198,7 +198,12 @@ def _get_proxy_command(bridge: BridgeProfile, rtunnel_bin: Path) -> str:
     else:
         ws_url = proxy_url
 
-    return f"{rtunnel_bin} {ws_url} stdio://%h:%p"
+    # ProxyCommand is executed by a shell on the client; quote the URL because it
+    # can contain characters like '?' (e.g. token query params) that some shells
+    # treat as glob patterns.
+    import shlex
+
+    return f"{shlex.quote(str(rtunnel_bin))} {shlex.quote(ws_url)} {shlex.quote('stdio://%h:%p')}"
 
 
 def _test_ssh_connection(
