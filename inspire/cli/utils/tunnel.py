@@ -1,14 +1,13 @@
-"""SSH tunnel utility module for Bridge access.
+"""SSH tunnel utility module for Bridge access via ProxyCommand.
 
 Provides functions to:
-- Check if SSH tunnel is available
-- Execute commands via SSH
-- Start/stop rtunnel client
-- Manage tunnel configuration
+- Check if SSH via ProxyCommand is available
+- Execute commands via SSH with ProxyCommand
+- Manage tunnel configuration with multiple bridge profiles
 """
 
+import json
 import os
-import signal
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -24,53 +23,121 @@ class TunnelNotAvailableError(TunnelError):
     """Raised when tunnel is not available or not running."""
 
 
+class BridgeNotFoundError(TunnelError):
+    """Raised when specified bridge profile is not found."""
+
+
 # Default configuration
-DEFAULT_LOCAL_PORT = 2222
 DEFAULT_SSH_USER = "root"
-DEFAULT_SSH_HOST = "localhost"
-RTUNNEL_DOWNLOAD_URL = "https://github.com/Sarfflow/rtunnel/releases/download/v1.0.0/rtunnel-linux"
+DEFAULT_SSH_PORT = 22222
+# nightly release includes stdio:// mode for SSH ProxyCommand support
+RTUNNEL_DOWNLOAD_URL = "https://github.com/Sarfflow/rtunnel/releases/download/nightly/rtunnel-linux-amd64.tar.gz"
+
+
+@dataclass
+class BridgeProfile:
+    """A single bridge configuration."""
+
+    name: str
+    proxy_url: str
+    ssh_user: str = DEFAULT_SSH_USER
+    ssh_port: int = DEFAULT_SSH_PORT
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "proxy_url": self.proxy_url,
+            "ssh_user": self.ssh_user,
+            "ssh_port": self.ssh_port,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "BridgeProfile":
+        return cls(
+            name=data["name"],
+            proxy_url=data["proxy_url"],
+            ssh_user=data.get("ssh_user", DEFAULT_SSH_USER),
+            ssh_port=data.get("ssh_port", DEFAULT_SSH_PORT),
+        )
 
 
 @dataclass
 class TunnelConfig:
-    """Tunnel configuration."""
+    """Tunnel configuration with multiple bridge profiles."""
 
-    proxy_url: Optional[str] = None
-    local_port: int = DEFAULT_LOCAL_PORT
-    ssh_user: str = DEFAULT_SSH_USER
-    ssh_host: str = DEFAULT_SSH_HOST
+    bridges: dict[str, BridgeProfile] = field(default_factory=dict)
+    default_bridge: Optional[str] = None
 
     # Paths
     config_dir: Path = field(default_factory=lambda: Path.home() / ".inspire")
 
     @property
-    def pid_file(self) -> Path:
-        return self.config_dir / "tunnel.pid"
-
-    @property
     def config_file(self) -> Path:
-        return self.config_dir / "tunnel.conf"
-
-    @property
-    def log_file(self) -> Path:
-        return self.config_dir / "tunnel.log"
+        return self.config_dir / "bridges.json"
 
     @property
     def rtunnel_bin(self) -> Path:
         return Path.home() / ".local" / "bin" / "rtunnel"
 
+    def get_bridge(self, name: Optional[str] = None) -> Optional[BridgeProfile]:
+        """Get a bridge profile by name, or the default if name is None."""
+        if name:
+            return self.bridges.get(name)
+        elif self.default_bridge:
+            return self.bridges.get(self.default_bridge)
+        elif len(self.bridges) == 1:
+            # If only one bridge, use it as default
+            return next(iter(self.bridges.values()))
+        return None
+
+    def add_bridge(self, profile: BridgeProfile) -> None:
+        """Add or update a bridge profile."""
+        self.bridges[profile.name] = profile
+        # Set as default if it's the first bridge
+        if self.default_bridge is None:
+            self.default_bridge = profile.name
+
+    def remove_bridge(self, name: str) -> bool:
+        """Remove a bridge profile. Returns True if removed."""
+        if name in self.bridges:
+            del self.bridges[name]
+            if self.default_bridge == name:
+                # Set new default
+                self.default_bridge = next(iter(self.bridges.keys()), None)
+            return True
+        return False
+
+    def list_bridges(self) -> list[BridgeProfile]:
+        """List all bridge profiles."""
+        return list(self.bridges.values())
+
 
 def load_tunnel_config(config_dir: Optional[Path] = None) -> TunnelConfig:
-    """Load tunnel configuration from ~/.inspire/tunnel.conf."""
+    """Load tunnel configuration from ~/.inspire/bridges.json."""
     config = TunnelConfig()
     if config_dir:
         config.config_dir = config_dir
 
     config.config_dir.mkdir(parents=True, exist_ok=True)
 
+    # Try new JSON format first
     if config.config_file.exists():
-        # Parse shell-style config file
-        with open(config.config_file) as f:
+        try:
+            with open(config.config_file) as f:
+                data = json.load(f)
+                config.default_bridge = data.get("default")
+                for bridge_data in data.get("bridges", []):
+                    profile = BridgeProfile.from_dict(bridge_data)
+                    config.bridges[profile.name] = profile
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    # Migrate from old format if new format is empty
+    old_config_file = config.config_dir / "tunnel.conf"
+    if not config.bridges and old_config_file.exists():
+        proxy_url = None
+        ssh_user = DEFAULT_SSH_USER
+        with open(old_config_file) as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):
@@ -79,110 +146,132 @@ def load_tunnel_config(config_dir: Optional[Path] = None) -> TunnelConfig:
                     key, value = line.split("=", 1)
                     key = key.strip()
                     value = value.strip().strip('"').strip("'")
-
                     if key == "PROXY_URL":
-                        config.proxy_url = value
-                    elif key == "LOCAL_PORT":
-                        config.local_port = int(value)
+                        proxy_url = value
                     elif key == "SSH_USER":
-                        config.ssh_user = value
-                    elif key == "SSH_HOST":
-                        config.ssh_host = value
+                        ssh_user = value
+
+        if proxy_url:
+            # Create a default bridge from old config
+            profile = BridgeProfile(
+                name="default",
+                proxy_url=proxy_url,
+                ssh_user=ssh_user,
+            )
+            config.add_bridge(profile)
+            # Save in new format
+            save_tunnel_config(config)
 
     return config
 
 
 def save_tunnel_config(config: TunnelConfig) -> None:
-    """Save tunnel configuration to ~/.inspire/tunnel.conf."""
+    """Save tunnel configuration to ~/.inspire/bridges.json."""
     config.config_dir.mkdir(parents=True, exist_ok=True)
 
+    data = {
+        "default": config.default_bridge,
+        "bridges": [p.to_dict() for p in config.bridges.values()],
+    }
+
     with open(config.config_file, "w") as f:
-        f.write("# Inspire SSH Tunnel Configuration\n")
-        f.write("# This file is auto-generated. Edit with care.\n\n")
-        if config.proxy_url:
-            f.write(f'PROXY_URL="{config.proxy_url}"\n')
-        f.write(f"LOCAL_PORT={config.local_port}\n")
-        f.write(f'SSH_USER="{config.ssh_user}"\n')
-        f.write(f'SSH_HOST="{config.ssh_host}"\n')
+        json.dump(data, f, indent=2)
+        f.write("\n")
 
 
-def _is_process_running(pid: int) -> bool:
-    """Check if a process with given PID is running."""
-    try:
-        os.kill(pid, 0)
-        return True
-    except (OSError, ProcessLookupError):
-        return False
-
-
-def _get_tunnel_pid(config: TunnelConfig) -> Optional[int]:
-    """Get tunnel process PID from pid file."""
-    if not config.pid_file.exists():
-        return None
-
-    try:
-        pid = int(config.pid_file.read_text().strip())
-        if _is_process_running(pid):
-            return pid
-        else:
-            # Stale PID file, clean up
-            config.pid_file.unlink(missing_ok=True)
-            return None
-    except (ValueError, FileNotFoundError):
-        return None
-
-
-def _test_ssh_connection(config: TunnelConfig, timeout: int = 10) -> bool:
-    """Test if SSH connection works.
+def _get_proxy_command(bridge: BridgeProfile, rtunnel_bin: Path) -> str:
+    """Build the ProxyCommand string for SSH.
 
     Args:
-        config: Tunnel configuration
+        bridge: Bridge profile with proxy_url
+        rtunnel_bin: Path to rtunnel binary
+
+    Returns:
+        ProxyCommand string for SSH -o option
+    """
+    # Convert https:// URL to wss:// for websocket
+    proxy_url = bridge.proxy_url
+    if proxy_url.startswith("https://"):
+        ws_url = "wss://" + proxy_url[8:]
+    elif proxy_url.startswith("http://"):
+        ws_url = "ws://" + proxy_url[7:]
+    else:
+        ws_url = proxy_url
+
+    return f"{rtunnel_bin} {ws_url} stdio://%h:%p"
+
+
+def _test_ssh_connection(
+    bridge: BridgeProfile,
+    config: TunnelConfig,
+    timeout: int = 10,
+) -> bool:
+    """Test if SSH connection works via ProxyCommand.
+
+    Args:
+        bridge: Bridge profile to test
+        config: Tunnel configuration (for rtunnel binary path)
         timeout: SSH connection timeout in seconds (default: 10)
 
     Returns:
         True if SSH connection succeeds, False otherwise
     """
+    # Ensure rtunnel binary exists
+    try:
+        _ensure_rtunnel_binary(config)
+    except TunnelError:
+        return False
+
+    proxy_cmd = _get_proxy_command(bridge, config.rtunnel_bin)
+
     try:
         result = subprocess.run(
             [
                 "ssh",
                 "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
                 "-o", "BatchMode=yes",
                 "-o", f"ConnectTimeout={timeout}",
-                "-p", str(config.local_port),
-                f"{config.ssh_user}@{config.ssh_host}",
+                "-o", f"ProxyCommand={proxy_cmd}",
+                "-o", "LogLevel=ERROR",
+                "-p", str(bridge.ssh_port),
+                f"{bridge.ssh_user}@localhost",
                 "echo ok",
             ],
             capture_output=True,
             text=True,
-            timeout=timeout + 2,
+            timeout=timeout + 5,
         )
         return result.returncode == 0 and "ok" in result.stdout
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
 
 
-def is_tunnel_available(config: Optional[TunnelConfig] = None, retries: int = 1) -> bool:
-    """Check if SSH tunnel is running and responsive.
+def is_tunnel_available(
+    bridge_name: Optional[str] = None,
+    config: Optional[TunnelConfig] = None,
+    retries: int = 1,
+) -> bool:
+    """Check if SSH via ProxyCommand is available and responsive.
 
     Args:
+        bridge_name: Name of bridge to check (uses default if None)
         config: Tunnel configuration (loads default if None)
         retries: Number of retries if SSH test fails (default: 1)
 
     Returns:
-        True if tunnel is available and SSH works, False otherwise
+        True if SSH via ProxyCommand works, False otherwise
     """
     if config is None:
         config = load_tunnel_config()
 
-    # Check if tunnel process is running
-    pid = _get_tunnel_pid(config)
-    if pid is None:
+    bridge = config.get_bridge(bridge_name)
+    if not bridge:
         return False
 
     # Test SSH connection with retry
     for attempt in range(retries + 1):
-        if _test_ssh_connection(config):
+        if _test_ssh_connection(bridge, config):
             return True
         if attempt < retries:
             time.sleep(1)  # Brief pause before retry
@@ -191,15 +280,17 @@ def is_tunnel_available(config: Optional[TunnelConfig] = None, retries: int = 1)
 
 def run_ssh_command(
     command: str,
+    bridge_name: Optional[str] = None,
     config: Optional[TunnelConfig] = None,
     timeout: Optional[int] = None,
     capture_output: bool = True,
     check: bool = False,
 ) -> subprocess.CompletedProcess:
-    """Execute a command on Bridge via SSH tunnel.
+    """Execute a command on Bridge via SSH ProxyCommand.
 
     Args:
         command: Shell command to execute on Bridge
+        bridge_name: Name of bridge to use (uses default if None)
         config: Tunnel configuration (loads default if None)
         timeout: Optional timeout in seconds
         capture_output: Whether to capture stdout/stderr
@@ -209,22 +300,36 @@ def run_ssh_command(
         CompletedProcess with result
 
     Raises:
-        TunnelNotAvailableError: If tunnel is not available
+        TunnelNotAvailableError: If no bridge configured
+        BridgeNotFoundError: If specified bridge not found
         subprocess.TimeoutExpired: If command times out
         subprocess.CalledProcessError: If check=True and command fails
     """
     if config is None:
         config = load_tunnel_config()
 
-    if not is_tunnel_available(config):
-        raise TunnelNotAvailableError("SSH tunnel is not available")
+    bridge = config.get_bridge(bridge_name)
+    if not bridge:
+        if bridge_name:
+            raise BridgeNotFoundError(f"Bridge '{bridge_name}' not found")
+        raise TunnelNotAvailableError(
+            "No bridge configured. Run 'inspire tunnel add <name> <url>' first."
+        )
+
+    # Ensure rtunnel binary exists
+    _ensure_rtunnel_binary(config)
+
+    proxy_cmd = _get_proxy_command(bridge, config.rtunnel_bin)
 
     ssh_cmd = [
         "ssh",
         "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
         "-o", "BatchMode=yes",
-        "-p", str(config.local_port),
-        f"{config.ssh_user}@{config.ssh_host}",
+        "-o", f"ProxyCommand={proxy_cmd}",
+        "-o", "LogLevel=ERROR",
+        "-p", str(bridge.ssh_port),
+        f"{bridge.ssh_user}@localhost",
         command,
     ]
 
@@ -238,26 +343,48 @@ def run_ssh_command(
 
 
 def get_ssh_command_args(
+    bridge_name: Optional[str] = None,
     config: Optional[TunnelConfig] = None,
     remote_command: Optional[str] = None,
 ) -> list[str]:
-    """Build SSH command arguments.
+    """Build SSH command arguments with ProxyCommand.
 
     Args:
+        bridge_name: Name of bridge to use (uses default if None)
         config: Tunnel configuration
         remote_command: Optional command to run (None for interactive shell)
 
     Returns:
         List of command arguments for subprocess
+
+    Raises:
+        TunnelNotAvailableError: If no bridge configured
+        BridgeNotFoundError: If specified bridge not found
     """
     if config is None:
         config = load_tunnel_config()
 
+    bridge = config.get_bridge(bridge_name)
+    if not bridge:
+        if bridge_name:
+            raise BridgeNotFoundError(f"Bridge '{bridge_name}' not found")
+        raise TunnelNotAvailableError(
+            "No bridge configured. Run 'inspire tunnel add <name> <url>' first."
+        )
+
+    # Ensure rtunnel binary exists
+    _ensure_rtunnel_binary(config)
+
+    proxy_cmd = _get_proxy_command(bridge, config.rtunnel_bin)
+
     args = [
         "ssh",
         "-o", "StrictHostKeyChecking=no",
-        "-p", str(config.local_port),
-        f"{config.ssh_user}@{config.ssh_host}",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", f"ProxyCommand={proxy_cmd}",
+        "-o", "LogLevel=ERROR",
+        "-p", str(bridge.ssh_port),
+        f"{bridge.ssh_user}@localhost",
     ]
 
     if remote_command:
@@ -275,181 +402,214 @@ def _ensure_rtunnel_binary(config: TunnelConfig) -> Path:
     config.rtunnel_bin.parent.mkdir(parents=True, exist_ok=True)
 
     try:
+        import tarfile
+        import tempfile
         import urllib.request
-        urllib.request.urlretrieve(RTUNNEL_DOWNLOAD_URL, config.rtunnel_bin)
-        config.rtunnel_bin.chmod(0o755)
+
+        # Download tar.gz and extract
+        with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
+            urllib.request.urlretrieve(RTUNNEL_DOWNLOAD_URL, tmp.name)
+            with tarfile.open(tmp.name, "r:gz") as tar:
+                # Extract the rtunnel binary (should be the only file or named rtunnel*)
+                for member in tar.getmembers():
+                    if member.isfile() and "rtunnel" in member.name:
+                        # Extract to a temp location first
+                        extracted = tar.extractfile(member)
+                        if extracted:
+                            config.rtunnel_bin.write_bytes(extracted.read())
+                            config.rtunnel_bin.chmod(0o755)
+                            break
+            # Clean up temp file
+            Path(tmp.name).unlink(missing_ok=True)
+
+        if not config.rtunnel_bin.exists():
+            raise TunnelError("rtunnel binary not found in archive")
+
         return config.rtunnel_bin
     except Exception as e:
         raise TunnelError(f"Failed to download rtunnel: {e}")
 
 
-def start_tunnel(
-    proxy_url: Optional[str] = None,
+def get_tunnel_status(
+    bridge_name: Optional[str] = None,
     config: Optional[TunnelConfig] = None,
-) -> int:
-    """Start the rtunnel client process.
+) -> dict:
+    """Get tunnel status for a bridge (ProxyCommand mode).
 
     Args:
-        proxy_url: rtunnel server URL (uses saved URL if None)
+        bridge_name: Name of bridge to check (uses default if None)
         config: Tunnel configuration
-
-    Returns:
-        PID of the started rtunnel process
-
-    Raises:
-        TunnelError: If rtunnel fails to start
-    """
-    if config is None:
-        config = load_tunnel_config()
-
-    # Use provided URL or fall back to saved
-    url = proxy_url or config.proxy_url
-    if not url:
-        raise TunnelError(
-            "No proxy URL provided. Use 'inspire tunnel set-url <URL>' first "
-            "or provide URL with 'inspire tunnel start <URL>'"
-        )
-
-    # Save URL for future use
-    if proxy_url:
-        config.proxy_url = proxy_url
-        save_tunnel_config(config)
-
-    # Stop existing tunnel if running
-    stop_tunnel(config)
-
-    # Ensure rtunnel binary exists
-    rtunnel_bin = _ensure_rtunnel_binary(config)
-
-    # Start rtunnel
-    config.config_dir.mkdir(parents=True, exist_ok=True)
-
-    # Check for proxy env var mismatch (fail fast)
-    env = os.environ.copy()
-    for proxy_var in ("http_proxy", "https_proxy"):
-        lower_val = env.get(proxy_var)
-        upper_val = env.get(proxy_var.upper())
-        if lower_val and upper_val and lower_val != upper_val:
-            raise TunnelError(
-                f"Proxy env mismatch: {proxy_var}={lower_val} but "
-                f"{proxy_var.upper()}={upper_val}. "
-                f"Run 'export {proxy_var.upper()}=\"${proxy_var}\"' to fix."
-            )
-        # Normalize: prefer lowercase, sync to uppercase for Go compatibility
-        if lower_val:
-            env[proxy_var.upper()] = lower_val
-        elif upper_val:
-            env[proxy_var] = upper_val
-
-    with open(config.log_file, "w") as log_f:
-        process = subprocess.Popen(
-            [str(rtunnel_bin), url, str(config.local_port)],
-            stdout=log_f,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-            env=env,
-        )
-
-    # Write PID file
-    config.pid_file.write_text(str(process.pid))
-
-    # Wait a moment for tunnel to establish
-    time.sleep(2)
-
-    # Verify tunnel started
-    if not _is_process_running(process.pid):
-        log_content = config.log_file.read_text() if config.log_file.exists() else ""
-        raise TunnelError(f"Tunnel failed to start. Log:\n{log_content}")
-
-    return process.pid
-
-
-def stop_tunnel(config: Optional[TunnelConfig] = None) -> bool:
-    """Stop the rtunnel client process.
-
-    Args:
-        config: Tunnel configuration
-
-    Returns:
-        True if process was stopped, False if not running
-    """
-    if config is None:
-        config = load_tunnel_config()
-
-    pid = _get_tunnel_pid(config)
-    if pid is None:
-        # Also try to kill any stray rtunnel processes
-        subprocess.run(
-            ["pkill", "-f", "rtunnel.*proxy"],
-            capture_output=True,
-        )
-        return False
-
-    try:
-        os.kill(pid, signal.SIGTERM)
-        # Wait for process to terminate
-        for _ in range(10):
-            if not _is_process_running(pid):
-                break
-            time.sleep(0.2)
-        else:
-            # Force kill if still running
-            os.kill(pid, signal.SIGKILL)
-    except (OSError, ProcessLookupError):
-        pass
-
-    config.pid_file.unlink(missing_ok=True)
-    return True
-
-
-def get_tunnel_status(config: Optional[TunnelConfig] = None) -> dict:
-    """Get comprehensive tunnel status.
 
     Returns:
         Dict with keys:
-        - running: bool
-        - pid: Optional[int]
+        - configured: bool (bridge exists)
+        - bridge_name: Optional[str]
         - ssh_works: bool
         - proxy_url: Optional[str]
-        - local_port: int
+        - rtunnel_path: Optional[str]
+        - bridges: list of all bridge names
+        - default_bridge: Optional[str]
         - error: Optional[str]
-        - log_tail: Optional[str] (last 10 lines of rtunnel log when SSH fails)
     """
     if config is None:
         config = load_tunnel_config()
 
+    bridge = config.get_bridge(bridge_name)
+
     status = {
-        "running": False,
-        "pid": None,
+        "configured": bridge is not None,
+        "bridge_name": bridge.name if bridge else None,
         "ssh_works": False,
-        "proxy_url": config.proxy_url,
-        "local_port": config.local_port,
+        "proxy_url": bridge.proxy_url if bridge else None,
+        "rtunnel_path": str(config.rtunnel_bin) if config.rtunnel_bin.exists() else None,
+        "bridges": [b.name for b in config.list_bridges()],
+        "default_bridge": config.default_bridge,
         "error": None,
-        "log_tail": None,
     }
 
-    pid = _get_tunnel_pid(config)
-    if pid is not None:
-        status["running"] = True
-        status["pid"] = pid
+    if not bridge:
+        if bridge_name:
+            status["error"] = f"Bridge '{bridge_name}' not found."
+        else:
+            status["error"] = "No bridge configured. Run 'inspire tunnel add <name> <url>' first."
+        return status
 
-        # Test SSH connection
-        status["ssh_works"] = _test_ssh_connection(config)
-        if not status["ssh_works"]:
-            status["error"] = "Tunnel running but SSH connection failed"
-            # Include log tail for debugging
-            if config.log_file.exists():
-                try:
-                    lines = config.log_file.read_text().strip().split("\n")
-                    # Get last 10 lines
-                    status["log_tail"] = "\n".join(lines[-10:])
-                except Exception:
-                    pass
-    else:
-        if not config.proxy_url:
-            status["error"] = "No proxy URL configured"
+    # Check if rtunnel binary exists
+    if not config.rtunnel_bin.exists():
+        try:
+            _ensure_rtunnel_binary(config)
+            status["rtunnel_path"] = str(config.rtunnel_bin)
+        except TunnelError as e:
+            status["error"] = str(e)
+            return status
+
+    # Test SSH connection
+    status["ssh_works"] = _test_ssh_connection(bridge, config)
+    if not status["ssh_works"]:
+        status["error"] = "SSH connection failed. Check proxy URL and Bridge rtunnel server."
 
     return status
+
+
+def get_rtunnel_path(config: Optional[TunnelConfig] = None) -> Path:
+    """Get rtunnel binary path, downloading if needed.
+
+    Args:
+        config: Tunnel configuration
+
+    Returns:
+        Path to rtunnel binary
+
+    Raises:
+        TunnelError: If rtunnel cannot be found or downloaded
+    """
+    if config is None:
+        config = load_tunnel_config()
+    return _ensure_rtunnel_binary(config)
+
+
+def generate_ssh_config(
+    bridge: BridgeProfile,
+    rtunnel_path: Path,
+    host_alias: Optional[str] = None,
+) -> str:
+    """Generate SSH config for ProxyCommand mode.
+
+    Args:
+        bridge: Bridge profile
+        rtunnel_path: Path to rtunnel binary
+        host_alias: SSH host alias to use (defaults to bridge name)
+
+    Returns:
+        SSH config string to add to ~/.ssh/config
+    """
+    if host_alias is None:
+        host_alias = bridge.name
+
+    # Convert https:// URL to wss:// for websocket
+    proxy_url = bridge.proxy_url
+    if proxy_url.startswith("https://"):
+        ws_url = "wss://" + proxy_url[8:]
+    elif proxy_url.startswith("http://"):
+        ws_url = "ws://" + proxy_url[7:]
+    else:
+        ws_url = proxy_url
+
+    ssh_config = f"""Host {host_alias}
+    HostName localhost
+    User {bridge.ssh_user}
+    Port {bridge.ssh_port}
+    ProxyCommand {rtunnel_path} {ws_url} stdio://%h:%p
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    LogLevel ERROR"""
+
+    return ssh_config
+
+
+def generate_all_ssh_configs(config: TunnelConfig) -> str:
+    """Generate SSH config for all bridges.
+
+    Args:
+        config: Tunnel configuration with all bridges
+
+    Returns:
+        SSH config string for all bridges
+    """
+    if not config.bridges:
+        return ""
+
+    rtunnel_path = _ensure_rtunnel_binary(config)
+    configs = []
+    for bridge in config.list_bridges():
+        configs.append(generate_ssh_config(bridge, rtunnel_path))
+
+    return "\n\n".join(configs)
+
+
+def install_ssh_config(ssh_config: str, host_alias: str) -> dict:
+    """Install SSH config to ~/.ssh/config.
+
+    Args:
+        ssh_config: SSH config block to add
+        host_alias: Host alias to look for (for updating existing entries)
+
+    Returns:
+        Dict with keys:
+        - success: bool
+        - updated: bool (True if existing entry was updated)
+        - error: Optional[str]
+    """
+    import re
+
+    ssh_config_path = Path.home() / ".ssh" / "config"
+    ssh_config_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    existing_content = ""
+    if ssh_config_path.exists():
+        existing_content = ssh_config_path.read_text()
+
+    # Check if host alias already exists
+    # Match "Host <alias>" at start of line, possibly with other hosts on same line
+    host_pattern = rf"^Host\s+.*?\b{re.escape(host_alias)}\b.*$"
+    match = re.search(host_pattern, existing_content, re.MULTILINE)
+
+    if match:
+        # Find the full block to replace (from Host line to next Host line or end)
+        block_pattern = rf"(^Host\s+.*?\b{re.escape(host_alias)}\b.*$)((?:\n(?!Host\s).*)*)"
+        new_content = re.sub(block_pattern, ssh_config, existing_content, flags=re.MULTILINE)
+
+        ssh_config_path.write_text(new_content)
+        return {"success": True, "updated": True, "error": None}
+    else:
+        # Append new entry
+        if existing_content and not existing_content.endswith("\n"):
+            existing_content += "\n"
+        if existing_content:
+            existing_content += "\n"
+
+        ssh_config_path.write_text(existing_content + ssh_config + "\n")
+        return {"success": True, "updated": False, "error": None}
 
 
 def sync_via_ssh(
@@ -457,10 +617,11 @@ def sync_via_ssh(
     branch: str,
     commit_sha: str,
     force: bool = False,
+    bridge_name: Optional[str] = None,
     config: Optional[TunnelConfig] = None,
     timeout: int = 60,
 ) -> dict:
-    """Sync code on Bridge via SSH tunnel.
+    """Sync code on Bridge via SSH ProxyCommand.
 
     Runs git fetch && git checkout on the remote Bridge machine.
 
@@ -469,6 +630,7 @@ def sync_via_ssh(
         branch: Branch to sync
         commit_sha: Expected commit SHA after sync
         force: If True, use git reset --hard (discard local changes)
+        bridge_name: Name of bridge to use (uses default if None)
         config: Tunnel configuration
         timeout: Command timeout in seconds
 
@@ -479,13 +641,11 @@ def sync_via_ssh(
         - error: Optional[str]
 
     Raises:
-        TunnelNotAvailableError: If tunnel is not available
+        TunnelNotAvailableError: If no bridge configured
+        BridgeNotFoundError: If specified bridge not found
     """
     if config is None:
         config = load_tunnel_config()
-
-    if not is_tunnel_available(config):
-        raise TunnelNotAvailableError("SSH tunnel is not available")
 
     # Build the sync command
     if force:
@@ -508,6 +668,7 @@ git rev-parse HEAD
     try:
         result = run_ssh_command(
             sync_cmd.strip(),
+            bridge_name=bridge_name,
             config=config,
             timeout=timeout,
             capture_output=True,

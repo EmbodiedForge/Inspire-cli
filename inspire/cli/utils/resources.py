@@ -33,6 +33,9 @@ class ComputeGroupAvailability:
     ready_nodes: int
     free_nodes: int
     free_gpus: int  # free_nodes * gpu_per_node
+    online_nodes: int = 0  # resource_pool == "online"
+    backup_nodes: int = 0  # resource_pool == "backup"
+    fault_nodes: int = 0   # resource_pool == "fault"
 
 
 # Known compute groups for smart allocation
@@ -144,9 +147,21 @@ def fetch_resource_availability(
                     "total_nodes": 0,
                     "ready_nodes": 0,
                     "free_nodes": 0,
+                    "online_nodes": 0,
+                    "backup_nodes": 0,
+                    "fault_nodes": 0,
                 }
 
             groups[group_id]["total_nodes"] += 1
+
+            # Count by resource_pool status
+            resource_pool = node.get("resource_pool", "unknown")
+            if resource_pool == "online":
+                groups[group_id]["online_nodes"] += 1
+            elif resource_pool == "backup":
+                groups[group_id]["backup_nodes"] += 1
+            elif resource_pool == "fault":
+                groups[group_id]["fault_nodes"] += 1
 
             if node.get("status") == "READY":
                 groups[group_id]["ready_nodes"] += 1
@@ -182,6 +197,9 @@ def fetch_resource_availability(
                 ready_nodes=group_data["ready_nodes"],
                 free_nodes=group_data["free_nodes"],
                 free_gpus=free_gpus,
+                online_nodes=group_data["online_nodes"],
+                backup_nodes=group_data["backup_nodes"],
+                fault_nodes=group_data["fault_nodes"],
             )
         )
 
