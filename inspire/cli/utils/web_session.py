@@ -23,6 +23,13 @@ SESSION_TTL = 3600  # 1 hour
 DEFAULT_WORKSPACE_ID = "ws-9dcc0e1f-80a4-4af2-bc2f-0e352e7b17e6"
 
 
+def get_playwright_proxy() -> Optional[dict]:
+    proxy = os.environ.get("https_proxy") or os.environ.get("http_proxy")
+    if proxy:
+        return {"server": proxy}
+    return None
+
+
 @dataclass
 class WebSession:
     """Captured web session for web-ui APIs.
@@ -79,15 +86,20 @@ class WebSession:
             pass
 
     @classmethod
-    def load(cls) -> Optional["WebSession"]:
-        """Load session from cache file if valid."""
+    def load(cls, allow_expired: bool = False) -> Optional["WebSession"]:
+        """Load session from cache file if valid.
+
+        Args:
+            allow_expired: If True, return session even if TTL has expired.
+                          The session cookies may still be valid server-side.
+        """
         if not SESSION_CACHE_FILE.exists():
             return None
         try:
             with open(SESSION_CACHE_FILE) as f:
                 data = json.load(f)
             session = cls.from_dict(data)
-            if session.is_valid():
+            if allow_expired or session.is_valid():
                 return session
         except (json.JSONDecodeError, KeyError):
             pass
@@ -120,13 +132,17 @@ def login_with_playwright(
     """
     from playwright.sync_api import sync_playwright
 
+    proxy = get_playwright_proxy()
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
-        context = browser.new_context()
+        browser = p.chromium.launch(headless=headless, proxy=proxy)
+        context = browser.new_context(proxy=proxy, ignore_https_errors=True)
         page = context.new_page()
 
-        # Navigate to login page; wait for networkidle to ensure all redirects settle.
-        page.goto(f"{base_url}/login", wait_until="networkidle", timeout=60000)
+        # Navigate to login page; use domcontentloaded since CAS may have
+        # long-polling resources that prevent networkidle from completing.
+        page.goto(f"{base_url}/login", wait_until="domcontentloaded", timeout=60000)
+        # Give some time for any redirects to settle
+        page.wait_for_timeout(2000)
 
         # Try different login form selectors (CAS vs Keycloak vs qz.sii.edu.cn)
         # The login page may redirect to CAS which has different form fields
@@ -181,7 +197,11 @@ def login_with_playwright(
                 break
 
         # Visit a real page to ensure app session cookies are set.
-        page.goto(f"{base_url}/jobs/distributedTraining", wait_until="networkidle", timeout=60000)
+        # Use domcontentloaded with fallback since some pages have long-polling.
+        try:
+            page.goto(f"{base_url}/jobs/distributedTraining", wait_until="networkidle", timeout=15000)
+        except Exception:
+            page.goto(f"{base_url}/jobs/distributedTraining", wait_until="domcontentloaded", timeout=30000)
         page.wait_for_timeout(1000)
 
         # Extract workspace_id (spaceId)
@@ -231,7 +251,41 @@ def get_web_session(force_refresh: bool = False, require_workspace: bool = False
             else:
                 return cached
 
-    username, password = get_credentials()
+    # Check for workspace override from environment
+    env_workspace_id = os.environ.get('INSPIRE_WORKSPACE_ID')
+
+    # If we can't refresh (missing credentials), try the cached session anyway.
+    try:
+        username, password = get_credentials()
+    except ValueError:
+        cached = WebSession.load(allow_expired=True)
+        if cached and cached.storage_state.get("cookies"):
+            if env_workspace_id and cached.workspace_id != env_workspace_id:
+                cached.workspace_id = env_workspace_id
+                try:
+                    cached.save()
+                except Exception:
+                    pass
+
+            if require_workspace and not cached.workspace_id:
+                raise
+            return cached
+        raise
+
+    # Use cached session if available and has cookies, even if beyond TTL.
+    # The session cookies may still be valid server-side; let API calls determine validity.
+    cached = WebSession.load(allow_expired=True)
+    if cached and cached.storage_state.get("cookies"):
+        if env_workspace_id and cached.workspace_id != env_workspace_id:
+            cached.workspace_id = env_workspace_id
+            try:
+                cached.save()
+            except Exception:
+                pass
+        # Use cached session; server will reject if truly invalid
+        return cached
+
+    # Session is missing or has no cookies, perform fresh login
     return login_with_playwright(username, password)
 
 
@@ -255,9 +309,10 @@ def fetch_node_specs(
 
     url = f"{base_url}/api/v1/compute_resources/node_specs/logic_compute_groups/{compute_group_id}"
 
+    proxy = get_playwright_proxy()
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(storage_state=session.storage_state)
+        browser = p.chromium.launch(headless=True, proxy=proxy)
+        context = browser.new_context(storage_state=session.storage_state, proxy=proxy, ignore_https_errors=True)
 
         try:
             resp = context.request.get(
@@ -315,9 +370,10 @@ def fetch_workspace_availability(
 
     url = f"{base_url}/api/v1/cluster_nodes/workspace/{session.workspace_id}"
 
+    proxy = get_playwright_proxy()
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(storage_state=session.storage_state)
+        browser = p.chromium.launch(headless=True, proxy=proxy)
+        context = browser.new_context(storage_state=session.storage_state, proxy=proxy, ignore_https_errors=True)
 
         try:
             resp = context.request.get(

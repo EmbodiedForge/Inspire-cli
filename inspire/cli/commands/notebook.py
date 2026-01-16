@@ -10,12 +10,15 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import uuid
 from typing import Optional
 
 import click
+import requests
+from playwright.sync_api import sync_playwright
 
 from inspire.cli.context import (
     Context,
@@ -24,6 +27,7 @@ from inspire.cli.context import (
     EXIT_API_ERROR,
 )
 from inspire.cli.formatters import json_formatter
+from inspire.cli.utils.web_session import get_web_session, get_playwright_proxy
 
 
 @click.group()
@@ -91,37 +95,41 @@ def list_notebooks(
 
     base_url = "https://qz.sii.edu.cn"
 
-    # Try to get notebook list using GET endpoint
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(storage_state=session.storage_state)
-
+    # First try a direct requests call using stored cookies (honors proxy env)
+    cookies = (session.storage_state or {}).get("cookies") if session else None
+    if cookies:
+        s = requests.Session()
+        proxy_url = os.environ.get("https_proxy") or os.environ.get("http_proxy")
+        if proxy_url:
+            s.proxies.update({"http": proxy_url, "https": proxy_url})
+        for c in cookies:
             try:
-                # GET /api/v1/notebook/list works with query parameters
-                url = f"{base_url}/api/v1/notebook/list"
-                resp = context.request.get(
-                    url,
-                    params={"workspace_id": workspace_id},
-                    headers={
-                        "Accept": "application/json",
-                        "Referer": f"{base_url}/lab",
-                    },
-                    timeout=30000,
-                )
+                s.cookies.set(c.get("name"), c.get("value"), domain=c.get("domain"), path=c.get("path", "/"))
+            except Exception:
+                continue
+        try:
+            # Bootstrap SSO cookies via /login (keycloak cookies usually allow silent auth)
+            try:
+                s.get(f"{base_url}/login", timeout=20, allow_redirects=True)
+            except Exception:
+                pass
 
-                if resp.status == 401:
-                    raise ValueError("Session expired or invalid")
-
+            resp = s.get(
+                f"{base_url}/api/v1/notebook/list",
+                params={"workspace_id": workspace_id},
+                headers={"Accept": "application/json", "Referer": f"{base_url}/lab"},
+                timeout=20,
+                allow_redirects=False,
+            )
+            if resp.status_code != 200:
+                click.echo(f"requests path: status {resp.status_code}", err=True)
+            else:
                 data = resp.json()
-
-                # Check response
+                items = data.get("data", {}).get("items", [])
                 if data.get("code") == 0:
-                    # Success - we have notebook list
-                    items = data.get("data", {}).get("items", [])
                     _print_notebook_list(items, json_output, ctx)
-                elif data.get("message") == "notebook not found":
-                    # No notebooks exist yet
+                    return
+                if data.get("message") == "notebook not found":
                     if json_output:
                         click.echo(json.dumps({"items": [], "total": 0}))
                     else:
@@ -131,18 +139,14 @@ def list_notebooks(
                             f"  {base_url}/lab\n"
                             "Once created, they will appear here."
                         )
-                else:
-                    # API error
-                    click.echo(f"Error: {data.get('message', 'Unknown error')}", err=True)
-                    return sys.exit(EXIT_API_ERROR)
+                    return
+                click.echo(f"requests path: api error {data.get('message', 'unknown')} (code={data.get('code')})", err=True)
+        except Exception as e:
+            click.echo(f"requests path error: {e}", err=True)
 
-            finally:
-                context.close()
-                browser.close()
-
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        return sys.exit(EXIT_API_ERROR)
+    # If we reach here, requests path failed; report and exit.
+    click.echo("requests path: fell through; check auth/proxy", err=True)
+    return sys.exit(EXIT_API_ERROR)
 
 
 def _print_notebook_list(items: list, json_output: bool, ctx: Context) -> None:
@@ -212,10 +216,11 @@ def notebook_status(
 
     base_url = "https://qz.sii.edu.cn"
 
+    proxy = get_playwright_proxy()
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(storage_state=session.storage_state)
+            browser = p.chromium.launch(headless=True, proxy=proxy)
+            context = browser.new_context(storage_state=session.storage_state, proxy=proxy, ignore_https_errors=True)
 
             try:
                 url = f"{base_url}/api/v1/notebook/{instance_id}"
