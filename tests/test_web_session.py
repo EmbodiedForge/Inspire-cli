@@ -53,7 +53,7 @@ class DummyAPIResponse:
         return self._payload
 
 
-class DummyAPIContext:
+class DummyRequestContext:
     def __init__(self) -> None:
         self.calls = []
 
@@ -64,6 +64,11 @@ class DummyAPIContext:
     def post(self, url, headers=None, data=None, timeout=None):  # noqa: ANN001
         self.calls.append(("POST", url, headers, data, timeout))
         return DummyAPIResponse(200, {"ok": True})
+
+
+class DummyBrowserContext:
+    def __init__(self) -> None:
+        self.request = DummyRequestContext()
 
 
 def test_request_json_falls_back_to_browser_client(monkeypatch: pytest.MonkeyPatch):
@@ -141,15 +146,15 @@ def test_browser_client_reset_on_expired(monkeypatch: pytest.MonkeyPatch):
 
 def test_browser_request_context_posts_json_bytes():
     client = ws._BrowserRequestClient.__new__(ws._BrowserRequestClient)
-    context = DummyAPIContext()
+    context = DummyBrowserContext()
     client._context = context
     client.session_fingerprint = "test"
 
     result = client.request_json("POST", "https://example.test", body={"a": 1})
 
     assert result == {"ok": True}
-    assert context.calls
-    method, _url, headers, data, _timeout = context.calls[0]
+    assert context.request.calls
+    method, _url, headers, data, _timeout = context.request.calls[0]
     assert method == "POST"
     assert json.loads(data) == {"a": 1}
     header_keys = {key.lower() for key in (headers or {})}
