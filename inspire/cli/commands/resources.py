@@ -47,11 +47,6 @@ def resources():
     help="Thorough check: show all accessible compute groups",
 )
 @click.option(
-    "--gpu-type",
-    type=str,
-    help="Filter by GPU type (e.g., H100, H200)",
-)
-@click.option(
     "--watch",
     "-w",
     is_flag=True,
@@ -70,33 +65,34 @@ def resources():
     is_flag=True,
     help="Use browser API to show workspace-scoped availability (requires INSPIRE_USERNAME/PASSWORD)",
 )
+@click.option(
+    "--global",
+    "use_global",
+    is_flag=True,
+    help="Use OpenAPI for global view (less accurate but faster)",
+)
 @pass_context
 def list_resources(
     ctx: Context,
     no_cache: bool,
     show_all: bool,
-    gpu_type: str,
     watch: bool,
     interval: int,
     workspace: bool = False,
+    use_global: bool = False,
 ):
     """List GPU availability across compute groups.
 
-    Shows real-time GPU availability for all compute groups via OpenAPI.
-
-    \b
-    By default, shows global availability across all projects. Use --workspace
-    to show workspace-scoped availability (matches browser, requires login).
+    By default, shows accurate real-time GPU usage via browser API.
+    Use --global for faster OpenAPI-based view (less accurate).
 
     \b
     Examples:
-        inspire resources list              # Global OpenAPI view (default)
-        inspire resources list --gpu-type H200  # Filter by GPU type
-        inspire resources list --workspace  # Workspace-scoped (browser API)
+        inspire resources list              # Accurate GPU usage (default)
+        inspire resources list --global     # Global OpenAPI view (faster)
+        inspire resources list --workspace  # Workspace-scoped view
         inspire resources list --all        # Include all compute groups
-        inspire resources list --no-cache
-        inspire resources list --watch
-        inspire resources list --watch --interval 10
+        inspire resources list --watch      # Watch mode
     """
     # Watch mode
     if watch:
@@ -106,15 +102,25 @@ def list_resources(
             ), err=True)
             sys.exit(EXIT_CONFIG_ERROR)
 
-        _watch_resources(ctx, show_all, interval, workspace, gpu_type)
+        _watch_resources(ctx, show_all, interval, workspace, use_global)
         return
 
     # --workspace: browser API for workspace-scoped view
     if workspace:
-        _list_workspace_resources(ctx, show_all, gpu_type)
+        _list_workspace_resources(ctx, show_all)
         return
 
-    # Default: OpenAPI global view
+    # --global: OpenAPI for global view (faster but less accurate)
+    if use_global:
+        _list_global_resources(ctx, show_all, no_cache)
+        return
+
+    # Default: accurate browser API
+    _list_accurate_resources(ctx)
+
+
+def _list_global_resources(ctx: Context, show_all: bool, no_cache: bool) -> None:
+    """List global GPU availability using OpenAPI (faster but less accurate)."""
     try:
         config = Config.from_env()
 
@@ -127,11 +133,6 @@ def list_resources(
             config,
             known_only=not show_all,
         )
-
-        # Filter by GPU type if specified
-        if gpu_type:
-            availability = [a for a in availability
-                          if a.gpu_type.upper() == gpu_type.upper()]
 
         if not availability:
             if ctx.json_output:
@@ -217,7 +218,49 @@ def list_nodes(ctx: Context, pool: str, page: int, size: int):
         _handle_error(ctx, "APIError", str(e), EXIT_API_ERROR)
 
 
-def _list_workspace_resources(ctx: Context, show_all: bool, gpu_type: Optional[str] = None) -> None:
+def _list_accurate_resources(ctx: Context) -> None:
+    """List accurate GPU availability using browser API.
+
+    Uses /api/v1/compute_resources/logic_compute_groups/{id} to get real-time
+    GPU usage statistics including used GPUs, available GPUs, and low-priority usage.
+    """
+    try:
+        from inspire.cli.utils.browser_api import get_accurate_gpu_availability
+
+        # Get accurate GPU stats
+        availability = get_accurate_gpu_availability()
+
+        if not availability:
+            if ctx.json_output:
+                click.echo(json_formatter.format_json({"availability": []}))
+            else:
+                click.echo(human_formatter.format_error("No GPU resources found"))
+            return
+
+        if ctx.json_output:
+            # Format as JSON
+            output = [
+                {
+                    "group_id": a.group_id,
+                    "group_name": a.group_name,
+                    "gpu_type": a.gpu_type,
+                    "total_gpus": a.total_gpus,
+                    "used_gpus": a.used_gpus,
+                    "available_gpus": a.available_gpus,
+                    "low_priority_gpus": a.low_priority_gpus,
+                }
+                for a in availability
+            ]
+            click.echo(json_formatter.format_json({"availability": output}))
+        else:
+            # Format as table
+            _format_accurate_availability_table(availability)
+
+    except Exception as e:
+        _handle_error(ctx, "APIError", str(e), EXIT_API_ERROR)
+
+
+def _list_workspace_resources(ctx: Context, show_all: bool) -> None:
     """List workspace-specific GPU availability using browser API.
 
     In workspace mode, we show all accessible groups by default since the
@@ -303,11 +346,6 @@ def _list_workspace_resources(ctx: Context, show_all: bool, gpu_type: Optional[s
         # Sort by free_gpus descending
         availability_list.sort(key=lambda x: x.free_gpus, reverse=True)
 
-        # Filter by GPU type if specified
-        if gpu_type:
-            availability_list = [a for a in availability_list
-                                if a.gpu_type.upper() == gpu_type.upper()]
-
         # Add workspace indicator
         _format_availability_table(availability_list, workspace_mode=True)
 
@@ -324,7 +362,7 @@ def _watch_resources(
     show_all: bool,
     interval: int,
     workspace: bool,
-    gpu_type: Optional[str] = None,
+    use_global: bool,
 ) -> None:
     """Watch resources with periodic refresh and progress bar."""
     from datetime import datetime
@@ -334,8 +372,10 @@ def _watch_resources(
     original_level = api_logger.level
     api_logger.setLevel(logging.CRITICAL)
 
-    # --workspace: browser API; default: OpenAPI
+    # Determine which API to use
+    # Priority: workspace > global > accurate (default)
     use_workspace = workspace
+    use_accurate = not use_global and not workspace
     web_session = None
 
     if use_workspace:
@@ -346,6 +386,14 @@ def _watch_resources(
                     "Failed to get workspace_id. Login failed or session expired."
                 ), err=True)
                 sys.exit(EXIT_AUTH_ERROR)
+        except Exception as e:
+            click.echo(human_formatter.format_error(f"Failed to get web session: {e}"), err=True)
+            sys.exit(EXIT_AUTH_ERROR)
+    elif use_accurate:
+        try:
+            # Pre-authenticate for accurate mode
+            from inspire.cli.utils.browser_api import get_accurate_gpu_availability
+            web_session = get_web_session()
         except Exception as e:
             click.echo(human_formatter.format_error(f"Failed to get web session: {e}"), err=True)
             sys.exit(EXIT_AUTH_ERROR)
@@ -521,11 +569,6 @@ def _watch_resources(
                         known_only=not show_all,
                         progress_callback=on_progress,
                     )
-
-                # Filter by GPU type if specified
-                if gpu_type:
-                    availability = [a for a in availability
-                                  if a.gpu_type.upper() == gpu_type.upper()]
             except AuthenticationError as e:
                 api_logger.setLevel(original_level)
                 click.echo(human_formatter.format_error(str(e)), err=True)
@@ -599,6 +642,69 @@ def _format_availability_table(availability, workspace_mode: bool = False) -> No
     lines.append("\u2500" * 80)
     lines.append("")
     lines.append("\U0001f4a1 Usage:")
+    lines.append("  inspire run \"python train.py\"              # Auto-select best group")
+    lines.append("  inspire run \"python train.py\" --type H100   # Prefer H100")
+    lines.append("  inspire run \"python train.py\" --gpus 4      # Use 4 GPUs")
+    lines.append("")
+
+    click.echo("\n".join(lines))
+
+
+def _format_accurate_availability_table(availability) -> None:
+    """Format accurate GPU availability as a pretty table."""
+    lines = [
+        "",
+        "📊 GPU Availability (Accurate Real-Time)",
+        "─" * 95,
+        f"{'GPU Type':<22} {'Compute Group':<25} {'Available':>10} {'Used':>8} {'Low Pri':>8} {'Total':>8}",
+        "─" * 95,
+    ]
+
+    # Sort by available GPUs descending
+    sorted_avail = sorted(availability, key=lambda x: x.available_gpus, reverse=True)
+
+    total_available = 0
+    total_used = 0
+    total_low_pri = 0
+    total_gpus = 0
+
+    for a in sorted_avail:
+        gpu_type = a.gpu_type[:21]
+        location = a.group_name[:24]
+
+        # Status indicator
+        free_gpus = a.available_gpus
+        if free_gpus >= 100:
+            status = "✓"
+        elif free_gpus >= 32:
+            status = "○"
+        elif free_gpus >= 8:
+            status = "◐"
+        elif free_gpus > 0:
+            status = "⚠"
+        else:
+            status = "✗"
+
+        lines.append(
+            f"{gpu_type:<22} {location:<25} {a.available_gpus:>10} {a.used_gpus:>8} {a.low_priority_gpus:>8} {a.total_gpus:>8} {status}"
+        )
+
+        total_available += a.available_gpus
+        total_used += a.used_gpus
+        total_low_pri += a.low_priority_gpus
+        total_gpus += a.total_gpus
+
+    lines.append("─" * 95)
+    lines.append(
+        f"{'TOTAL':<22} {'':<25} {total_available:>10} {total_used:>8} {total_low_pri:>8} {total_gpus:>8}"
+    )
+    lines.append("")
+    lines.append("💡 Legend:")
+    lines.append("  Available = GPUs ready to use (not running any tasks)")
+    lines.append("  Used      = GPUs currently running tasks")
+    lines.append("  Low Pri   = GPUs running low-priority tasks (can be preempted)")
+    lines.append("")
+    lines.append("💡 Usage:")
     lines.append("  inspire run \"python train.py\"              # Auto-select best group")
     lines.append("  inspire run \"python train.py\" --type H100   # Prefer H100")
     lines.append("  inspire run \"python train.py\" --gpus 4      # Use 4 GPUs")

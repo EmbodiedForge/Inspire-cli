@@ -19,10 +19,29 @@ import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from .web_session import get_web_session, WebSession, DEFAULT_WORKSPACE_ID
+from .web_session import (
+    get_web_session,
+    WebSession,
+    DEFAULT_WORKSPACE_ID,
+    get_playwright_proxy,
+    SessionExpiredError,
+    clear_session_cache,
+)
 
 
 BASE_URL = os.environ.get("INSPIRE_BASE_URL", "https://qz.sii.edu.cn")
+
+
+def _launch_browser(p, headless: bool = True):
+    proxy = get_playwright_proxy()
+    return p.chromium.launch(headless=headless, proxy=proxy)
+
+
+def _new_context(browser, *, storage_state=None):
+    proxy = get_playwright_proxy()
+    if storage_state is not None:
+        return browser.new_context(storage_state=storage_state, proxy=proxy, ignore_https_errors=True)
+    return browser.new_context(proxy=proxy, ignore_https_errors=True)
 
 
 @dataclass
@@ -124,8 +143,8 @@ def list_jobs(
         body["status"] = status
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(storage_state=session.storage_state)
+        browser = _launch_browser(p)
+        context = _new_context(browser, storage_state=session.storage_state)
 
         try:
             resp = context.request.post(
@@ -187,8 +206,8 @@ def list_compute_groups(
     }
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(storage_state=session.storage_state)
+        browser = _launch_browser(p)
+        context = _new_context(browser, storage_state=session.storage_state)
 
         try:
             resp = context.request.post(
@@ -202,6 +221,8 @@ def list_compute_groups(
                 timeout=30000,
             )
 
+            if resp.status == 401:
+                raise SessionExpiredError("Session expired or invalid")
             if resp.status >= 400:
                 raise ValueError(f"API returned {resp.status}")
 
@@ -228,8 +249,8 @@ def get_current_user(session: Optional[WebSession] = None) -> dict:
         session = get_web_session()
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(storage_state=session.storage_state)
+        browser = _launch_browser(p)
+        context = _new_context(browser, storage_state=session.storage_state)
 
         try:
             resp = context.request.get(
@@ -274,8 +295,8 @@ def list_job_users(
         workspace_id = session.workspace_id or DEFAULT_WORKSPACE_ID
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(storage_state=session.storage_state)
+        browser = _launch_browser(p)
+        context = _new_context(browser, storage_state=session.storage_state)
 
         try:
             resp = context.request.post(
@@ -303,6 +324,7 @@ def list_job_users(
 def get_accurate_gpu_availability(
     workspace_id: Optional[str] = None,
     session: Optional[WebSession] = None,
+    _retry: bool = True,
 ) -> list[GPUAvailability]:
     """Get accurate GPU availability for all compute groups.
 
@@ -315,6 +337,7 @@ def get_accurate_gpu_availability(
     Args:
         workspace_id: Workspace to get availability for.
         session: Optional pre-existing web session.
+        _retry: Internal flag to prevent infinite retry loops.
 
     Returns:
         List of GPUAvailability objects with accurate usage stats.
@@ -327,14 +350,25 @@ def get_accurate_gpu_availability(
     if workspace_id is None:
         workspace_id = session.workspace_id or DEFAULT_WORKSPACE_ID
 
-    # First get all compute groups
-    groups = list_compute_groups(workspace_id=workspace_id, session=session)
+    # First get all compute groups - this may raise SessionExpiredError
+    try:
+        groups = list_compute_groups(workspace_id=workspace_id, session=session)
+    except SessionExpiredError:
+        if _retry:
+            # Clear cached session and retry with fresh login
+            clear_session_cache()
+            return get_accurate_gpu_availability(
+                workspace_id=workspace_id,
+                session=None,  # Force fresh session
+                _retry=False,  # Don't retry again
+            )
+        raise
 
     results = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(storage_state=session.storage_state)
+        browser = _launch_browser(p)
+        context = _new_context(browser, storage_state=session.storage_state)
 
         try:
             for group in groups:
@@ -437,8 +471,8 @@ def list_projects(
     }
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(storage_state=session.storage_state)
+        browser = _launch_browser(p)
+        context = _new_context(browser, storage_state=session.storage_state)
 
         try:
             resp = context.request.post(
@@ -508,8 +542,8 @@ def list_images(
     }
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(storage_state=session.storage_state)
+        browser = _launch_browser(p)
+        context = _new_context(browser, storage_state=session.storage_state)
 
         try:
             resp = context.request.post(
@@ -575,8 +609,8 @@ def get_notebook_schedule(
         workspace_id = session.workspace_id or DEFAULT_WORKSPACE_ID
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(storage_state=session.storage_state)
+        browser = _launch_browser(p)
+        context = _new_context(browser, storage_state=session.storage_state)
 
         try:
             resp = context.request.get(
@@ -635,8 +669,8 @@ def list_notebook_compute_groups(
     }
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(storage_state=session.storage_state)
+        browser = _launch_browser(p)
+        context = _new_context(browser, storage_state=session.storage_state)
 
         try:
             resp = context.request.post(
@@ -737,8 +771,8 @@ def create_notebook(
     }
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(storage_state=session.storage_state)
+        browser = _launch_browser(p)
+        context = _new_context(browser, storage_state=session.storage_state)
 
         try:
             resp = context.request.post(
@@ -792,8 +826,8 @@ def stop_notebook(
     }
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(storage_state=session.storage_state)
+        browser = _launch_browser(p)
+        context = _new_context(browser, storage_state=session.storage_state)
 
         try:
             resp = context.request.post(
@@ -842,8 +876,8 @@ def get_notebook_detail(
         session = get_web_session()
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(storage_state=session.storage_state)
+        browser = _launch_browser(p)
+        context = _new_context(browser, storage_state=session.storage_state)
 
         try:
             resp = context.request.get(
@@ -941,8 +975,8 @@ def setup_notebook_rtunnel(
         session = get_web_session()
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
-        context = browser.new_context(storage_state=session.storage_state)
+        browser = _launch_browser(p, headless=headless)
+        context = _new_context(browser, storage_state=session.storage_state)
         page = context.new_page()
 
         try:
@@ -993,11 +1027,31 @@ def setup_notebook_rtunnel(
                     jupyter_proxy_url = jupyter_proxy_url[:-4]
                 jupyter_proxy_url = f"{jupyter_proxy_url}/proxy/{port}/"
 
-            # Wait for JupyterLab UI to be ready (menu bar should exist).
-            lab_frame.get_by_role("menuitem", name="File").first.wait_for(
-                state="visible",
-                timeout=60000,
-            )
+            # Wait for JupyterLab UI to be ready.
+            # The IDE page often shows a full-screen loading overlay ("加载中...")
+            # before the JupyterLab menu bar becomes available.
+            try:
+                lab_frame.locator("text=加载中").first.wait_for(state="hidden", timeout=180000)
+            except Exception:
+                pass
+
+            # Prefer the launcher terminal card (it appears earlier than the menu bar in some builds).
+            try:
+                lab_frame.locator("div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')").first.wait_for(
+                    state="visible",
+                    timeout=180000,
+                )
+            except Exception:
+                try:
+                    lab_frame.get_by_role("menuitem", name="File").first.wait_for(
+                        state="visible",
+                        timeout=180000,
+                    )
+                except Exception:
+                    lab_frame.get_by_role("menuitem", name="文件").first.wait_for(
+                        state="visible",
+                        timeout=180000,
+                    )
 
             # Dismiss Jupyter news prompt if present.
             for label in ("No", "Yes", "否", "不接收", "取消"):
@@ -1014,7 +1068,7 @@ def setup_notebook_rtunnel(
             terminal_opened = False
 
             # Path A: Launcher card
-            terminal_card = lab_frame.locator("div.jp-LauncherCard:has-text('Terminal')")
+            terminal_card = lab_frame.locator("div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')")
             try:
                 terminal_card.first.wait_for(state="visible", timeout=20000)
                 terminal_card.first.click(timeout=8000)
@@ -1031,7 +1085,7 @@ def setup_notebook_rtunnel(
                     if launcher_btn.count() > 0:
                         launcher_btn.click(timeout=2000)
                         page.wait_for_timeout(500)
-                    terminal_card = lab_frame.locator("div.jp-LauncherCard:has-text('Terminal')")
+                    terminal_card = lab_frame.locator("div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')")
                     terminal_card.first.wait_for(state="visible", timeout=20000)
                     terminal_card.first.click(timeout=8000)
                     terminal_opened = True
@@ -1041,9 +1095,14 @@ def setup_notebook_rtunnel(
             # Path C: File -> New -> Terminal
             if not terminal_opened:
                 try:
-                    lab_frame.get_by_role("menuitem", name="File").first.click(timeout=3000)
-                    lab_frame.get_by_role("menuitem", name="New").first.hover(timeout=3000)
-                    lab_frame.get_by_role("menuitem", name="Terminal").first.click(timeout=5000)
+                    try:
+                        lab_frame.get_by_role("menuitem", name="File").first.click(timeout=3000)
+                        lab_frame.get_by_role("menuitem", name="New").first.hover(timeout=3000)
+                        lab_frame.get_by_role("menuitem", name="Terminal").first.click(timeout=5000)
+                    except Exception:
+                        lab_frame.get_by_role("menuitem", name="文件").first.click(timeout=3000)
+                        lab_frame.get_by_role("menuitem", name="新建").first.hover(timeout=3000)
+                        lab_frame.get_by_role("menuitem", name="终端").first.click(timeout=5000)
                     terminal_opened = True
                 except Exception:
                     terminal_opened = False
@@ -1053,7 +1112,7 @@ def setup_notebook_rtunnel(
 
             # Ensure terminal tab is active before typing.
             try:
-                term_tab = lab_frame.locator("li.lm-TabBar-tab:has-text('Terminal')").first
+                term_tab = lab_frame.locator("li.lm-TabBar-tab:has-text('Terminal'), li.lm-TabBar-tab:has-text('终端')").first
                 if term_tab.count() > 0:
                     term_tab.click(timeout=2000)
                     page.wait_for_timeout(250)
@@ -1072,6 +1131,13 @@ def setup_notebook_rtunnel(
                 pass
 
             # Run setup via terminal commands.
+            # Make sure we are at a clean prompt (avoid being stuck in a multiline quote).
+            try:
+                page.keyboard.press("Control+C")
+                page.keyboard.press("Enter")
+                page.wait_for_timeout(100)
+            except Exception:
+                pass
 
             # Use the same nightly tarball as the local tunnel client.
             try:
@@ -1087,6 +1153,8 @@ def setup_notebook_rtunnel(
             pip_trusted_host = os.environ.get("INSPIRE_PIP_TRUSTED_HOST")
             apt_mirror_url = os.environ.get("INSPIRE_APT_MIRROR_URL")
             rtunnel_bin = os.environ.get("INSPIRE_RTUNNEL_BIN")
+            sshd_deb_dir = os.environ.get("INSPIRE_SSHD_DEB_DIR")
+            dropbear_deb_dir = os.environ.get("INSPIRE_DROPBEAR_DEB_DIR")
 
             if pip_index_url:
                 cmd_lines.append(
@@ -1121,8 +1189,17 @@ def setup_notebook_rtunnel(
             if rtunnel_bin:
                 cmd_lines.append(f"RTUNNEL_BIN_PATH={shlex.quote(rtunnel_bin)}")
                 cmd_lines.append(
-                    "if [ -x \"$RTUNNEL_BIN_PATH\" ]; then cp \"$RTUNNEL_BIN_PATH\" /tmp/rtunnel && chmod +x /tmp/rtunnel; fi"
+                    "if [ -f \"$RTUNNEL_BIN_PATH\" ]; then cp \"$RTUNNEL_BIN_PATH\" /tmp/rtunnel && chmod +x /tmp/rtunnel; fi"
                 )
+
+            if sshd_deb_dir:
+                cmd_lines.append(f"SSHD_DEB_DIR={shlex.quote(sshd_deb_dir)}")
+                cmd_lines.append(
+                    "if [ -d \"$SSHD_DEB_DIR\" ]; then for _i in 1 2 3; do dpkg -i \"$SSHD_DEB_DIR\"/*.deb && break; done; ldconfig >/dev/null 2>&1 || true; fi"
+                )
+
+            if dropbear_deb_dir:
+                cmd_lines.append(f"DROPBEAR_DEB_DIR={shlex.quote(dropbear_deb_dir)}")
 
             if ssh_public_key:
                 cmd_lines.extend(
@@ -1135,25 +1212,51 @@ def setup_notebook_rtunnel(
                     ]
                 )
 
-            cmd_lines.extend(
-                [
+            # Use the setup script from shared path if dropbear is requested
+            if dropbear_deb_dir:
+                setup_script = os.environ.get(
+                    "INSPIRE_SETUP_SCRIPT",
+                    "/inspire/hdd/global_user/gongjingjing-25039/ytchen/tools/setup_ssh.sh",
+                )
+                rtunnel_bin_arg = rtunnel_bin or "/tmp/rtunnel"
+                cmd_lines.extend(
+                    [
+                        f"PORT={port}",
+                        f"SSH_PORT={ssh_port}",
+                        "echo '>>> Running SSH setup script...'",
+                        f"bash {shlex.quote(setup_script)} {shlex.quote(dropbear_deb_dir)} {shlex.quote(rtunnel_bin_arg)} \"$SSH_PORT\" \"$PORT\" >/tmp/setup_ssh.log 2>&1; tail -80 /tmp/setup_ssh.log; echo '>>> dropbear log'; tail -60 /tmp/dropbear.log 2>/dev/null || true; echo '>>> rtunnel log'; tail -60 /tmp/rtunnel-server.log 2>/dev/null || true",
+                        "sleep 2",
+                        "echo '>>> Setup script done'",
+                    ]
+                )
+            else:
+                # OpenSSH fallback
+                cmd_lines.extend([
                     f"RTUNNEL_URL={RTUNNEL_DOWNLOAD_URL!r}",
                     f"PORT={port}",
                     f"SSH_PORT={ssh_port}",
+                    "if [ ! -x /usr/sbin/sshd ] && [ -z \"${SSHD_DEB_DIR:-}\" ]; then export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq openssh-server; fi",
+                    "pkill -f 'sshd -p' 2>/dev/null || true",
+                    "if [ -x /usr/sbin/sshd ]; then mkdir -p /run/sshd && chmod 0755 /run/sshd; ssh-keygen -A >/dev/null 2>&1 || true; /usr/sbin/sshd -p \"$SSH_PORT\" -o ListenAddress=127.0.0.1 -o PermitRootLogin=yes -o PasswordAuthentication=no -o PubkeyAuthentication=yes >/dev/null 2>&1 & fi",
+                    # rtunnel for OpenSSH
                     "RTUNNEL_BIN=/tmp/rtunnel",
-                    "if [ -n \"${RTUNNEL_BIN_PATH:-}\" ] && [ -x \"$RTUNNEL_BIN_PATH\" ]; then RTUNNEL_BIN=\"$RTUNNEL_BIN_PATH\"; fi",
-                    "if [ ! -x /usr/sbin/sshd ]; then export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq openssh-server; fi",
-                    "pkill -f '/tmp/rtunnel' 2>/dev/null || true; pkill -f 'sshd -p' 2>/dev/null || true",
-                    "if [ -x /usr/sbin/sshd ]; then mkdir -p /run/sshd; ssh-keygen -A >/dev/null 2>&1; /usr/sbin/sshd -p \"$SSH_PORT\" -E /tmp/sshd.log -o ListenAddress=127.0.0.1 -o PermitRootLogin=yes -o PasswordAuthentication=no -o PubkeyAuthentication=yes >/dev/null 2>&1 & fi",
-                    "if [ ! -x \"$RTUNNEL_BIN\" ]; then rm -rf /tmp/rtunnel.d /tmp/rtunnel.tgz; mkdir -p /tmp/rtunnel.d; curl -fsSL \"$RTUNNEL_URL\" -o /tmp/rtunnel.tgz || echo 'WARN: rtunnel download failed'; tar -xzf /tmp/rtunnel.tgz -C /tmp/rtunnel.d 2>/dev/null || true; rtbin=$(find /tmp/rtunnel.d -maxdepth 4 -type f -name '*rtunnel*' 2>/dev/null | head -n 1); if [ -n \"$rtbin\" ]; then cp \"$rtbin\" /tmp/rtunnel && chmod +x /tmp/rtunnel; fi; RTUNNEL_BIN=/tmp/rtunnel; fi",
+                    "if [ -n \"${RTUNNEL_BIN_PATH:-}\" ] && [ -x \"$RTUNNEL_BIN_PATH\" ]; then cp \"$RTUNNEL_BIN_PATH\" /tmp/rtunnel && chmod +x /tmp/rtunnel; fi",
+                    "pkill -f \"rtunnel.*:$PORT\" 2>/dev/null || true",
+                    f"if [ ! -x \"$RTUNNEL_BIN\" ]; then curl -fsSL '{RTUNNEL_DOWNLOAD_URL}' -o /tmp/rtunnel.tgz && tar -xzf /tmp/rtunnel.tgz -C /tmp && chmod +x /tmp/rtunnel 2>/dev/null; fi",
                     "nohup \"$RTUNNEL_BIN\" \"127.0.0.1:$SSH_PORT\" \"0.0.0.0:$PORT\" >/tmp/rtunnel-server.log 2>&1 &",
-                ]
-            )
+                ])
 
             for line in cmd_lines:
-                page.keyboard.type(line, delay=5)
+                page.keyboard.type(line, delay=8)
                 page.keyboard.press("Enter")
-                page.wait_for_timeout(80)
+                page.wait_for_timeout(300)
+
+            # Wait for script to complete and take debug screenshot
+            page.wait_for_timeout(5000)
+            try:
+                page.screenshot(path="/tmp/notebook_terminal_debug.png")
+            except Exception:
+                pass
 
             # Derive proxy URL (prefer VSCode/code-server proxy).
             proxy_url = None
