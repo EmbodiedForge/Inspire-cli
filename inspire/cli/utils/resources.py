@@ -1,19 +1,19 @@
 """Resource availability utilities for smart GPU allocation.
 
-Uses the /openapi/v1/cluster_nodes/list API to get real-time GPU availability
-across compute groups.
+Uses browser API endpoints to get accurate GPU availability across
+compute groups (matching the web UI).
 """
 
 from __future__ import annotations
 
+import os
 import time
-import sys
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 from enum import Enum
 
-from inspire.cli.utils.auth import AuthManager
 from inspire.cli.utils.config import Config
+from inspire.cli.utils.web_session import get_web_session, fetch_workspace_availability
 
 
 class GPUType(Enum):
@@ -73,17 +73,17 @@ def _normalize_gpu_type(display_name: str) -> str:
 
 
 def fetch_resource_availability(
-    config: Config,
+    config: Optional[Config] = None,
     known_only: bool = False,
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> list[ComputeGroupAvailability]:
-    """Fetch real-time GPU availability from all compute groups.
+    """Fetch real-time GPU availability from compute groups.
 
-    Iterates through paginated results from /openapi/v1/cluster_nodes/list,
-    groups nodes by logic_compute_group_id, and calculates availability.
+    Uses the browser API workspace node endpoint to compute per-node
+    availability and free GPU counts.
 
     Args:
-        config: CLI configuration
+        config: Optional CLI configuration (used for base_url override)
         known_only: If True, only return known compute groups (for auto-selection)
         progress_callback: Optional callback(fetched, total) for progress updates
 
@@ -98,90 +98,75 @@ def fetch_resource_availability(
         if cache_key in _availability_cache:
             return _availability_cache[cache_key]
 
-    api = AuthManager.get_api(config)
+    base_url = None
+    if config is not None:
+        base_url = getattr(config, "base_url", None)
+    if not base_url:
+        base_url = os.environ.get("INSPIRE_BASE_URL", "https://qz.sii.edu.cn")
 
-    # Fetch nodes from API
-    # Note: API requires 0.6s between requests and has rate limiting.
-    # Use larger page size (API allows up to 1000) to reduce request count.
+    session = get_web_session(require_workspace=True)
+    nodes = fetch_workspace_availability(session, base_url=base_url)
 
     groups: dict[str, dict] = {}
+    total = len(nodes)
 
-    page_num = 1
-    page_size = 1000
-    fetched = 0
-
-    while True:
-        result = api.list_cluster_nodes(
-            page_num=page_num,
-            page_size=page_size,
-            resource_pool=None,
-        )
-
-        nodes = result.get("data", {}).get("nodes", [])
-        if not nodes:
-            break
-
-        for node in nodes:
-            # Only include GPU nodes
-            if node.get("gpu_count", 0) == 0:
-                continue
-
-            group_id = node.get("logic_compute_group_id", "")
-            if not group_id:
-                continue
-
-            # Skip if known_only and group is not known
-            if known_only and group_id not in KNOWN_COMPUTE_GROUPS:
-                continue
-
-            if group_id not in groups:
-                gpu_info = node.get("gpu_info", {})
-                gpu_display = gpu_info.get("gpu_type_display", "Unknown")
-                gpu_type = _normalize_gpu_type(gpu_display)
-
-                groups[group_id] = {
-                    "group_id": group_id,
-                    "group_name": node.get("logic_compute_group_name", "Unknown"),
-                    "gpu_type": gpu_type,
-                    "gpu_per_node": node.get("gpu_count", 0),
-                    "total_nodes": 0,
-                    "ready_nodes": 0,
-                    "free_nodes": 0,
-                    "online_nodes": 0,
-                    "backup_nodes": 0,
-                    "fault_nodes": 0,
-                }
-
-            groups[group_id]["total_nodes"] += 1
-
-            # Count by resource_pool status
-            resource_pool = node.get("resource_pool", "unknown")
-            if resource_pool == "online":
-                groups[group_id]["online_nodes"] += 1
-            elif resource_pool == "backup":
-                groups[group_id]["backup_nodes"] += 1
-            elif resource_pool == "fault":
-                groups[group_id]["fault_nodes"] += 1
-
-            if node.get("status") == "READY":
-                groups[group_id]["ready_nodes"] += 1
-
-                task_list = node.get("task_list", [])
-                if not task_list or len(task_list) == 0:
-                    groups[group_id]["free_nodes"] += 1
-
-        fetched += len(nodes)
-        total = result.get("data", {}).get("total", 0)
-
-        # Report progress
+    for idx, node in enumerate(nodes):
         if progress_callback and total:
-            progress_callback(fetched, total)
+            progress_callback(idx + 1, total)
 
-        if total and fetched >= total:
-            break
+        # Only include GPU nodes
+        if node.get("gpu_count", 0) == 0:
+            continue
 
-        page_num += 1
-        time.sleep(0.7)
+        group_id = node.get("logic_compute_group_id", "")
+        if not group_id:
+            continue
+
+        # Skip if known_only and group is not known
+        if known_only and group_id not in KNOWN_COMPUTE_GROUPS:
+            continue
+
+        if group_id not in groups:
+            gpu_info = node.get("gpu_info", {})
+            gpu_display = gpu_info.get("gpu_type_display", "Unknown")
+            gpu_type = _normalize_gpu_type(gpu_display)
+
+            group_name = node.get("logic_compute_group_name", "")
+            if not group_name and group_id in KNOWN_COMPUTE_GROUPS:
+                group_name = KNOWN_COMPUTE_GROUPS[group_id]
+            if not group_name:
+                group_name = "Unknown"
+
+            groups[group_id] = {
+                "group_id": group_id,
+                "group_name": group_name,
+                "gpu_type": gpu_type,
+                "gpu_per_node": node.get("gpu_count", 0),
+                "total_nodes": 0,
+                "ready_nodes": 0,
+                "free_nodes": 0,
+                "online_nodes": 0,
+                "backup_nodes": 0,
+                "fault_nodes": 0,
+            }
+
+        groups[group_id]["total_nodes"] += 1
+
+        # Count by resource_pool status
+        resource_pool = str(node.get("resource_pool", "unknown")).lower()
+        if resource_pool == "online":
+            groups[group_id]["online_nodes"] += 1
+        elif resource_pool == "backup":
+            groups[group_id]["backup_nodes"] += 1
+        elif resource_pool == "fault":
+            groups[group_id]["fault_nodes"] += 1
+
+        if str(node.get("status", "")).upper() == "READY":
+            groups[group_id]["ready_nodes"] += 1
+
+            task_list = node.get("task_list", [])
+            if not task_list or len(task_list) == 0:
+                groups[group_id]["free_nodes"] += 1
 
     # Convert to ComputeGroupAvailability objects
     availability_list = []

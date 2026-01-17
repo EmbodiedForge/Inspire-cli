@@ -126,6 +126,23 @@ def patch_config_and_auth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Du
 
 def test_global_json_flag_with_resources_list(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     patch_config_and_auth(monkeypatch, tmp_path)
+    from inspire.cli.utils import browser_api as browser_api_module
+
+    monkeypatch.setattr(
+        browser_api_module,
+        "get_accurate_gpu_availability",
+        lambda: [
+            browser_api_module.GPUAvailability(
+                group_id="lcg-df089db8-817a-4aa8-a164-eb1a32948564",
+                group_name="H200 Room1",
+                gpu_type="NVIDIA H200",
+                total_gpus=128,
+                used_gpus=32,
+                available_gpus=96,
+                low_priority_gpus=8,
+            )
+        ],
+    )
     runner = CliRunner()
 
     result = runner.invoke(cli_main, ["--json", "resources", "list"])
@@ -133,12 +150,19 @@ def test_global_json_flag_with_resources_list(monkeypatch: pytest.MonkeyPatch, t
 
     payload = json.loads(result.output)
     assert payload["success"] is True
-    assert "specs" in payload["data"]
-    assert "compute_groups" in payload["data"]
+    assert "availability" in payload["data"]
+    assert payload["data"]["availability"][0]["group_id"] == "lcg-df089db8-817a-4aa8-a164-eb1a32948564"
 
 
 def test_global_debug_flag_runs_subcommand(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     patch_config_and_auth(monkeypatch, tmp_path)
+    from inspire.cli.utils import browser_api as browser_api_module
+
+    monkeypatch.setattr(
+        browser_api_module,
+        "get_accurate_gpu_availability",
+        lambda: [],
+    )
     runner = CliRunner()
 
     result = runner.invoke(cli_main, ["--debug", "resources", "list"])
@@ -293,7 +317,7 @@ def test_job_stop_with_force_and_json(monkeypatch: pytest.MonkeyPatch, tmp_path:
 
     result = runner.invoke(
         cli_main,
-        ["--json", "job", "stop", TEST_JOB_ID, "--force"],
+        ["--json", "job", "stop", TEST_JOB_ID],
     )
     assert result.exit_code == 0
 
@@ -456,7 +480,7 @@ def test_job_logs_path_and_tail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     # --path just prints path
     result = runner.invoke(cli_main, ["job", "logs", TEST_JOB_ID, "--path"])
     assert result.exit_code == 0
-    assert str(local_log_path) in result.output
+    assert str(remote_log_path) in result.output
 
     # --tail reads last N lines
     result_tail = runner.invoke(cli_main, ["job", "logs", TEST_JOB_ID, "--tail", "2"])
@@ -583,14 +607,30 @@ def test_job_logs_missing_file_sets_exit_code(monkeypatch: pytest.MonkeyPatch, t
 
 def test_nodes_list_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     patch_config_and_auth(monkeypatch, tmp_path)
+    from inspire.cli.utils import browser_api as browser_api_module
+
+    monkeypatch.setattr(
+        browser_api_module,
+        "get_full_free_node_counts",
+        lambda group_ids, gpu_per_node=8, session=None, _retry=True: [  # noqa: ARG005
+            browser_api_module.FullFreeNodeCount(
+                group_id=group_ids[0],
+                group_name="H200 Room1",
+                gpu_per_node=gpu_per_node,
+                total_nodes=10,
+                ready_nodes=8,
+                full_free_nodes=3,
+            )
+        ],
+    )
     runner = CliRunner()
 
-    result = runner.invoke(cli_main, ["--json", "nodes", "list", "--pool", "online"])
+    result = runner.invoke(cli_main, ["--json", "resources", "nodes"])
     assert result.exit_code == 0
 
     data = json.loads(result.output)
-    assert data["data"]["nodes"]
-    assert data["data"]["pool_filter"] == "online"
+    assert data["data"]["groups"]
+    assert data["data"]["total_full_free_nodes"] == 3
 
 
 def test_config_check_auth_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):

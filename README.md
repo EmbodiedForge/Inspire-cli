@@ -130,13 +130,13 @@ inspire run "bash train.sh" \
 ### Resource Discovery
 
 ```bash
-# List GPU availability (OpenAPI - global view)
+# List GPU availability (browser API, accurate)
 inspire resources list
 
 # Watch availability continuously
 inspire resources list --watch
 
-# Workspace-scoped availability (matches browser view)
+# Node-level availability (workspace-scoped)
 inspire resources list --workspace
 
 # Include all compute groups
@@ -145,7 +145,7 @@ inspire resources list --all
 
 | Option | Description |
 |--------|-------------|
-| `--workspace, -ws` | Use browser API for workspace-scoped view (requires INSPIRE_USERNAME/PASSWORD) |
+| `--workspace, -ws` | Show per-node availability (workspace-scoped) |
 | `--watch, -w` | Continuously watch availability (refreshes every 30s) |
 | `--interval, -i` | Watch refresh interval in seconds (default: 30) |
 | `--all` | Show all accessible compute groups |

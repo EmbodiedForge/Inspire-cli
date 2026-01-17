@@ -15,16 +15,12 @@ from inspire.cli.context import (
     EXIT_AUTH_ERROR,
     EXIT_API_ERROR,
 )
-from inspire.cli.utils.config import Config, ConfigError
-from inspire.cli.utils.auth import AuthManager, AuthenticationError
 from inspire.cli.utils.resources import (
     fetch_resource_availability,
     clear_availability_cache,
-    ComputeGroupAvailability,
-    _normalize_gpu_type,
     KNOWN_COMPUTE_GROUPS,
 )
-from inspire.cli.utils.web_session import get_web_session, fetch_workspace_availability
+from inspire.cli.utils.web_session import SessionExpiredError, get_web_session
 from inspire.cli.formatters import json_formatter, human_formatter
 
 
@@ -63,13 +59,13 @@ def resources():
     "--workspace",
     "-ws",
     is_flag=True,
-    help="Use browser API to show workspace-scoped availability (requires INSPIRE_USERNAME/PASSWORD)",
+    help="Show per-node availability (workspace-scoped, browser API)",
 )
 @click.option(
     "--global",
     "use_global",
     is_flag=True,
-    help="Use OpenAPI for global view (less accurate but faster)",
+    help="Deprecated: alias for --workspace (OpenAPI view removed)",
 )
 @pass_context
 def list_resources(
@@ -84,13 +80,12 @@ def list_resources(
     """List GPU availability across compute groups.
 
     By default, shows accurate real-time GPU usage via browser API.
-    Use --global for faster OpenAPI-based view (less accurate).
+    Use --workspace for per-node availability (free/ready nodes).
 
     \b
     Examples:
         inspire resources list              # Accurate GPU usage (default)
-        inspire resources list --global     # Global OpenAPI view (faster)
-        inspire resources list --workspace  # Workspace-scoped view
+        inspire resources list --workspace  # Node-level availability
         inspire resources list --all        # Include all compute groups
         inspire resources list --watch      # Watch mode
     """
@@ -105,73 +100,18 @@ def list_resources(
         _watch_resources(ctx, show_all, interval, workspace, use_global)
         return
 
-    # --workspace: browser API for workspace-scoped view
-    if workspace:
-        _list_workspace_resources(ctx, show_all)
-        return
-
-    # --global: OpenAPI for global view (faster but less accurate)
-    if use_global:
-        click.echo(
-            "Warning: --global uses OpenAPI which provides less accurate GPU availability. "
-            "Consider using the default (browser API) for accurate data.",
-            err=True,
-        )
-        _list_global_resources(ctx, show_all, no_cache)
+    # --workspace: browser API per-node view
+    if workspace or use_global:
+        if use_global and not workspace:
+            click.echo(
+                "Note: --global is deprecated; showing workspace node availability instead.",
+                err=True,
+            )
+        _list_workspace_resources(ctx, show_all, no_cache)
         return
 
     # Default: accurate browser API
-    _list_accurate_resources(ctx)
-
-
-def _list_global_resources(ctx: Context, show_all: bool, no_cache: bool) -> None:
-    """List global GPU availability using OpenAPI (faster but less accurate)."""
-    try:
-        config = Config.from_env()
-
-        # Clear cache if requested
-        if no_cache:
-            clear_availability_cache()
-
-        # Fetch availability
-        availability = fetch_resource_availability(
-            config,
-            known_only=not show_all,
-        )
-
-        if not availability:
-            if ctx.json_output:
-                click.echo(json_formatter.format_json({"availability": []}))
-            else:
-                click.echo(human_formatter.format_error("No GPU resources found"))
-            return
-
-        if ctx.json_output:
-            # Format as JSON
-            output = [
-                {
-                    "group_id": a.group_id,
-                    "group_name": a.group_name,
-                    "gpu_type": a.gpu_type,
-                    "gpus_per_node": a.gpu_per_node,
-                    "total_nodes": a.total_nodes,
-                    "ready_nodes": a.ready_nodes,
-                    "free_nodes": a.free_nodes,
-                    "free_gpus": a.free_gpus,
-                }
-                for a in availability
-            ]
-            click.echo(json_formatter.format_json({"availability": output}))
-        else:
-            # Format as table
-            _format_availability_table(availability)
-
-    except ConfigError as e:
-        _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
-    except AuthenticationError as e:
-        _handle_error(ctx, "AuthenticationError", str(e), EXIT_AUTH_ERROR)
-    except Exception as e:
-        _handle_error(ctx, "APIError", str(e), EXIT_API_ERROR)
+    _list_accurate_resources(ctx, show_all)
 
 
 @resources.command("nodes")
@@ -257,13 +197,13 @@ def list_nodes(ctx: Context, group: str):
         click.echo("Full Free = READY nodes with 8 GPUs and no running tasks")
         click.echo("")
 
-    except AuthenticationError as e:
+    except (SessionExpiredError, ValueError) as e:
         _handle_error(ctx, "AuthenticationError", str(e), EXIT_AUTH_ERROR)
     except Exception as e:
         _handle_error(ctx, "APIError", str(e), EXIT_API_ERROR)
 
 
-def _list_accurate_resources(ctx: Context) -> None:
+def _list_accurate_resources(ctx: Context, show_all: bool) -> None:
     """List accurate GPU availability using browser API.
 
     Uses /api/v1/compute_resources/logic_compute_groups/{id} to get real-time
@@ -274,6 +214,12 @@ def _list_accurate_resources(ctx: Context) -> None:
 
         # Get accurate GPU stats
         availability = get_accurate_gpu_availability()
+
+        if not show_all:
+            availability = [a for a in availability if a.group_id in KNOWN_COMPUTE_GROUPS]
+            for entry in availability:
+                if not entry.group_name:
+                    entry.group_name = KNOWN_COMPUTE_GROUPS.get(entry.group_id, entry.group_name)
 
         if not availability:
             if ctx.json_output:
@@ -301,102 +247,50 @@ def _list_accurate_resources(ctx: Context) -> None:
             # Format as table
             _format_accurate_availability_table(availability)
 
+    except (SessionExpiredError, ValueError) as e:
+        _handle_error(ctx, "AuthenticationError", str(e), EXIT_AUTH_ERROR)
     except Exception as e:
         _handle_error(ctx, "APIError", str(e), EXIT_API_ERROR)
 
 
-def _list_workspace_resources(ctx: Context, show_all: bool) -> None:
+def _list_workspace_resources(ctx: Context, show_all: bool, no_cache: bool) -> None:
     """List workspace-specific GPU availability using browser API.
 
     In workspace mode, we show all accessible groups by default since the
     workspace API already scopes to the user's accessible resources.
     """
     try:
-        # Get web session (logs in via Playwright if needed)
-        # Require workspace_id, will force re-login if missing
-        session = get_web_session(require_workspace=True)
+        if no_cache:
+            clear_availability_cache()
 
-        if not session.workspace_id:
-            click.echo(human_formatter.format_error(
-                "Failed to get workspace_id. Please try again."
-            ), err=True)
-            sys.exit(EXIT_AUTH_ERROR)
+        availability = fetch_resource_availability(
+            known_only=not show_all,
+        )
 
-        # Fetch workspace nodes
-        nodes = fetch_workspace_availability(session)
-
-        if not nodes:
+        if not availability:
             click.echo(human_formatter.format_error("No GPU resources found in your workspace"))
             return
 
-        # Group by logic_compute_group_id
-        # In workspace mode, show all groups (API already scopes to workspace)
-        groups: dict[str, dict] = {}
-        for node in nodes:
-            if node.get("gpu_count", 0) == 0:
-                continue
-
-            group_id = node.get("logic_compute_group_id", "")
-            if not group_id:
-                continue
-
-            if group_id not in groups:
-                gpu_info = node.get("gpu_info", {})
-                gpu_display = gpu_info.get("gpu_type_display", "Unknown")
-                gpu_type = _normalize_gpu_type(gpu_display)
-
-                # Use known group name if available, otherwise fall back to API name
-                group_name = node.get("logic_compute_group_name", "")
-                if not group_name and group_id in KNOWN_COMPUTE_GROUPS:
-                    group_name = KNOWN_COMPUTE_GROUPS[group_id]
-                if not group_name:
-                    group_name = "Unknown"
-
-                groups[group_id] = {
-                    "group_id": group_id,
-                    "group_name": group_name,
-                    "gpu_type": gpu_type,
-                    "gpu_per_node": node.get("gpu_count", 0),
-                    "total_nodes": 0,
-                    "ready_nodes": 0,
-                    "free_nodes": 0,
+        if ctx.json_output:
+            output = [
+                {
+                    "group_id": a.group_id,
+                    "group_name": a.group_name,
+                    "gpu_type": a.gpu_type,
+                    "gpus_per_node": a.gpu_per_node,
+                    "total_nodes": a.total_nodes,
+                    "ready_nodes": a.ready_nodes,
+                    "free_nodes": a.free_nodes,
+                    "free_gpus": a.free_gpus,
                 }
+                for a in availability
+            ]
+            click.echo(json_formatter.format_json({"availability": output}))
+            return
 
-            groups[group_id]["total_nodes"] += 1
+        _format_availability_table(availability, workspace_mode=True)
 
-            if node.get("status") == "READY":
-                groups[group_id]["ready_nodes"] += 1
-
-                task_list = node.get("task_list", [])
-                if not task_list or len(task_list) == 0:
-                    groups[group_id]["free_nodes"] += 1
-
-        # Convert to ComputeGroupAvailability
-        availability_list = []
-        for group_data in groups.values():
-            free_gpus = group_data["free_nodes"] * group_data["gpu_per_node"]
-            availability_list.append(
-                ComputeGroupAvailability(
-                    group_id=group_data["group_id"],
-                    group_name=group_data["group_name"],
-                    gpu_type=group_data["gpu_type"],
-                    gpu_per_node=group_data["gpu_per_node"],
-                    total_nodes=group_data["total_nodes"],
-                    ready_nodes=group_data["ready_nodes"],
-                    free_nodes=group_data["free_nodes"],
-                    free_gpus=free_gpus,
-                )
-            )
-
-        # Sort by free_gpus descending
-        availability_list.sort(key=lambda x: x.free_gpus, reverse=True)
-
-        # Add workspace indicator
-        _format_availability_table(availability_list, workspace_mode=True)
-
-    except ConfigError as e:
-        _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
-    except AuthenticationError as e:
+    except (SessionExpiredError, ValueError) as e:
         _handle_error(ctx, "AuthenticationError", str(e), EXIT_AUTH_ERROR)
     except Exception as e:
         _handle_error(ctx, "APIError", str(e), EXIT_API_ERROR)
@@ -417,37 +311,17 @@ def _watch_resources(
     original_level = api_logger.level
     api_logger.setLevel(logging.CRITICAL)
 
-    # Determine which API to use
-    # Priority: workspace > global > accurate (default)
-    use_workspace = workspace
-    use_accurate = not use_global and not workspace
-    web_session = None
+    # Determine which view to use
+    mode = "nodes" if workspace or use_global else "accurate"
 
-    if use_workspace:
-        try:
-            web_session = get_web_session(require_workspace=True)
-            if not web_session.workspace_id:
-                click.echo(human_formatter.format_error(
-                    "Failed to get workspace_id. Login failed or session expired."
-                ), err=True)
-                sys.exit(EXIT_AUTH_ERROR)
-        except Exception as e:
-            click.echo(human_formatter.format_error(f"Failed to get web session: {e}"), err=True)
-            sys.exit(EXIT_AUTH_ERROR)
-    elif use_accurate:
-        try:
-            # Pre-authenticate for accurate mode
-            from inspire.cli.utils.browser_api import get_accurate_gpu_availability
-            web_session = get_web_session()
-        except Exception as e:
-            click.echo(human_formatter.format_error(f"Failed to get web session: {e}"), err=True)
-            sys.exit(EXIT_AUTH_ERROR)
-    else:
-        try:
-            config = Config.from_env()
-        except ConfigError as e:
-            click.echo(human_formatter.format_error(str(e)), err=True)
-            sys.exit(EXIT_CONFIG_ERROR)
+    try:
+        if mode == "nodes":
+            get_web_session(require_workspace=True)
+        else:
+            get_web_session()
+    except Exception as e:
+        click.echo(human_formatter.format_error(f"Failed to get web session: {e}"), err=True)
+        sys.exit(EXIT_AUTH_ERROR)
 
     def _progress_bar(current: int, total: int, width: int = 20) -> str:
         """Generate a cute progress bar."""
@@ -459,13 +333,8 @@ def _watch_resources(
     # State for progress updates
     progress_state = {"fetched": 0, "total": 0}
 
-    def _render_display(
-        availability: list,
-        phase: str,
-        timestamp: str,
-        ws_mode: bool,
-    ) -> None:
-        """Clear screen and render availability table."""
+    def _render_nodes_display(availability: list, phase: str, timestamp: str) -> None:
+        """Render node-level availability table."""
         os.system('clear')
 
         if phase == "fetching":
@@ -478,15 +347,13 @@ def _watch_resources(
                 click.echo(f"🔄 [{bar}] Fetching availability...\n")
         else:
             bar = _progress_bar(1, 1)
-            scope = "(Workspace)" if ws_mode else "(Global)"
-            click.echo(f"✅ [{bar}] Updated at {timestamp} {scope} (interval: {interval}s)\n")
+            click.echo(f"✅ [{bar}] Updated at {timestamp} (Workspace) (interval: {interval}s)\n")
 
         if not availability:
             if phase != "fetching":
                 click.echo("No GPU resources found")
             return
 
-        # Compact table with fixed-width columns
         click.echo("─" * 60)
         click.echo(f"{'GPU':<6} {'Location':<24} {'Ready':>8} {'Free':>8} {'GPUs':>8}")
         click.echo("─" * 60)
@@ -498,7 +365,6 @@ def _watch_resources(
             free_gpus = a.free_gpus
             total_free += free_gpus
 
-            # Status indicator
             if free_gpus >= 64:
                 indicator = "🟢"
             elif free_gpus >= 16:
@@ -517,80 +383,81 @@ def _watch_resources(
         click.echo("")
         click.echo("Ctrl+C to stop")
 
+    def _render_accurate_display(availability: list, phase: str, timestamp: str) -> None:
+        """Render accurate GPU availability table."""
+        os.system('clear')
+
+        if phase == "fetching":
+            click.echo("🔄 Fetching accurate availability...\n")
+        else:
+            click.echo(f"✅ Updated at {timestamp} (Accurate) (interval: {interval}s)\n")
+
+        if not availability:
+            if phase != "fetching":
+                click.echo("No GPU resources found")
+            return
+
+        lines = [
+            "─" * 95,
+            f"{'GPU Type':<22} {'Compute Group':<25} {'Available':>10} {'Used':>8} {'Low Pri':>8} {'Total':>8}",
+            "─" * 95,
+        ]
+
+        sorted_avail = sorted(availability, key=lambda x: x.available_gpus, reverse=True)
+
+        total_available = 0
+        total_used = 0
+        total_low_pri = 0
+        total_gpus = 0
+
+        for a in sorted_avail:
+            gpu_type = a.gpu_type[:21]
+            location = a.group_name[:24]
+            free_gpus = a.available_gpus
+
+            if free_gpus >= 100:
+                status = "✓"
+            elif free_gpus >= 32:
+                status = "○"
+            elif free_gpus >= 8:
+                status = "◐"
+            elif free_gpus > 0:
+                status = "⚠"
+            else:
+                status = "✗"
+
+            lines.append(
+                f"{gpu_type:<22} {location:<25} {a.available_gpus:>10} {a.used_gpus:>8} {a.low_priority_gpus:>8} {a.total_gpus:>8} {status}"
+            )
+
+            total_available += a.available_gpus
+            total_used += a.used_gpus
+            total_low_pri += a.low_priority_gpus
+            total_gpus += a.total_gpus
+
+        lines.append("─" * 95)
+        lines.append(
+            f"{'TOTAL':<22} {'':<25} {total_available:>10} {total_used:>8} {total_low_pri:>8} {total_gpus:>8}"
+        )
+        lines.append("")
+        lines.append("Ctrl+C to stop")
+
+        click.echo("\n".join(lines))
+
+    def _render_display(availability: list, phase: str, timestamp: str) -> None:
+        if mode == "nodes":
+            _render_nodes_display(availability, phase, timestamp)
+        else:
+            _render_accurate_display(availability, phase, timestamp)
+
     def on_progress(fetched: int, total: int) -> None:
         """Callback for fetch progress updates."""
+        if mode != "nodes":
+            return
         progress_state["fetched"] = fetched
         progress_state["total"] = total
         now = datetime.now().strftime("%H:%M:%S")
-        _render_display(availability, "fetching", now, use_workspace)
-
-    def _fetch_workspace_availability() -> list:
-        """Fetch and process workspace availability."""
-        nodes = fetch_workspace_availability(web_session)
-        if not nodes:
-            return []
-
-        # Group by logic_compute_group_id
-        # In workspace mode, show all groups (API already scopes to workspace)
-        groups: dict[str, dict] = {}
-        for node in nodes:
-            if node.get("gpu_count", 0) == 0:
-                continue
-
-            group_id = node.get("logic_compute_group_id", "")
-            if not group_id:
-                continue
-
-            if group_id not in groups:
-                gpu_info = node.get("gpu_info", {})
-                gpu_display = gpu_info.get("gpu_type_display", "Unknown")
-                gpu_type = _normalize_gpu_type(gpu_display)
-
-                # Use known group name if available, otherwise fall back to API name
-                group_name = node.get("logic_compute_group_name", "")
-                if not group_name and group_id in KNOWN_COMPUTE_GROUPS:
-                    group_name = KNOWN_COMPUTE_GROUPS[group_id]
-                if not group_name:
-                    group_name = "Unknown"
-
-                groups[group_id] = {
-                    "group_id": group_id,
-                    "group_name": group_name,
-                    "gpu_type": gpu_type,
-                    "gpu_per_node": node.get("gpu_count", 0),
-                    "total_nodes": 0,
-                    "ready_nodes": 0,
-                    "free_nodes": 0,
-                }
-
-            groups[group_id]["total_nodes"] += 1
-
-            if node.get("status") == "READY":
-                groups[group_id]["ready_nodes"] += 1
-
-                task_list = node.get("task_list", [])
-                if not task_list or len(task_list) == 0:
-                    groups[group_id]["free_nodes"] += 1
-
-        # Convert to ComputeGroupAvailability
-        availability_list = []
-        for group_data in groups.values():
-            free_gpus = group_data["free_nodes"] * group_data["gpu_per_node"]
-            availability_list.append(
-                ComputeGroupAvailability(
-                    group_id=group_data["group_id"],
-                    group_name=group_data["group_name"],
-                    gpu_type=group_data["gpu_type"],
-                    gpu_per_node=group_data["gpu_per_node"],
-                    total_nodes=group_data["total_nodes"],
-                    ready_nodes=group_data["ready_nodes"],
-                    free_nodes=group_data["free_nodes"],
-                    free_gpus=free_gpus,
-                )
-            )
-
-        availability_list.sort(key=lambda x: x.free_gpus, reverse=True)
-        return availability_list
+        _render_display(availability, "fetching", now)
 
     try:
         availability: list = []
@@ -601,20 +468,25 @@ def _watch_resources(
 
             # Show initial fetching state
             now = datetime.now().strftime("%H:%M:%S")
-            _render_display(availability, "fetching", now, use_workspace)
+            _render_display(availability, "fetching", now)
 
             try:
-                if use_workspace:
-                    availability = _fetch_workspace_availability()
-                else:
-                    # Clear cache to get fresh data
+                if mode == "nodes":
                     clear_availability_cache()
                     availability = fetch_resource_availability(
-                        config,
                         known_only=not show_all,
                         progress_callback=on_progress,
                     )
-            except AuthenticationError as e:
+                else:
+                    from inspire.cli.utils.browser_api import get_accurate_gpu_availability
+
+                    availability = get_accurate_gpu_availability()
+                    if not show_all:
+                        availability = [a for a in availability if a.group_id in KNOWN_COMPUTE_GROUPS]
+                        for entry in availability:
+                            if not entry.group_name:
+                                entry.group_name = KNOWN_COMPUTE_GROUPS.get(entry.group_id, entry.group_name)
+            except (SessionExpiredError, ValueError) as e:
                 api_logger.setLevel(original_level)
                 click.echo(human_formatter.format_error(str(e)), err=True)
                 sys.exit(EXIT_AUTH_ERROR)
@@ -628,7 +500,7 @@ def _watch_resources(
 
             # Show updated state
             now = datetime.now().strftime("%H:%M:%S")
-            _render_display(availability, "done", now, use_workspace)
+            _render_display(availability, "done", now)
 
             # Wait for next refresh
             time.sleep(interval)
