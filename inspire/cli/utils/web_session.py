@@ -359,116 +359,80 @@ def login_with_playwright(
         # Give some time for any redirects to settle
         page.wait_for_timeout(2000)
 
-        # Try different login form selectors (CAS vs Keycloak vs qz.sii.edu.cn)
-        # The login page may redirect to CAS which has different form fields
-        selectors_to_try = [
-            ('input[placeholder="Username/alias"]', 'input[placeholder="Password"]'),
-            ('input[name="username"]', 'input[name="password"]'),
-            ('input#username', 'input#passwordShow'),  # CAS login with visible password field
-            ('input#username', 'input#password'),
+        login_pairs = [
+            ("input#username", "input#passwordShow"),
+            ("input[name='username']", "input[name='password']"),
+            ("input[placeholder='Username/alias']", "input[placeholder='Password']"),
         ]
 
-        username_filled = False
-        already_logged_in = False
-        username_selector = None
-        password_selector = None
-        for user_sel, pass_sel in selectors_to_try:
-            try:
-                page.wait_for_selector(user_sel, timeout=5000)
-                page.locator(user_sel).first.fill(username)
-                page.locator(pass_sel).first.fill(password)
-                username_selector = user_sel
-                password_selector = pass_sel
-                username_filled = True
-                break
-            except Exception:
-                continue
-
-        if not username_filled:
-            if "login" not in page.url and "keycloak" not in page.url and "cas" not in page.url:
-                already_logged_in = True
-            # Fallback: try clicking "Account login" first, then use original selectors
-            try:
-                page.get_by_text("Account login", exact=True).click(timeout=5000, force=True)
-                page.wait_for_timeout(500)
-                page.wait_for_selector('input[placeholder="Username/alias"]', timeout=20000)
-                page.locator('input[placeholder="Username/alias"]').first.fill(username)
-                page.locator('input[placeholder="Password"]').first.fill(password)
-                username_selector = 'input[placeholder="Username/alias"]'
-                password_selector = 'input[placeholder="Password"]'
-                username_filled = True
-            except Exception:
-                if not already_logged_in:
-                    raise ValueError("Could not find login form on page")
+        def _fill_login_form() -> bool:
+            for user_sel, pass_sel in login_pairs:
+                try:
+                    page.wait_for_selector(user_sel, timeout=5000, state="visible")
+                    page.wait_for_selector(pass_sel, timeout=5000, state="visible")
+                    page.locator(user_sel).first.fill(username)
+                    page.locator(pass_sel).first.fill(password)
+                    return True
+                except Exception:
+                    continue
+            return False
 
         def _submit_login_form() -> None:
-            selectors = [sel for sel in (username_selector, password_selector) if sel]
-            for sel in ('button[type="submit"]', 'input[type="submit"]'):
-                try:
-                    page.locator(sel).first.click(timeout=3000, force=True, no_wait_after=True)
-                    return
-                except Exception:
-                    pass
-            if password_selector:
-                try:
-                    page.locator(password_selector).first.press("Enter", timeout=2000)
-                    return
-                except Exception:
-                    pass
             try:
-                page.evaluate(
-                    """
-                    (selectors) => {
-                      for (const sel of selectors) {
-                        const el = document.querySelector(sel);
-                        if (el && el.form) { el.form.submit(); return true; }
-                      }
-                      const form = document.querySelector('form');
-                      if (form) { form.submit(); return true; }
-                      const btn = document.querySelector('button[type="submit"],input[type="submit"]');
-                      if (btn) { btn.click(); return true; }
-                      return false;
-                    }
-                    """,
-                    selectors,
+                page.locator("button[type='submit'], input[type='submit']").first.click(
+                    timeout=5000,
+                    force=True,
+                    no_wait_after=True,
                 )
+                return
+            except Exception:
+                pass
+            try:
+                page.keyboard.press("Enter")
             except Exception:
                 pass
 
-        if not already_logged_in:
+        filled = _fill_login_form()
+        if not filled:
+            try:
+                page.get_by_text("Account login", exact=True).click(timeout=3000, force=True)
+                page.wait_for_timeout(500)
+            except Exception:
+                pass
+            filled = _fill_login_form()
+
+        if filled:
             _submit_login_form()
 
-        def _login_form_visible() -> bool:
-            try:
-                return page.locator("input[type='password']").first.is_visible()
-            except Exception:
-                return False
-
-        def _has_qz_session_cookie() -> bool:
-            for cookie in context.cookies():
-                name = cookie.get("name")
-                domain = cookie.get("domain", "")
-                if name in ("session", "session_2") and "qz.sii.edu.cn" in domain:
-                    return True
-            return False
-
-        # Wait for SSO redirects to complete (CAS -> Keycloak -> qz)
-        start = time.time()
-        while time.time() - start < 30:
-            page.wait_for_timeout(500)
-            url = page.url
-            if "keycloak" in url or "cas" in url:
-                continue
-            if "qz.sii.edu.cn" in url and _has_qz_session_cookie() and not _login_form_visible():
-                break
-
-        # Visit a real page to ensure app session cookies are set.
+        # Visit a real page to ensure app session cookies and localStorage are set.
         # Use domcontentloaded with fallback since some pages have long-polling.
         try:
             page.goto(f"{base_url}/jobs/distributedTraining", wait_until="networkidle", timeout=15000)
         except Exception:
             page.goto(f"{base_url}/jobs/distributedTraining", wait_until="domcontentloaded", timeout=30000)
         page.wait_for_timeout(1000)
+
+        def _wait_for_api_auth() -> None:
+            deadline = time.time() + 30
+            headers = {
+                "Accept": "application/json",
+                "Referer": f"{base_url}/jobs/distributedTraining",
+            }
+            while time.time() < deadline:
+                try:
+                    resp = context.request.get(
+                        f"{base_url}/api/v1/user/detail",
+                        headers=headers,
+                        timeout=10000,
+                    )
+                    if resp.status == 200:
+                        return
+                except Exception:
+                    pass
+                page.wait_for_timeout(500)
+            raise ValueError("Login did not complete; check credentials")
+
+        _wait_for_api_auth()
 
         # Extract workspace_id (spaceId)
         # Priority: 1) env var override, 2) default workspace, 3) auto-detect from browser
