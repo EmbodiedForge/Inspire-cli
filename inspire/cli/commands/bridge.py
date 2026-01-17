@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 import time
@@ -35,6 +34,7 @@ from inspire.cli.utils.tunnel import (
     load_tunnel_config,
     TunnelNotAvailableError,
 )
+from inspire.cli.formatters import json_formatter
 
 
 def _split_denylist(items: tuple[str, ...]) -> list[str]:
@@ -107,7 +107,10 @@ def exec_command(
         config = Config.from_env_for_sync()
     except ConfigError as e:
         if ctx.json_output:
-            click.echo(json.dumps({"error": str(e), "type": "config_error"}))
+            click.echo(
+                json_formatter.format_json_error("ConfigError", str(e), EXIT_CONFIG_ERROR),
+                err=True,
+            )
         else:
             click.echo(f"Configuration error: {e}", err=True)
         sys.exit(EXIT_CONFIG_ERROR)
@@ -147,24 +150,29 @@ def exec_command(
 
                 if result.returncode != 0:
                     if ctx.json_output:
-                        click.echo(json.dumps({
-                            "status": "failed",
-                            "method": "ssh_tunnel",
-                            "returncode": result.returncode,
-                            "stdout": result.stdout,
-                            "stderr": result.stderr,
-                        }))
+                        click.echo(
+                            json_formatter.format_json_error(
+                                "CommandFailed",
+                                f"Command failed with exit code {result.returncode}",
+                                EXIT_GENERAL_ERROR,
+                            ),
+                            err=True,
+                        )
                     else:
                         click.echo(f"Command failed with exit code {result.returncode}", err=True)
                     sys.exit(EXIT_GENERAL_ERROR)
 
                 if ctx.json_output:
-                    click.echo(json.dumps({
-                        "status": "success",
-                        "method": "ssh_tunnel",
-                        "returncode": result.returncode,
-                        "output": result.stdout + result.stderr,
-                    }))
+                    click.echo(
+                        json_formatter.format_json(
+                            {
+                                "status": "success",
+                                "method": "ssh_tunnel",
+                                "returncode": result.returncode,
+                                "output": result.stdout + result.stderr,
+                            }
+                        )
+                    )
                 else:
                     click.echo("OK Command completed successfully (via SSH)")
 
@@ -211,7 +219,10 @@ def exec_command(
         )
     except (GiteaError, GiteaAuthError) as e:
         if ctx.json_output:
-            click.echo(json.dumps({"error": str(e), "type": "gitea_error"}))
+            click.echo(
+                json_formatter.format_json_error("GiteaError", str(e), EXIT_GENERAL_ERROR),
+                err=True,
+            )
         else:
             click.echo(f"Error: {e}", err=True)
         sys.exit(EXIT_GENERAL_ERROR)
@@ -219,7 +230,7 @@ def exec_command(
     if not wait:
         if ctx.json_output:
             click.echo(
-                json.dumps(
+                json_formatter.format_json(
                     {
                         "status": "triggered",
                         "request_id": request_id,
@@ -244,13 +255,19 @@ def exec_command(
         )
     except TimeoutError as e:
         if ctx.json_output:
-            click.echo(json.dumps({"status": "timeout", "error": str(e)}))
+            click.echo(
+                json_formatter.format_json_error("Timeout", str(e), EXIT_TIMEOUT),
+                err=True,
+            )
         else:
             click.echo(f"Timeout: {e}", err=True)
         sys.exit(EXIT_TIMEOUT)
     except GiteaError as e:
         if ctx.json_output:
-            click.echo(json.dumps({"error": str(e), "type": "gitea_error"}))
+            click.echo(
+                json_formatter.format_json_error("GiteaError", str(e), EXIT_GENERAL_ERROR),
+                err=True,
+            )
         else:
             click.echo(f"Error: {e}", err=True)
         sys.exit(EXIT_GENERAL_ERROR)
@@ -271,15 +288,15 @@ def exec_command(
 
     if result.get("conclusion") != "success":
         if ctx.json_output:
+            hint = result.get("html_url") or None
             click.echo(
-                json.dumps(
-                    {
-                        "status": "failed",
-                        "conclusion": result.get("conclusion"),
-                        "html_url": result.get("html_url", ""),
-                        "output": output_log,
-                    }
-                )
+                json_formatter.format_json_error(
+                    "BridgeActionFailed",
+                    f"Action failed: {result.get('conclusion')}",
+                    EXIT_GENERAL_ERROR,
+                    hint=hint,
+                ),
+                err=True,
             )
         else:
             click.echo(
@@ -296,12 +313,12 @@ def exec_command(
         except GiteaError as e:
             if ctx.json_output:
                 click.echo(
-                    json.dumps(
-                        {
-                            "status": "partial_success",
-                            "error": f"Artifact download failed: {e}",
-                        }
-                    )
+                    json_formatter.format_json_error(
+                        "ArtifactError",
+                        f"Artifact download failed: {e}",
+                        EXIT_GENERAL_ERROR,
+                    ),
+                    err=True,
                 )
             else:
                 click.echo(f"Warning: artifact download failed: {e}", err=True)
@@ -309,7 +326,7 @@ def exec_command(
 
     if ctx.json_output:
         click.echo(
-            json.dumps(
+            json_formatter.format_json(
                 {
                     "status": "success",
                     "request_id": request_id,
@@ -344,7 +361,10 @@ def bridge_ssh(ctx: Context) -> None:
         config = Config.from_env_for_sync()
     except ConfigError as e:
         if ctx.json_output:
-            click.echo(json.dumps({"error": str(e), "type": "config_error"}))
+            click.echo(
+                json_formatter.format_json_error("ConfigError", str(e), EXIT_CONFIG_ERROR),
+                err=True,
+            )
         else:
             click.echo(f"Configuration error: {e}", err=True)
         sys.exit(EXIT_CONFIG_ERROR)
@@ -353,11 +373,15 @@ def bridge_ssh(ctx: Context) -> None:
 
     if not is_tunnel_available(tunnel_config):
         if ctx.json_output:
-            click.echo(json.dumps({
-                "error": "SSH tunnel not available",
-                "type": "tunnel_error",
-                "hint": "Run 'inspire tunnel start' first",
-            }))
+            click.echo(
+                json_formatter.format_json_error(
+                    "TunnelError",
+                    "SSH tunnel not available",
+                    EXIT_GENERAL_ERROR,
+                    hint="Run 'inspire tunnel start' first",
+                ),
+                err=True,
+            )
         else:
             click.echo("Error: SSH tunnel not available", err=True)
             click.echo("Hint: Run 'inspire tunnel start' first", err=True)

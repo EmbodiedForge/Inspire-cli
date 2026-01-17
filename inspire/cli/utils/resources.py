@@ -14,6 +14,7 @@ from enum import Enum
 
 from inspire.cli.utils.config import Config
 from inspire.cli.utils.web_session import get_web_session, fetch_workspace_availability
+from inspire.compute_groups import compute_group_name_map
 
 
 class GPUType(Enum):
@@ -40,15 +41,7 @@ class ComputeGroupAvailability:
 
 # Known compute groups for smart allocation
 # Only these groups will be used for auto-selection
-KNOWN_COMPUTE_GROUPS = {
-    # H100 groups
-    "lcg-79b2ad0e-a375-43f3-a0b1-b4ce79710fd7": "H100 CUDA 12.8",
-    # H200 groups
-    "lcg-df089db8-817a-4aa8-a164-eb1a32948564": "H200 机房1",
-    "lcg-303ac8c6-aa19-4284-af03-2296592326e5": "H200 机房2",
-    "lcg-a91ad10b-415d-4abd-8170-828a2feae5d2": "H200 机房3",
-    "lcg-95e38be4-4842-4155-af13-4325aa744bca": "H200 3号-2",
-}
+KNOWN_COMPUTE_GROUPS = compute_group_name_map()
 
 
 # Cache for availability data
@@ -198,43 +191,6 @@ def fetch_resource_availability(
     _cache_time = time.time()
 
     return availability_list
-
-
-def find_best_compute_group(
-    availability: list[ComputeGroupAvailability],
-    gpu_type: Optional[str] = None,
-    min_gpus: int = 8,
-    preferred_groups: Optional[list[str]] = None,
-) -> Optional[ComputeGroupAvailability]:
-    """Find the compute group with most available capacity.
-
-    Args:
-        availability: List of compute group availability
-        gpu_type: Filter by GPU type ("H100", "H200", or None for any)
-        min_gpus: Minimum required GPUs
-        preferred_groups: Preferred group IDs (checked first)
-
-    Returns:
-        Best matching ComputeGroupAvailability, or None if no suitable group found
-    """
-    # Filter by GPU type
-    if gpu_type and gpu_type.upper() != "ANY":
-        filtered = [g for g in availability if g.gpu_type.upper() == gpu_type.upper()]
-    else:
-        filtered = availability
-
-    # Check preferred groups first
-    if preferred_groups:
-        for group in filtered:
-            if group.group_id in preferred_groups and group.free_gpus >= min_gpus:
-                return group
-
-    # Find group with most available GPUs that meets min_gpus
-    for group in filtered:
-        if group.free_gpus >= min_gpus:
-            return group
-
-    return None
 
 
 def clear_availability_cache() -> None:

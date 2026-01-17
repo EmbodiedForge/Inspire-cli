@@ -1,17 +1,20 @@
-"""Web session management using Playwright for accurate GPU availability data.
+"""Web session management for web UI APIs.
 
-Uses browser automation to login and capture session cookies,
-then makes direct API calls with those cookies.
+Uses Playwright to login and capture session cookies,
+then makes direct HTTP API calls with those cookies.
 """
 
 from __future__ import annotations
 
+import atexit
+import hashlib
 import json
 import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
+from urllib.parse import urlsplit
 
 import requests
 
@@ -33,6 +36,202 @@ def get_playwright_proxy() -> Optional[dict]:
     if proxy:
         return {"server": proxy}
     return None
+
+
+def _cookie_jar_from_session(session: "WebSession", base_url: str) -> requests.cookies.RequestsCookieJar:
+    jar = requests.cookies.RequestsCookieJar()
+    base_host = urlsplit(base_url).hostname or ""
+
+    storage_cookies = session.storage_state.get("cookies") if session.storage_state else None
+    if storage_cookies:
+        for cookie in storage_cookies:
+            name = cookie.get("name")
+            value = cookie.get("value")
+            if not name:
+                continue
+            domain = cookie.get("domain") or base_host
+            path = cookie.get("path") or "/"
+            jar.set(name, value, domain=domain, path=path)
+
+    if not storage_cookies and session.cookies:
+        for name, value in session.cookies.items():
+            if not name:
+                continue
+            jar.set(name, value, domain=base_host, path="/")
+
+    return jar
+
+
+def build_requests_session(session: "WebSession", base_url: str) -> requests.Session:
+    storage_cookies = session.storage_state.get("cookies") if session.storage_state else None
+    if not storage_cookies and not session.cookies:
+        raise ValueError("Session expired or invalid (missing storage state)")
+
+    http = requests.Session()
+    http.cookies.update(_cookie_jar_from_session(session, base_url))
+    http.headers.update(
+        {
+            "Accept": "application/json, text/plain, */*",
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+        }
+    )
+    return http
+
+
+class _BrowserRequestClient:
+    def __init__(self, session: "WebSession") -> None:
+        from playwright.sync_api import sync_playwright
+
+        proxy = get_playwright_proxy()
+        self._playwright = sync_playwright().start()
+        self._browser = self._playwright.chromium.launch(headless=True, proxy=proxy)
+        self._context = self._browser.new_context(
+            storage_state=session.storage_state,
+            proxy=proxy,
+            ignore_https_errors=True,
+        )
+        self.session_fingerprint = _session_fingerprint(session)
+
+    def request_json(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Optional[dict[str, str]] = None,
+        body: Optional[dict] = None,
+        timeout: int = 30,
+    ) -> dict:
+        req_headers = headers or {}
+        method_upper = method.upper()
+        timeout_ms = timeout * 1000
+
+        if method_upper == "GET":
+            resp = self._context.request.get(url, headers=req_headers, timeout=timeout_ms)
+        elif method_upper == "POST":
+            resp = self._context.request.post(
+                url,
+                headers=req_headers,
+                data=json.dumps(body or {}),
+                timeout=timeout_ms,
+            )
+        else:
+            raise ValueError(f"Unsupported HTTP method: {method}")
+
+        if resp.status == 401:
+            raise SessionExpiredError("Session expired or invalid")
+        if resp.status >= 400:
+            raise ValueError(f"API returned {resp.status}")
+
+        return resp.json()
+
+    def close(self) -> None:
+        try:
+            self._context.close()
+        except Exception:
+            pass
+        try:
+            self._browser.close()
+        except Exception:
+            pass
+        try:
+            self._playwright.stop()
+        except Exception:
+            pass
+
+
+_BROWSER_API_FORCE_BROWSER = False
+_BROWSER_CLIENT: Optional[_BrowserRequestClient] = None
+
+
+def _session_fingerprint(session: "WebSession") -> str:
+    cookies = session.storage_state.get("cookies") if session.storage_state else []
+    payload = json.dumps(
+        [
+            {
+                "name": c.get("name"),
+                "value": c.get("value"),
+                "domain": c.get("domain"),
+                "path": c.get("path"),
+            }
+            for c in cookies or []
+        ],
+        sort_keys=True,
+        ensure_ascii=True,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _get_browser_client(session: "WebSession") -> _BrowserRequestClient:
+    global _BROWSER_CLIENT
+
+    fingerprint = _session_fingerprint(session)
+    if _BROWSER_CLIENT and _BROWSER_CLIENT.session_fingerprint == fingerprint:
+        return _BROWSER_CLIENT
+
+    if _BROWSER_CLIENT:
+        _BROWSER_CLIENT.close()
+
+    _BROWSER_CLIENT = _BrowserRequestClient(session)
+    return _BROWSER_CLIENT
+
+
+def _close_browser_client() -> None:
+    global _BROWSER_CLIENT
+    if _BROWSER_CLIENT:
+        _BROWSER_CLIENT.close()
+        _BROWSER_CLIENT = None
+
+
+atexit.register(_close_browser_client)
+
+
+def request_json(
+    session: "WebSession",
+    method: str,
+    url: str,
+    *,
+    headers: Optional[dict[str, str]] = None,
+    body: Optional[dict] = None,
+    timeout: int = 30,
+) -> dict:
+    global _BROWSER_API_FORCE_BROWSER
+
+    if not _BROWSER_API_FORCE_BROWSER:
+        http = build_requests_session(session, url)
+        try:
+            method_upper = method.upper()
+            req_headers = headers or {}
+            if method_upper == "GET":
+                resp = http.get(url, headers=req_headers, timeout=timeout)
+            elif method_upper == "POST":
+                req_headers = dict(req_headers)
+                req_headers["Content-Type"] = "application/json"
+                resp = http.post(url, headers=req_headers, json=body or {}, timeout=timeout)
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
+
+            if resp.status_code == 401:
+                raise SessionExpiredError("Session expired or invalid")
+            if resp.status_code >= 400:
+                raise ValueError(f"API returned {resp.status_code}: {resp.text}")
+
+            return resp.json()
+        except SessionExpiredError:
+            _BROWSER_API_FORCE_BROWSER = True
+        finally:
+            http.close()
+
+    client = _get_browser_client(session)
+    return client.request_json(
+        method,
+        url,
+        headers=headers,
+        body=body,
+        timeout=timeout,
+    )
 
 
 @dataclass
@@ -304,44 +503,20 @@ def fetch_node_specs(
     This API returns per-GPU task information via node_dimensions.
 
     Note: This endpoint is a web UI internal API that requires Keycloak
-    authentication. We use Playwright's browser context to make the request
-    with proper session handling, including cookies and browser state.
+    authentication. We use the captured browser cookies for HTTP requests.
     """
-    from playwright.sync_api import sync_playwright
-
     if not session.storage_state or not session.storage_state.get("cookies"):
-        raise ValueError("Session expired or invalid (missing storage state)")
+        if not session.cookies:
+            raise ValueError("Session expired or invalid (missing storage state)")
 
     url = f"{base_url}/api/v1/compute_resources/node_specs/logic_compute_groups/{compute_group_id}"
-
-    proxy = get_playwright_proxy()
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, proxy=proxy)
-        context = browser.new_context(storage_state=session.storage_state, proxy=proxy, ignore_https_errors=True)
-
-        try:
-            resp = context.request.get(
-                url,
-                headers={
-                    "Accept": "application/json, text/plain, */*",
-                    "Referer": f"{base_url}/jobs/distributedTraining",
-                },
-                timeout=30000,
-            )
-
-            if resp.status == 401:
-                raise ValueError("Session expired or invalid")
-            if resp.status >= 400:
-                raise ValueError(f"API returned {resp.status}")
-
-            return resp.json()
-
-        finally:
-            try:
-                context.close()
-            except Exception:
-                pass
-            browser.close()
+    return request_json(
+        session,
+        "GET",
+        url,
+        headers={"Referer": f"{base_url}/jobs/distributedTraining"},
+        timeout=30,
+    )
 
 
 def fetch_workspace_availability(
@@ -365,45 +540,23 @@ def fetch_workspace_availability(
     Raises:
         ValueError: If session is invalid or workspace_id is missing.
     """
-    from playwright.sync_api import sync_playwright
-
     if not session.storage_state or not session.storage_state.get("cookies"):
-        raise ValueError("Session expired or invalid (missing storage state)")
+        if not session.cookies:
+            raise ValueError("Session expired or invalid (missing storage state)")
 
     if not session.workspace_id:
         raise ValueError("No workspace_id in session. Please login again.")
 
     url = f"{base_url}/api/v1/cluster_nodes/workspace/{session.workspace_id}"
 
-    proxy = get_playwright_proxy()
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, proxy=proxy)
-        context = browser.new_context(storage_state=session.storage_state, proxy=proxy, ignore_https_errors=True)
-
-        try:
-            resp = context.request.get(
-                url,
-                headers={
-                    "Accept": "application/json, text/plain, */*",
-                    "Referer": f"{base_url}/jobs/distributedTraining",
-                },
-                timeout=30000,
-            )
-
-            if resp.status == 401:
-                raise ValueError("Session expired or invalid")
-            if resp.status >= 400:
-                raise ValueError(f"API returned {resp.status}")
-
-            data = resp.json()
-            return data.get("data", {}).get("nodes", [])
-
-        finally:
-            try:
-                context.close()
-            except Exception:
-                pass
-            browser.close()
+    data = request_json(
+        session,
+        "GET",
+        url,
+        headers={"Referer": f"{base_url}/jobs/distributedTraining"},
+        timeout=30,
+    )
+    return data.get("data", {}).get("nodes", [])
 
 
 @dataclass

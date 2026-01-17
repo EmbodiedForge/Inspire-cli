@@ -16,6 +16,7 @@ inspire job stop <job-id>             # Stop if needed
 - `inspire sync [--force]` — Sync code to Bridge
 - `inspire job create --name X --resource "4xH200" --command "..."` — Submit job
 - `inspire job status/stop <job-id>` — Manage job
+- `inspire job command <job-id>` — Show command used by job
 - `inspire job logs <job-id>` — View job logs (use `--refresh` to force re-fetch)
 - `inspire job logs` — Bulk fetch logs for cached jobs (use `--status` to filter)
 - `inspire job list` — List cached jobs

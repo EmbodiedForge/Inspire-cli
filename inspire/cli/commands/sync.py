@@ -9,7 +9,6 @@ This command:
 3. Returns the synced commit SHA
 """
 
-import json
 import subprocess
 import sys
 import logging
@@ -36,6 +35,7 @@ from inspire.cli.utils.tunnel import (
     sync_via_ssh,
     TunnelNotAvailableError,
 )
+from inspire.cli.formatters import json_formatter
 
 
 def _get_current_branch() -> str:
@@ -182,7 +182,10 @@ def sync(
         config = Config.from_env_for_sync()
     except ConfigError as e:
         if ctx.json_output:
-            click.echo(json.dumps({"error": str(e), "type": "config_error"}))
+            click.echo(
+                json_formatter.format_json_error("ConfigError", str(e), EXIT_CONFIG_ERROR),
+                err=True,
+            )
         else:
             click.echo(f"Configuration error: {e}", err=True)
         sys.exit(EXIT_CONFIG_ERROR)
@@ -198,11 +201,15 @@ def sync(
     # Check for uncommitted changes
     if _check_uncommitted_changes():
         if ctx.json_output:
-            click.echo(json.dumps({
-                "error": "Uncommitted changes detected",
-                "type": "validation_error",
-                "hint": "Commit or stash your changes before syncing",
-            }))
+            click.echo(
+                json_formatter.format_json_error(
+                    "ValidationError",
+                    "Uncommitted changes detected",
+                    EXIT_GENERAL_ERROR,
+                    hint="Commit or stash your changes before syncing",
+                ),
+                err=True,
+            )
             sys.exit(EXIT_GENERAL_ERROR)
         else:
             click.echo("Warning: You have uncommitted changes.", err=True)
@@ -219,10 +226,11 @@ def sync(
             _push_to_remote(branch, remote)
         except click.ClickException as e:
             if ctx.json_output:
-                click.echo(json.dumps({
-                    "error": str(e),
-                    "type": "git_error",
-                }))
+                click.echo(
+                    json_formatter.format_json_error("GitError", str(e), EXIT_GENERAL_ERROR),
+                    err=True,
+                )
+                sys.exit(EXIT_GENERAL_ERROR)
             raise
 
     # Try SSH tunnel first (much faster), fall back to Gitea Actions
@@ -260,30 +268,35 @@ def _sync_via_tunnel(
         if result["success"]:
             synced_sha = result["synced_sha"] or commit_sha[:7]
             if ctx.json_output:
-                click.echo(json.dumps({
-                    "status": "success",
-                    "method": "ssh_tunnel",
-                    "branch": branch,
-                    "remote": remote,
-                    "commit": commit_sha[:7],
-                    "commit_full": commit_sha,
-                    "synced_sha": synced_sha,
-                    "message": commit_msg,
-                    "target_dir": config.target_dir,
-                }))
+                click.echo(
+                    json_formatter.format_json(
+                        {
+                            "status": "success",
+                            "method": "ssh_tunnel",
+                            "branch": branch,
+                            "remote": remote,
+                            "commit": commit_sha[:7],
+                            "commit_full": commit_sha,
+                            "synced_sha": synced_sha,
+                            "message": commit_msg,
+                            "target_dir": config.target_dir,
+                        }
+                    )
+                )
             else:
                 click.echo(click.style("OK", fg="green") + f" Synced branch '{branch}' ({synced_sha[:7]}) to {config.target_dir}")
                 click.echo(f"  Commit: {commit_msg}")
                 click.echo(f"  Method: SSH tunnel (fast)")
         else:
             if ctx.json_output:
-                click.echo(json.dumps({
-                    "status": "failed",
-                    "method": "ssh_tunnel",
-                    "branch": branch,
-                    "commit": commit_sha[:7],
-                    "error": result["error"],
-                }))
+                click.echo(
+                    json_formatter.format_json_error(
+                        "SyncError",
+                        str(result.get("error")),
+                        EXIT_GENERAL_ERROR,
+                    ),
+                    err=True,
+                )
             else:
                 click.echo(f"Sync failed: {result['error']}", err=True)
             sys.exit(EXIT_GENERAL_ERROR)
@@ -314,10 +327,10 @@ def _sync_via_gitea(
         run_id = trigger_sync_workflow(config, branch, commit_sha, force)
     except (GiteaError, GiteaAuthError) as e:
         if ctx.json_output:
-            click.echo(json.dumps({
-                "error": str(e),
-                "type": "gitea_error",
-            }))
+            click.echo(
+                json_formatter.format_json_error("GiteaError", str(e), EXIT_CONFIG_ERROR),
+                err=True,
+            )
         else:
             click.echo(f"Error: {e}", err=True)
         sys.exit(EXIT_CONFIG_ERROR)
@@ -330,13 +343,15 @@ def _sync_via_gitea(
             result = wait_for_workflow_completion(config, run_id, timeout)
         except TimeoutError:
             if ctx.json_output:
-                click.echo(json.dumps({
-                    "status": "timeout",
-                    "method": "gitea_actions",
-                    "branch": branch,
-                    "commit": commit_sha[:7],
-                    "error": f"Sync workflow did not complete within {timeout}s",
-                }))
+                click.echo(
+                    json_formatter.format_json_error(
+                        "Timeout",
+                        f"Sync workflow did not complete within {timeout}s",
+                        EXIT_GENERAL_ERROR,
+                        hint="Check Gitea for sync workflow status.",
+                    ),
+                    err=True,
+                )
             else:
                 click.echo(f"Sync workflow timed out after {timeout}s", err=True)
                 click.echo("The sync may still complete. Check Gitea for status.", err=True)
@@ -344,31 +359,37 @@ def _sync_via_gitea(
 
         if result["conclusion"] == "success":
             if ctx.json_output:
-                click.echo(json.dumps({
-                    "status": "success",
-                    "method": "gitea_actions",
-                    "branch": branch,
-                    "remote": remote,
-                    "commit": commit_sha[:7],
-                    "commit_full": commit_sha,
-                    "message": commit_msg,
-                    "target_dir": config.target_dir,
-                    "html_url": result.get("html_url", ""),
-                }))
+                click.echo(
+                    json_formatter.format_json(
+                        {
+                            "status": "success",
+                            "method": "gitea_actions",
+                            "branch": branch,
+                            "remote": remote,
+                            "commit": commit_sha[:7],
+                            "commit_full": commit_sha,
+                            "message": commit_msg,
+                            "target_dir": config.target_dir,
+                            "html_url": result.get("html_url", ""),
+                        }
+                    )
+                )
             else:
                 click.echo(click.style("OK", fg="green") + f" Synced branch '{branch}' ({commit_sha[:7]}) to {config.target_dir}")
                 click.echo(f"  Commit: {commit_msg}")
                 click.echo(f"  Remote: {remote}")
         else:
             if ctx.json_output:
-                click.echo(json.dumps({
-                    "status": "failed",
-                    "method": "gitea_actions",
-                    "branch": branch,
-                    "commit": commit_sha[:7],
-                    "conclusion": result.get("conclusion"),
-                    "html_url": result.get("html_url", ""),
-                }))
+                hint = result.get("html_url") or None
+                click.echo(
+                    json_formatter.format_json_error(
+                        "SyncError",
+                        f"Sync failed: {result.get('conclusion', 'unknown')}",
+                        EXIT_GENERAL_ERROR,
+                        hint=hint,
+                    ),
+                    err=True,
+                )
             else:
                 click.echo(f"Sync failed: {result.get('conclusion', 'unknown')}", err=True)
                 if result.get("html_url"):
@@ -377,15 +398,19 @@ def _sync_via_gitea(
     else:
         # Not waiting
         if ctx.json_output:
-            click.echo(json.dumps({
-                "status": "triggered",
-                "method": "gitea_actions",
-                "branch": branch,
-                "remote": remote,
-                "commit": commit_sha[:7],
-                "commit_full": commit_sha,
-                "run_id": run_id,
-            }))
+            click.echo(
+                json_formatter.format_json(
+                    {
+                        "status": "triggered",
+                        "method": "gitea_actions",
+                        "branch": branch,
+                        "remote": remote,
+                        "commit": commit_sha[:7],
+                        "commit_full": commit_sha,
+                        "run_id": run_id,
+                    }
+                )
+            )
         else:
             click.echo(click.style("OK", fg="green") + f" Pushed {branch} to {remote}")
             click.echo(click.style("OK", fg="green") + " Triggered sync workflow" + (f" (run {run_id})" if run_id else ""))

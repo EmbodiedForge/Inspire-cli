@@ -199,6 +199,7 @@ def test_job_create_human_output_updates_cache(monkeypatch: pytest.MonkeyPatch, 
             "H200",
             "--command",
             "echo hi",
+            "--no-auto",
         ],
     )
 
@@ -226,6 +227,7 @@ def test_job_create_json_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
             "H200",
             "--command",
             "echo hi",
+            "--no-auto",
         ],
     )
 

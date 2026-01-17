@@ -211,6 +211,15 @@ def _get_client(config: Config) -> _GiteaClient:
     return _GiteaClient(token=token, server_url=server_url)
 
 
+def _extract_total_count(response: dict) -> Optional[int]:
+    """Extract total count from a Gitea Actions runs response."""
+    total_count = response.get("total_count") or response.get("total") or response.get("count")
+    try:
+        return int(total_count) if total_count is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _artifact_name(job_id: str, request_id: str) -> str:
     """Compute the artifact name from job_id and request_id."""
     return f"job-{job_id}-log-{request_id}"
@@ -303,14 +312,61 @@ def trigger_sync_workflow(
     client = _get_client(config)
     server_url = _get_server_url(config)
 
-    runs_url = f"{server_url}/api/v1/repos/{repo}/actions/runs?limit=5"
-    try:
-        response = client.request_json("GET", runs_url)
-        runs = response.get("workflow_runs", []) or []
-        if runs:
-            return str(runs[0].get("id", ""))
-    except GiteaError:
-        pass
+    expected_inputs = {
+        "branch": branch,
+        "commit_sha": commit_sha,
+        "force": str(force).lower(),
+        "target_dir": config.target_dir or "",
+    }
+
+    limit = 20
+    for _ in range(3):
+        try:
+            runs_url = f"{server_url}/api/v1/repos/{repo}/actions/runs?limit={limit}&page=1"
+            response = client.request_json("GET", runs_url)
+            runs = response.get("workflow_runs", []) or []
+
+            def _find_matching_run_id(runs_list: list) -> Optional[str]:
+                for run in runs_list:
+                    event_payload = run.get("event_payload", "")
+                    if not event_payload:
+                        continue
+                    try:
+                        payload = json.loads(event_payload)
+                        inputs = payload.get("inputs", {}) or {}
+                        matched = True
+                        for key, value in expected_inputs.items():
+                            if not value:
+                                continue
+                            if str(inputs.get(key, "")) != str(value):
+                                matched = False
+                                break
+                        if matched:
+                            return str(run.get("id", ""))
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                return None
+
+            run_id = _find_matching_run_id(runs)
+            if run_id:
+                return run_id
+
+            total_count = _extract_total_count(response)
+            if total_count and total_count > limit:
+                last_page = (total_count + limit - 1) // limit
+                runs_url = (
+                    f"{server_url}/api/v1/repos/{repo}/actions/runs"
+                    f"?limit={limit}&page={last_page}"
+                )
+                response = client.request_json("GET", runs_url)
+                runs = response.get("workflow_runs", []) or []
+                run_id = _find_matching_run_id(runs)
+                if run_id:
+                    return run_id
+        except GiteaError:
+            pass
+
+        time.sleep(1)
 
     return ""
 
@@ -615,42 +671,65 @@ def wait_for_bridge_action_completion(
     timeout_seconds = timeout or config.bridge_action_timeout or 300
     deadline = time.time() + max(5, int(timeout_seconds))
 
+    limit = 20
+
+    def _find_matching_run(runs_list: list) -> Optional[dict]:
+        for run in runs_list:
+            # Match by request_id in event_payload (Codeberg/Forgejo)
+            event_payload = run.get("event_payload", "")
+            if not event_payload:
+                continue
+            try:
+                payload = json.loads(event_payload)
+                inputs = payload.get("inputs", {})
+                if inputs.get("request_id") == request_id:
+                    status = run.get("status")
+                    conclusion = run.get("conclusion")
+                    logging.debug(
+                        "Found matching run: status=%s, conclusion=%s",
+                        status,
+                        conclusion,
+                    )
+                    # Codeberg uses 'success'/'failure' as status, not 'completed'
+                    if status in ("completed", "success", "failure"):
+                        return {
+                            "status": status,
+                            "conclusion": conclusion or status,
+                            "run_id": run.get("id"),
+                            "html_url": run.get("html_url", ""),
+                        }
+            except (json.JSONDecodeError, TypeError):
+                continue
+        return None
+
     while True:
         if time.time() > deadline:
             raise TimeoutError(
                 f"Bridge action timed out after {timeout_seconds} seconds."
             )
 
-        runs_url = f"{server_url}/api/v1/repos/{repo}/actions/runs?limit=20"
         try:
+            runs_url = f"{server_url}/api/v1/repos/{repo}/actions/runs?limit={limit}&page=1"
             response = client.request_json("GET", runs_url)
             runs = response.get("workflow_runs", []) or []
 
-            for run in runs:
-                # Match by request_id in event_payload (Codeberg/Forgejo)
-                event_payload = run.get("event_payload", "")
-                if event_payload:
-                    try:
-                        payload = json.loads(event_payload)
-                        inputs = payload.get("inputs", {})
-                        if inputs.get("request_id") == request_id:
-                            status = run.get("status")
-                            conclusion = run.get("conclusion")
-                            logging.debug(
-                                "Found matching run: status=%s, conclusion=%s",
-                                status,
-                                conclusion,
-                            )
-                            # Codeberg uses 'success'/'failure' as status, not 'completed'
-                            if status in ("completed", "success", "failure"):
-                                return {
-                                    "status": status,
-                                    "conclusion": conclusion or status,
-                                    "run_id": run.get("id"),
-                                    "html_url": run.get("html_url", ""),
-                                }
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+            match = _find_matching_run(runs)
+            if match:
+                return match
+
+            # Codeberg/Forgejo can return runs in ascending order; check last page.
+            total_count = _extract_total_count(response)
+            if total_count and total_count > limit:
+                last_page = (total_count + limit - 1) // limit
+                runs_url = (
+                    f"{server_url}/api/v1/repos/{repo}/actions/runs"
+                    f"?limit={limit}&page={last_page}"
+                )
+                response = client.request_json("GET", runs_url)
+                runs = response.get("workflow_runs", []) or []
+                match = _find_matching_run(runs)
+                if match:
+                    return match
         except GiteaError:
             pass
 

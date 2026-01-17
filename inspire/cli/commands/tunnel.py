@@ -1,6 +1,5 @@
 """Tunnel commands for SSH access to Bridge via ProxyCommand."""
 
-import json
 import sys
 from pathlib import Path
 
@@ -69,7 +68,7 @@ def tunnel_status(ctx: Context, bridge: str) -> None:
     status = get_tunnel_status(bridge_name=bridge)
 
     if ctx.json_output:
-        click.echo(json.dumps(status))
+        click.echo(json_formatter.format_json(status))
         return
 
     click.echo("Inspire SSH Tunnel Status (ProxyCommand Mode)")
@@ -163,9 +162,14 @@ def tunnel_add(
     # Validate name
     if not name or not name.replace("-", "").replace("_", "").isalnum():
         if ctx.json_output:
-            click.echo(json.dumps({
-                "error": "Invalid bridge name. Use alphanumeric, dash, underscore."
-            }))
+            click.echo(
+                json_formatter.format_json_error(
+                    "ValidationError",
+                    "Invalid bridge name. Use alphanumeric, dash, underscore.",
+                    EXIT_CONFIG_ERROR,
+                ),
+                err=True,
+            )
         else:
             click.echo(human_formatter.format_error(
                 "Invalid bridge name. Use alphanumeric, dash, underscore."
@@ -188,12 +192,16 @@ def tunnel_add(
     save_tunnel_config(config)
 
     if ctx.json_output:
-        click.echo(json.dumps({
-            "status": "added",
-            "name": name,
-            "proxy_url": url,
-            "is_default": name == config.default_bridge,
-        }))
+        click.echo(
+            json_formatter.format_json(
+                {
+                    "status": "added",
+                    "name": name,
+                    "proxy_url": url,
+                    "is_default": name == config.default_bridge,
+                }
+            )
+        )
     else:
         is_default = name == config.default_bridge
         click.echo(f"Added bridge: {name}")
@@ -221,7 +229,14 @@ def tunnel_remove(ctx: Context, name: str) -> None:
 
     if name not in config.bridges:
         if ctx.json_output:
-            click.echo(json.dumps({"error": f"Bridge '{name}' not found"}))
+            click.echo(
+                json_formatter.format_json_error(
+                    "NotFound",
+                    f"Bridge '{name}' not found",
+                    EXIT_CONFIG_ERROR,
+                ),
+                err=True,
+            )
         else:
             click.echo(human_formatter.format_error(f"Bridge '{name}' not found"), err=True)
         sys.exit(EXIT_CONFIG_ERROR)
@@ -231,11 +246,15 @@ def tunnel_remove(ctx: Context, name: str) -> None:
     save_tunnel_config(config)
 
     if ctx.json_output:
-        click.echo(json.dumps({
-            "status": "removed",
-            "name": name,
-            "new_default": config.default_bridge,
-        }))
+        click.echo(
+            json_formatter.format_json(
+                {
+                    "status": "removed",
+                    "name": name,
+                    "new_default": config.default_bridge,
+                }
+            )
+        )
     else:
         click.echo(f"Removed bridge: {name}")
         if was_default and config.default_bridge:
@@ -258,7 +277,14 @@ def tunnel_set_default(ctx: Context, name: str) -> None:
 
     if name not in config.bridges:
         if ctx.json_output:
-            click.echo(json.dumps({"error": f"Bridge '{name}' not found"}))
+            click.echo(
+                json_formatter.format_json_error(
+                    "NotFound",
+                    f"Bridge '{name}' not found",
+                    EXIT_CONFIG_ERROR,
+                ),
+                err=True,
+            )
         else:
             click.echo(human_formatter.format_error(f"Bridge '{name}' not found"), err=True)
         sys.exit(EXIT_CONFIG_ERROR)
@@ -267,10 +293,14 @@ def tunnel_set_default(ctx: Context, name: str) -> None:
     save_tunnel_config(config)
 
     if ctx.json_output:
-        click.echo(json.dumps({
-            "status": "updated",
-            "default": name,
-        }))
+        click.echo(
+            json_formatter.format_json(
+                {
+                    "status": "updated",
+                    "default": name,
+                }
+            )
+        )
     else:
         click.echo(human_formatter.format_success(f"Default bridge set to: {name}"))
 
@@ -290,7 +320,7 @@ def tunnel_list(ctx: Context) -> None:
 
     if not bridges:
         if ctx.json_output:
-            click.echo(json.dumps({"bridges": [], "default": None}))
+            click.echo(json_formatter.format_json({"bridges": [], "default": None}))
         else:
             click.echo("No bridges configured.")
             click.echo("")
@@ -298,10 +328,14 @@ def tunnel_list(ctx: Context) -> None:
         return
 
     if ctx.json_output:
-        click.echo(json.dumps({
-            "bridges": [b.to_dict() for b in bridges],
-            "default": config.default_bridge,
-        }))
+        click.echo(
+            json_formatter.format_json(
+                {
+                    "bridges": [b.to_dict() for b in bridges],
+                    "default": config.default_bridge,
+                }
+            )
+        )
         return
 
     # Human-readable output
@@ -377,11 +411,15 @@ def tunnel_ssh_config(ctx: Context, bridge: str, install: bool) -> None:
             ssh_config = generate_ssh_config(bridge_profile, rtunnel_path, host_alias=bridge)
 
             if ctx.json_output:
-                click.echo(json.dumps({
-                    "bridge": bridge,
-                    "config": ssh_config,
-                    "rtunnel_path": str(rtunnel_path),
-                }))
+                click.echo(
+                    json_formatter.format_json(
+                        {
+                            "bridge": bridge,
+                            "config": ssh_config,
+                            "rtunnel_path": str(rtunnel_path),
+                        }
+                    )
+                )
                 return
 
             if install:
@@ -407,11 +445,15 @@ def tunnel_ssh_config(ctx: Context, bridge: str, install: bool) -> None:
             all_configs = generate_all_ssh_configs(config)
 
             if ctx.json_output:
-                click.echo(json.dumps({
-                    "bridges": list(config.bridges.keys()),
-                    "config": all_configs,
-                    "rtunnel_path": str(rtunnel_path),
-                }))
+                click.echo(
+                    json_formatter.format_json(
+                        {
+                            "bridges": list(config.bridges.keys()),
+                            "config": all_configs,
+                            "rtunnel_path": str(rtunnel_path),
+                        }
+                    )
+                )
                 return
 
             if install:
@@ -454,7 +496,10 @@ def tunnel_ssh_config(ctx: Context, bridge: str, install: bool) -> None:
 
     except TunnelError as e:
         if ctx.json_output:
-            click.echo(json_formatter.format_json_error("TunnelError", str(e), EXIT_GENERAL_ERROR))
+            click.echo(
+                json_formatter.format_json_error("TunnelError", str(e), EXIT_GENERAL_ERROR),
+                err=True,
+            )
         else:
             click.echo(human_formatter.format_error(str(e)), err=True)
         sys.exit(EXIT_GENERAL_ERROR)
@@ -479,7 +524,15 @@ def tunnel_test(ctx: Context, bridge: str) -> None:
 
     if not bridge_profile:
         if ctx.json_output:
-            click.echo(json.dumps({"error": "No bridge configured"}))
+            click.echo(
+                json_formatter.format_json_error(
+                    "ConfigError",
+                    "No bridge configured",
+                    EXIT_CONFIG_ERROR,
+                    hint="Run 'inspire tunnel add <name> <URL>' first.",
+                ),
+                err=True,
+            )
         else:
             click.echo(human_formatter.format_error(
                 "No bridge configured. Run 'inspire tunnel add <name> <URL>' first."
@@ -494,12 +547,26 @@ def tunnel_test(ctx: Context, bridge: str) -> None:
         hostname = result.stdout.strip()
 
         if ctx.json_output:
-            click.echo(json.dumps({
-                "success": result.returncode == 0,
-                "bridge": bridge_profile.name,
-                "hostname": hostname,
-                "elapsed_ms": int(elapsed * 1000),
-            }))
+            if result.returncode == 0:
+                click.echo(
+                    json_formatter.format_json(
+                        {
+                            "bridge": bridge_profile.name,
+                            "hostname": hostname,
+                            "elapsed_ms": int(elapsed * 1000),
+                        }
+                    )
+                )
+            else:
+                click.echo(
+                    json_formatter.format_json_error(
+                        "TunnelError",
+                        f"Connection failed: {result.stderr}",
+                        EXIT_GENERAL_ERROR,
+                    ),
+                    err=True,
+                )
+                sys.exit(EXIT_GENERAL_ERROR)
         else:
             if result.returncode == 0:
                 click.echo(human_formatter.format_success(f"Bridge '{bridge_profile.name}': Connected to {hostname}"))
@@ -510,13 +577,19 @@ def tunnel_test(ctx: Context, bridge: str) -> None:
 
     except TunnelNotAvailableError as e:
         if ctx.json_output:
-            click.echo(json.dumps({"error": str(e)}))
+            click.echo(
+                json_formatter.format_json_error("TunnelError", str(e), EXIT_GENERAL_ERROR),
+                err=True,
+            )
         else:
             click.echo(human_formatter.format_error(str(e)), err=True)
         sys.exit(EXIT_GENERAL_ERROR)
     except Exception as e:
         if ctx.json_output:
-            click.echo(json.dumps({"error": str(e)}))
+            click.echo(
+                json_formatter.format_json_error("Error", str(e), EXIT_GENERAL_ERROR),
+                err=True,
+            )
         else:
             click.echo(human_formatter.format_error(f"Connection failed: {e}"), err=True)
         sys.exit(EXIT_GENERAL_ERROR)

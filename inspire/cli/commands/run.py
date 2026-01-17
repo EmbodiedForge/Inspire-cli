@@ -212,6 +212,7 @@ def run(
                 gpu_type=gpu_type,
                 min_gpus=gpus,
                 include_preemptible=True,  # Count low-priority GPUs as available
+                instance_count=nodes,
             )
 
             if not best:
@@ -249,10 +250,21 @@ def run(
                 location = selected_location
 
             if not ctx.json_output:
-                preempt_note = f" (+{best.low_priority_gpus} preemptible)" if best.low_priority_gpus > 0 else ""
-                click.echo(
-                    f"Auto-selected: {selected_group_name}, {best.available_gpus} GPUs available{preempt_note}"
-                )
+                if best.selection_source == "nodes" and best.free_nodes:
+                    click.echo(
+                        "Auto-selected: "
+                        f"{selected_group_name}, {best.free_nodes} full nodes free "
+                        f"({best.available_gpus} GPUs)"
+                    )
+                else:
+                    preempt_note = (
+                        f" (+{best.low_priority_gpus} preemptible)"
+                        if best.low_priority_gpus > 0
+                        else ""
+                    )
+                    click.echo(
+                        f"Auto-selected: {selected_group_name}, {best.available_gpus} GPUs available{preempt_note}"
+                    )
 
         # Step 3: Generate job name if not provided
         if not name:

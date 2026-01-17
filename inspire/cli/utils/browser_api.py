@@ -1,4 +1,4 @@
-"""Browser-based API client for endpoints not available via OpenAPI.
+"""Web-session API client for endpoints not available via OpenAPI.
 
 This module provides access to APIs that require SSO authentication
 and are not exposed via the OpenAPI interface.
@@ -13,7 +13,7 @@ Discovered endpoints:
 
 from __future__ import annotations
 
-import json
+import math
 import os
 import time
 from dataclasses import dataclass
@@ -26,10 +26,32 @@ from .web_session import (
     get_playwright_proxy,
     SessionExpiredError,
     clear_session_cache,
+    request_json,
 )
 
 
 BASE_URL = os.environ.get("INSPIRE_BASE_URL", "https://qz.sii.edu.cn")
+
+
+def _request_json(
+    session: WebSession,
+    method: str,
+    path: str,
+    *,
+    referer: str,
+    body: Optional[dict] = None,
+    timeout: int = 30,
+) -> dict:
+    url = f"{BASE_URL}{path}"
+    headers = {"Referer": referer}
+    return request_json(
+        session,
+        method,
+        url,
+        headers=headers,
+        body=body,
+        timeout=timeout,
+    )
 
 
 def _launch_browser(p, headless: bool = True):
@@ -98,6 +120,9 @@ class GPUAvailability:
     used_gpus: int
     available_gpus: int
     low_priority_gpus: int  # GPUs used by low-priority tasks (can be preempted)
+    free_nodes: int = 0
+    gpu_per_node: int = 0
+    selection_source: str = "aggregate"
 
 
 def list_jobs(
@@ -123,8 +148,6 @@ def list_jobs(
     Returns:
         Tuple of (list of JobInfo, total count).
     """
-    from playwright.sync_api import sync_playwright
-
     if session is None:
         session = get_web_session()
 
@@ -142,40 +165,23 @@ def list_jobs(
     if status:
         body["status"] = status
 
-    with sync_playwright() as p:
-        browser = _launch_browser(p)
-        context = _new_context(browser, storage_state=session.storage_state)
+    data = _request_json(
+        session,
+        "POST",
+        "/api/v1/train_job/list",
+        referer=f"{BASE_URL}/jobs/distributedTraining",
+        body=body,
+        timeout=30,
+    )
 
-        try:
-            resp = context.request.post(
-                f"{BASE_URL}/api/v1/train_job/list",
-                headers={
-                    "Accept": "application/json, text/plain, */*",
-                    "Content-Type": "application/json",
-                    "Referer": f"{BASE_URL}/jobs/distributedTraining",
-                },
-                data=json.dumps(body),
-                timeout=30000,
-            )
+    if data.get("code") != 0:
+        raise ValueError(f"API error: {data.get('message')}")
 
-            if resp.status == 401:
-                raise ValueError("Session expired or invalid")
-            if resp.status >= 400:
-                raise ValueError(f"API returned {resp.status}: {resp.text()}")
+    jobs_data = data.get("data", {}).get("jobs", [])
+    total = data.get("data", {}).get("total", 0)
 
-            data = resp.json()
-            if data.get("code") != 0:
-                raise ValueError(f"API error: {data.get('message')}")
-
-            jobs_data = data.get("data", {}).get("jobs", [])
-            total = data.get("data", {}).get("total", 0)
-
-            jobs = [JobInfo.from_api_response(j) for j in jobs_data]
-            return jobs, total
-
-        finally:
-            context.close()
-            browser.close()
+    jobs = [JobInfo.from_api_response(j) for j in jobs_data]
+    return jobs, total
 
 
 def list_compute_groups(
@@ -191,8 +197,6 @@ def list_compute_groups(
     Returns:
         List of compute group dictionaries.
     """
-    from playwright.sync_api import sync_playwright
-
     if session is None:
         session = get_web_session()
 
@@ -205,33 +209,15 @@ def list_compute_groups(
         "filter": {"workspace_id": workspace_id},
     }
 
-    with sync_playwright() as p:
-        browser = _launch_browser(p)
-        context = _new_context(browser, storage_state=session.storage_state)
-
-        try:
-            resp = context.request.post(
-                f"{BASE_URL}/api/v1/logic_compute_groups/list",
-                headers={
-                    "Accept": "application/json, text/plain, */*",
-                    "Content-Type": "application/json",
-                    "Referer": f"{BASE_URL}/jobs/distributedTraining",
-                },
-                data=json.dumps(body),
-                timeout=30000,
-            )
-
-            if resp.status == 401:
-                raise SessionExpiredError("Session expired or invalid")
-            if resp.status >= 400:
-                raise ValueError(f"API returned {resp.status}")
-
-            data = resp.json()
-            return data.get("data", {}).get("logic_compute_groups", [])
-
-        finally:
-            context.close()
-            browser.close()
+    data = _request_json(
+        session,
+        "POST",
+        "/api/v1/logic_compute_groups/list",
+        referer=f"{BASE_URL}/jobs/distributedTraining",
+        body=body,
+        timeout=30,
+    )
+    return data.get("data", {}).get("logic_compute_groups", [])
 
 
 def get_current_user(session: Optional[WebSession] = None) -> dict:
@@ -243,34 +229,17 @@ def get_current_user(session: Optional[WebSession] = None) -> dict:
     Returns:
         User details dictionary.
     """
-    from playwright.sync_api import sync_playwright
-
     if session is None:
         session = get_web_session()
 
-    with sync_playwright() as p:
-        browser = _launch_browser(p)
-        context = _new_context(browser, storage_state=session.storage_state)
-
-        try:
-            resp = context.request.get(
-                f"{BASE_URL}/api/v1/user/detail",
-                headers={
-                    "Accept": "application/json, text/plain, */*",
-                    "Referer": f"{BASE_URL}/jobs/distributedTraining",
-                },
-                timeout=30000,
-            )
-
-            if resp.status >= 400:
-                raise ValueError(f"API returned {resp.status}")
-
-            data = resp.json()
-            return data.get("data", {})
-
-        finally:
-            context.close()
-            browser.close()
+    data = _request_json(
+        session,
+        "GET",
+        "/api/v1/user/detail",
+        referer=f"{BASE_URL}/jobs/distributedTraining",
+        timeout=30,
+    )
+    return data.get("data", {})
 
 
 def list_job_users(
@@ -286,39 +255,21 @@ def list_job_users(
     Returns:
         List of user dictionaries.
     """
-    from playwright.sync_api import sync_playwright
-
     if session is None:
         session = get_web_session()
 
     if workspace_id is None:
         workspace_id = session.workspace_id or DEFAULT_WORKSPACE_ID
 
-    with sync_playwright() as p:
-        browser = _launch_browser(p)
-        context = _new_context(browser, storage_state=session.storage_state)
-
-        try:
-            resp = context.request.post(
-                f"{BASE_URL}/api/v1/train_job/users",
-                headers={
-                    "Accept": "application/json, text/plain, */*",
-                    "Content-Type": "application/json",
-                    "Referer": f"{BASE_URL}/jobs/distributedTraining",
-                },
-                data=json.dumps({"workspace_id": workspace_id}),
-                timeout=30000,
-            )
-
-            if resp.status >= 400:
-                raise ValueError(f"API returned {resp.status}")
-
-            data = resp.json()
-            return data.get("data", {}).get("items", [])
-
-        finally:
-            context.close()
-            browser.close()
+    data = _request_json(
+        session,
+        "POST",
+        "/api/v1/train_job/users",
+        referer=f"{BASE_URL}/jobs/distributedTraining",
+        body={"workspace_id": workspace_id},
+        timeout=30,
+    )
+    return data.get("data", {}).get("items", [])
 
 
 def get_accurate_gpu_availability(
@@ -342,8 +293,6 @@ def get_accurate_gpu_availability(
     Returns:
         List of GPUAvailability objects with accurate usage stats.
     """
-    from playwright.sync_api import sync_playwright
-
     if session is None:
         session = get_web_session()
 
@@ -366,53 +315,46 @@ def get_accurate_gpu_availability(
 
     results = []
 
-    with sync_playwright() as p:
-        browser = _launch_browser(p)
-        context = _new_context(browser, storage_state=session.storage_state)
+    for group in groups:
+        group_id = group["logic_compute_group_id"]
+        group_name = group["name"]
 
         try:
-            for group in groups:
-                group_id = group['logic_compute_group_id']
-                group_name = group['name']
+            data = _request_json(
+                session,
+                "GET",
+                f"/api/v1/compute_resources/logic_compute_groups/{group_id}",
+                referer=f"{BASE_URL}/jobs/distributedTraining",
+                timeout=30,
+            )
+        except SessionExpiredError:
+            raise
+        except ValueError:
+            continue
 
-                resp = context.request.get(
-                    f"{BASE_URL}/api/v1/compute_resources/logic_compute_groups/{group_id}",
-                    headers={
-                        "Accept": "application/json, text/plain, */*",
-                        "Referer": f"{BASE_URL}/jobs/distributedTraining",
-                    },
-                    timeout=30000,
-                )
+        resources = data.get("data", {}).get("logic_resouces", {})
+        gpu_stats = data.get("data", {}).get("gpu_type_stats", [{}])
 
-                if resp.status != 200:
-                    continue
+        gpu_type = ""
+        if gpu_stats:
+            gpu_type = gpu_stats[0].get("gpu_info", {}).get("gpu_type_display", "Unknown")
 
-                data = resp.json()
-                resources = data.get("data", {}).get("logic_resouces", {})
-                gpu_stats = data.get("data", {}).get("gpu_type_stats", [{}])
+        gpu_total = resources.get("gpu_total", 0)
+        gpu_used = resources.get("gpu_used", 0)
+        gpu_low_priority = resources.get("gpu_low_priority_used", 0)
+        gpu_available = gpu_total - gpu_used
 
-                gpu_type = ""
-                if gpu_stats:
-                    gpu_type = gpu_stats[0].get("gpu_info", {}).get("gpu_type_display", "Unknown")
-
-                gpu_total = resources.get("gpu_total", 0)
-                gpu_used = resources.get("gpu_used", 0)
-                gpu_low_priority = resources.get("gpu_low_priority_used", 0)
-                gpu_available = gpu_total - gpu_used
-
-                results.append(GPUAvailability(
-                    group_id=group_id,
-                    group_name=group_name,
-                    gpu_type=gpu_type,
-                    total_gpus=gpu_total,
-                    used_gpus=gpu_used,
-                    available_gpus=gpu_available,
-                    low_priority_gpus=gpu_low_priority,
-                ))
-
-        finally:
-            context.close()
-            browser.close()
+        results.append(
+            GPUAvailability(
+                group_id=group_id,
+                group_name=group_name,
+                gpu_type=gpu_type,
+                total_gpus=gpu_total,
+                used_gpus=gpu_used,
+                available_gpus=gpu_available,
+                low_priority_gpus=gpu_low_priority,
+            )
+        )
 
     return results
 
@@ -422,22 +364,86 @@ def find_best_compute_group_accurate(
     min_gpus: int = 8,
     preferred_groups: Optional[list[str]] = None,
     include_preemptible: bool = True,
+    instance_count: int = 1,
+    prefer_full_nodes: bool = True,
 ) -> Optional[GPUAvailability]:
     """Find the best compute group using accurate browser API data.
 
-    This uses real-time GPU availability from the browser API, which provides
-    accurate per-GPU usage counts rather than per-node estimates.
+    Prefers node-level availability (full-free nodes) when possible, then falls
+    back to aggregated GPU usage (with preemptible GPUs optionally included).
 
     Args:
         gpu_type: Filter by GPU type ("H100", "H200", or None for any)
-        min_gpus: Minimum required GPUs
+        min_gpus: Minimum required GPUs per instance
         preferred_groups: Preferred group IDs (checked first)
         include_preemptible: If True, count low-priority GPUs as available
                             (they can be preempted for higher priority jobs)
+        instance_count: Number of instances/nodes required
+        prefer_full_nodes: If True, try node-level selection before aggregate
 
     Returns:
         Best matching GPUAvailability, or None if no suitable group found
     """
+    if prefer_full_nodes:
+        try:
+            from inspire.cli.utils.resources import fetch_resource_availability
+
+            node_availability = fetch_resource_availability(known_only=not preferred_groups)
+            gpu_type_upper = (gpu_type or "").upper()
+            required_instances = max(1, int(instance_count))
+            normalized_min_gpus = max(1, int(min_gpus))
+
+            candidates = []
+            for group in node_availability:
+                if gpu_type_upper and gpu_type_upper != "ANY":
+                    if gpu_type_upper not in (group.gpu_type or "").upper():
+                        continue
+
+                gpu_per_node = group.gpu_per_node or 0
+                if gpu_per_node <= 0:
+                    continue
+
+                nodes_per_instance = math.ceil(normalized_min_gpus / gpu_per_node)
+                required_nodes = required_instances * nodes_per_instance
+                if group.free_nodes < required_nodes:
+                    continue
+
+                candidates.append(group)
+
+            if candidates:
+                candidates.sort(
+                    key=lambda g: (g.free_nodes, g.free_gpus),
+                    reverse=True,
+                )
+
+                selected = None
+                if preferred_groups:
+                    for group in candidates:
+                        if group.group_id in preferred_groups:
+                            selected = group
+                            break
+
+                if selected is None:
+                    selected = candidates[0]
+
+                total_gpus = selected.total_nodes * selected.gpu_per_node
+                used_gpus = max(total_gpus - selected.free_gpus, 0)
+
+                return GPUAvailability(
+                    group_id=selected.group_id,
+                    group_name=selected.group_name,
+                    gpu_type=selected.gpu_type,
+                    total_gpus=total_gpus,
+                    used_gpus=used_gpus,
+                    available_gpus=selected.free_gpus,
+                    low_priority_gpus=0,
+                    free_nodes=selected.free_nodes,
+                    gpu_per_node=selected.gpu_per_node,
+                    selection_source="nodes",
+                )
+        except Exception:
+            pass
+
     availability = get_accurate_gpu_availability()
 
     if not availability:
@@ -514,90 +520,73 @@ def get_full_free_node_counts(
     Returns:
         List of FullFreeNodeCount sorted by full_free_nodes (desc).
     """
-    from playwright.sync_api import sync_playwright
-
     if session is None:
         session = get_web_session()
 
     results: list[FullFreeNodeCount] = []
 
-    with sync_playwright() as p:
-        browser = _launch_browser(p)
-        context = _new_context(browser, storage_state=session.storage_state)
+    try:
+        for gid in group_ids:
+            body = {
+                "page_num": 1,
+                "page_size": -1,
+                "filter": {"logic_compute_group_id": gid},
+            }
 
-        try:
-            for gid in group_ids:
-                body = {
-                    "page_num": 1,
-                    "page_size": -1,
-                    "filter": {"logic_compute_group_id": gid},
-                }
+            payload = _request_json(
+                session,
+                "POST",
+                "/api/v1/cluster_nodes/list",
+                referer=f"{BASE_URL}/jobs/distributedTraining",
+                body=body,
+                timeout=30,
+            )
 
-                resp = context.request.post(
-                    f"{BASE_URL}/api/v1/cluster_nodes/list",
-                    headers={
-                        "Accept": "application/json, text/plain, */*",
-                        "Content-Type": "application/json",
-                        "Referer": f"{BASE_URL}/jobs/distributedTraining",
-                    },
-                    data=json.dumps(body),
-                    timeout=30000,
-                )
+            if payload.get("code") != 0:
+                raise ValueError(f"API error: {payload.get('message')}")
 
-                if resp.status == 401:
-                    raise SessionExpiredError("Session expired or invalid")
-                if resp.status >= 400:
-                    raise ValueError(f"API returned {resp.status}")
+            data = payload.get("data", {})
+            nodes = data.get("nodes", []) or []
 
-                payload = resp.json()
-                if payload.get("code") != 0:
-                    raise ValueError(f"API error: {payload.get('message')}")
+            total_nodes = len(nodes)
+            ready_nodes = 0
+            full_free_nodes = 0
+            group_name = ""
 
-                data = payload.get("data", {})
-                nodes = data.get("nodes", []) or []
+            for n in nodes:
+                if not group_name:
+                    group_name = n.get("logic_compute_group_name", "") or ""
 
-                total_nodes = len(nodes)
-                ready_nodes = 0
-                full_free_nodes = 0
-                group_name = ""
+                status = (n.get("status") or "").upper()
+                if status == "READY":
+                    ready_nodes += 1
 
-                for n in nodes:
-                    if not group_name:
-                        group_name = n.get("logic_compute_group_name", "") or ""
+                    node_gpu = n.get("gpu_count", 0) or 0
+                    task_list = n.get("task_list") or []
+                    if node_gpu == gpu_per_node and len(task_list) == 0:
+                        full_free_nodes += 1
 
-                    status = (n.get("status") or "").upper()
-                    if status == "READY":
-                        ready_nodes += 1
-
-                        node_gpu = n.get("gpu_count", 0) or 0
-                        task_list = n.get("task_list") or []
-                        if node_gpu == gpu_per_node and len(task_list) == 0:
-                            full_free_nodes += 1
-
-                results.append(
-                    FullFreeNodeCount(
-                        group_id=gid,
-                        group_name=group_name,
-                        gpu_per_node=gpu_per_node,
-                        total_nodes=total_nodes,
-                        ready_nodes=ready_nodes,
-                        full_free_nodes=full_free_nodes,
-                    )
-                )
-
-        except SessionExpiredError:
-            if _retry:
-                clear_session_cache()
-                return get_full_free_node_counts(
-                    group_ids,
+            results.append(
+                FullFreeNodeCount(
+                    group_id=gid,
+                    group_name=group_name,
                     gpu_per_node=gpu_per_node,
-                    session=None,
-                    _retry=False,
+                    total_nodes=total_nodes,
+                    ready_nodes=ready_nodes,
+                    full_free_nodes=full_free_nodes,
                 )
-            raise
-        finally:
-            context.close()
-            browser.close()
+            )
+
+    except SessionExpiredError:
+        if _retry:
+            clear_session_cache()
+            return get_full_free_node_counts(
+                group_ids,
+                gpu_per_node=gpu_per_node,
+                session=None,
+                _retry=False,
+            )
+        raise
 
     results.sort(key=lambda r: r.full_free_nodes, reverse=True)
     return results
@@ -639,8 +628,6 @@ def list_projects(
     Returns:
         List of ProjectInfo objects.
     """
-    from playwright.sync_api import sync_playwright
-
     if session is None:
         session = get_web_session()
 
@@ -656,42 +643,27 @@ def list_projects(
         },
     }
 
-    with sync_playwright() as p:
-        browser = _launch_browser(p)
-        context = _new_context(browser, storage_state=session.storage_state)
+    data = _request_json(
+        session,
+        "POST",
+        "/api/v1/project/list",
+        referer=f"{BASE_URL}/jobs/interactiveModeling",
+        body=body,
+        timeout=30,
+    )
 
-        try:
-            resp = context.request.post(
-                f"{BASE_URL}/api/v1/project/list",
-                headers={
-                    "Accept": "application/json, text/plain, */*",
-                    "Content-Type": "application/json",
-                    "Referer": f"{BASE_URL}/jobs/interactiveModeling",
-                },
-                data=json.dumps(body),
-                timeout=30000,
-            )
+    if data.get("code") != 0:
+        raise ValueError(f"API error: {data.get('message')}")
 
-            if resp.status >= 400:
-                raise ValueError(f"API returned {resp.status}")
-
-            data = resp.json()
-            if data.get("code") != 0:
-                raise ValueError(f"API error: {data.get('message')}")
-
-            items = data.get("data", {}).get("items", [])
-            return [
-                ProjectInfo(
-                    project_id=item.get("id", ""),
-                    name=item.get("name", ""),
-                    workspace_id=item.get("workspace_id", workspace_id),
-                )
-                for item in items
-            ]
-
-        finally:
-            context.close()
-            browser.close()
+    items = data.get("data", {}).get("items", [])
+    return [
+        ProjectInfo(
+            project_id=item.get("id", ""),
+            name=item.get("name", ""),
+            workspace_id=item.get("workspace_id", workspace_id),
+        )
+        for item in items
+    ]
 
 
 def list_images(
@@ -709,8 +681,6 @@ def list_images(
     Returns:
         List of ImageInfo objects.
     """
-    from playwright.sync_api import sync_playwright
-
     if session is None:
         session = get_web_session()
 
@@ -727,50 +697,37 @@ def list_images(
         },
     }
 
-    with sync_playwright() as p:
-        browser = _launch_browser(p)
-        context = _new_context(browser, storage_state=session.storage_state)
+    data = _request_json(
+        session,
+        "POST",
+        "/api/v1/image/list",
+        referer=f"{BASE_URL}/jobs/interactiveModeling",
+        body=body,
+        timeout=30,
+    )
 
-        try:
-            resp = context.request.post(
-                f"{BASE_URL}/api/v1/image/list",
-                headers={
-                    "Accept": "application/json, text/plain, */*",
-                    "Content-Type": "application/json",
-                    "Referer": f"{BASE_URL}/jobs/interactiveModeling",
-                },
-                data=json.dumps(body),
-                timeout=30000,
+    if data.get("code") != 0:
+        raise ValueError(f"API error: {data.get('message')}")
+
+    items = data.get("data", {}).get("images", [])
+    results = []
+    for item in items:
+        # Parse image name and version from URL
+        url = item.get("address", "")
+        name = item.get("name", url.split("/")[-1] if url else "")
+        framework = item.get("framework", "")
+        version = item.get("version", "")
+
+        results.append(
+            ImageInfo(
+                image_id=item.get("image_id", ""),
+                url=url,
+                name=name,
+                framework=framework,
+                version=version,
             )
-
-            if resp.status >= 400:
-                raise ValueError(f"API returned {resp.status}")
-
-            data = resp.json()
-            if data.get("code") != 0:
-                raise ValueError(f"API error: {data.get('message')}")
-
-            items = data.get("data", {}).get("images", [])
-            results = []
-            for item in items:
-                # Parse image name and version from URL
-                url = item.get("address", "")
-                name = item.get("name", url.split("/")[-1] if url else "")
-                framework = item.get("framework", "")
-                version = item.get("version", "")
-
-                results.append(ImageInfo(
-                    image_id=item.get("image_id", ""),
-                    url=url,
-                    name=name,
-                    framework=framework,
-                    version=version,
-                ))
-            return results
-
-        finally:
-            context.close()
-            browser.close()
+        )
+    return results
 
 
 def get_notebook_schedule(
@@ -786,40 +743,24 @@ def get_notebook_schedule(
     Returns:
         Schedule configuration dictionary with predef_train_spec and quota data.
     """
-    from playwright.sync_api import sync_playwright
-
     if session is None:
         session = get_web_session()
 
     if workspace_id is None:
         workspace_id = session.workspace_id or DEFAULT_WORKSPACE_ID
 
-    with sync_playwright() as p:
-        browser = _launch_browser(p)
-        context = _new_context(browser, storage_state=session.storage_state)
+    data = _request_json(
+        session,
+        "GET",
+        f"/api/v1/notebook/schedule/{workspace_id}",
+        referer=f"{BASE_URL}/jobs/interactiveModeling",
+        timeout=30,
+    )
 
-        try:
-            resp = context.request.get(
-                f"{BASE_URL}/api/v1/notebook/schedule/{workspace_id}",
-                headers={
-                    "Accept": "application/json, text/plain, */*",
-                    "Referer": f"{BASE_URL}/jobs/interactiveModeling",
-                },
-                timeout=30000,
-            )
+    if data.get("code") != 0:
+        raise ValueError(f"API error: {data.get('message')}")
 
-            if resp.status >= 400:
-                raise ValueError(f"API returned {resp.status}")
-
-            data = resp.json()
-            if data.get("code") != 0:
-                raise ValueError(f"API error: {data.get('message')}")
-
-            return data.get("data", {})
-
-        finally:
-            context.close()
-            browser.close()
+    return data.get("data", {})
 
 
 def list_notebook_compute_groups(
@@ -835,8 +776,6 @@ def list_notebook_compute_groups(
     Returns:
         List of compute group dictionaries with GPU availability info.
     """
-    from playwright.sync_api import sync_playwright
-
     if session is None:
         session = get_web_session()
 
@@ -854,31 +793,15 @@ def list_notebook_compute_groups(
         "sorter": [],
     }
 
-    with sync_playwright() as p:
-        browser = _launch_browser(p)
-        context = _new_context(browser, storage_state=session.storage_state)
-
-        try:
-            resp = context.request.post(
-                f"{BASE_URL}/api/v1/logic_compute_groups/list",
-                headers={
-                    "Accept": "application/json, text/plain, */*",
-                    "Content-Type": "application/json",
-                    "Referer": f"{BASE_URL}/jobs/interactiveModeling",
-                },
-                data=json.dumps(body),
-                timeout=30000,
-            )
-
-            if resp.status >= 400:
-                raise ValueError(f"API returned {resp.status}")
-
-            data = resp.json()
-            return data.get("data", {}).get("logic_compute_groups", [])
-
-        finally:
-            context.close()
-            browser.close()
+    data = _request_json(
+        session,
+        "POST",
+        "/api/v1/logic_compute_groups/list",
+        referer=f"{BASE_URL}/jobs/interactiveModeling",
+        body=body,
+        timeout=30,
+    )
+    return data.get("data", {}).get("logic_compute_groups", [])
 
 
 def create_notebook(
@@ -922,8 +845,6 @@ def create_notebook(
     Returns:
         API response with notebook_id.
     """
-    from playwright.sync_api import sync_playwright
-
     if session is None:
         session = get_web_session()
 
@@ -956,36 +877,19 @@ def create_notebook(
         "vscode_version": vscode_version,
     }
 
-    with sync_playwright() as p:
-        browser = _launch_browser(p)
-        context = _new_context(browser, storage_state=session.storage_state)
+    data = _request_json(
+        session,
+        "POST",
+        "/api/v1/notebook/create",
+        referer=f"{BASE_URL}/jobs/interactiveModeling",
+        body=body,
+        timeout=60,
+    )
 
-        try:
-            resp = context.request.post(
-                f"{BASE_URL}/api/v1/notebook/create",
-                headers={
-                    "Accept": "application/json, text/plain, */*",
-                    "Content-Type": "application/json",
-                    "Referer": f"{BASE_URL}/jobs/interactiveModeling",
-                },
-                data=json.dumps(body),
-                timeout=60000,
-            )
+    if data.get("code") != 0:
+        raise ValueError(f"API error: {data.get('message')}")
 
-            if resp.status == 401:
-                raise ValueError("Session expired or invalid")
-            if resp.status >= 400:
-                raise ValueError(f"API returned {resp.status}: {resp.text()}")
-
-            data = resp.json()
-            if data.get("code") != 0:
-                raise ValueError(f"API error: {data.get('message')}")
-
-            return data.get("data", {})
-
-        finally:
-            context.close()
-            browser.close()
+    return data.get("data", {})
 
 
 def stop_notebook(
@@ -1001,8 +905,6 @@ def stop_notebook(
     Returns:
         API response.
     """
-    from playwright.sync_api import sync_playwright
-
     if session is None:
         session = get_web_session()
 
@@ -1011,36 +913,19 @@ def stop_notebook(
         "operation": "STOP",
     }
 
-    with sync_playwright() as p:
-        browser = _launch_browser(p)
-        context = _new_context(browser, storage_state=session.storage_state)
+    data = _request_json(
+        session,
+        "POST",
+        "/api/v1/notebook/operate",
+        referer=f"{BASE_URL}/jobs/interactiveModeling",
+        body=body,
+        timeout=30,
+    )
 
-        try:
-            resp = context.request.post(
-                f"{BASE_URL}/api/v1/notebook/operate",
-                headers={
-                    "Accept": "application/json, text/plain, */*",
-                    "Content-Type": "application/json",
-                    "Referer": f"{BASE_URL}/jobs/interactiveModeling",
-                },
-                data=json.dumps(body),
-                timeout=30000,
-            )
+    if data.get("code") != 0:
+        raise ValueError(f"API error: {data.get('message')}")
 
-            if resp.status == 401:
-                raise ValueError("Session expired or invalid")
-            if resp.status >= 400:
-                raise ValueError(f"API returned {resp.status}: {resp.text()}")
-
-            data = resp.json()
-            if data.get("code") != 0:
-                raise ValueError(f"API error: {data.get('message')}")
-
-            return data.get("data", {})
-
-        finally:
-            context.close()
-            browser.close()
+    return data.get("data", {})
 
 
 def get_notebook_detail(
@@ -1056,39 +941,21 @@ def get_notebook_detail(
     Returns:
         Notebook detail dictionary.
     """
-    from playwright.sync_api import sync_playwright
-
     if session is None:
         session = get_web_session()
 
-    with sync_playwright() as p:
-        browser = _launch_browser(p)
-        context = _new_context(browser, storage_state=session.storage_state)
+    data = _request_json(
+        session,
+        "GET",
+        f"/api/v1/notebook/{notebook_id}",
+        referer=f"{BASE_URL}/jobs/interactiveModeling",
+        timeout=30,
+    )
 
-        try:
-            resp = context.request.get(
-                f"{BASE_URL}/api/v1/notebook/{notebook_id}",
-                headers={
-                    "Accept": "application/json",
-                    "Referer": f"{BASE_URL}/jobs/interactiveModeling",
-                },
-                timeout=30000,
-            )
+    if data.get("code") != 0:
+        raise ValueError(f"API error: {data.get('message')}")
 
-            if resp.status == 401:
-                raise ValueError("Session expired or invalid")
-            if resp.status >= 400:
-                raise ValueError(f"API returned {resp.status}: {resp.text()}")
-
-            data = resp.json()
-            if data.get("code") != 0:
-                raise ValueError(f"API error: {data.get('message')}")
-
-            return data.get("data", {})
-
-        finally:
-            context.close()
-            browser.close()
+    return data.get("data", {})
 
 
 def wait_for_notebook_running(

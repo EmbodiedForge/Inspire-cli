@@ -3,6 +3,7 @@
 Commands:
     inspire job create - Create a new training job
     inspire job status - Check job status
+    inspire job command - Show job start command
     inspire job stop   - Stop a running job
     inspire job wait   - Wait for job completion
     inspire job list   - List recent jobs from local cache
@@ -79,11 +80,14 @@ def _wrap_in_bash(command: str) -> str:
 @click.option("--resource", "-r", required=True, help="Resource spec (e.g., '4xH200')")
 @click.option("--command", "-c", required=True, help="Start command")
 @click.option("--framework", default="pytorch", help="Training framework (default: pytorch)")
-@click.option("--priority", type=int, default=lambda: int(os.environ.get("INSP_PRIORITY", "8")), help="Task priority 1-10 (default: 8, env: INSP_PRIORITY)")
+@click.option("--priority", type=int, default=lambda: int(os.environ.get("INSP_PRIORITY", "6")), help="Task priority 1-10 (default: 6, env: INSP_PRIORITY)")
 @click.option("--max-time", type=float, default=100.0, help="Max runtime in hours (default: 100)")
 @click.option("--location", help="Preferred datacenter location")
-@click.option("--auto", is_flag=True, help="Auto-select best location based on GPU availability")
-@click.option("--no-cache", is_flag=True, help="Bypass availability cache when using --auto")
+@click.option(
+    "--auto/--no-auto",
+    default=True,
+    help="Auto-select best location based on node availability (default: auto)",
+)
 @click.option("--image", default=lambda: os.environ.get("INSP_IMAGE"), help="Custom Docker image")
 @click.option(
     "--nodes",
@@ -102,7 +106,6 @@ def create(
     max_time: float,
     location: str,
     auto: bool,
-    no_cache: bool,
     image: str,
     nodes: int,
 ):
@@ -130,6 +133,7 @@ def create(
         export INSPIRE_TARGET_DIR="/train/logs"
         inspire job create --name "pr-123" --resource "4xH200" --command "cd /path/to/code && bash train.sh"
         inspire job create -n test -r H200 -c "python train.py" --priority 9
+        inspire job create -n test -r 4xH200 -c "python train.py" --no-auto
     """
     try:
         config = Config.from_env(require_target_dir=True)
@@ -148,6 +152,7 @@ def create(
                 gpu_type=requested_gpu_type.value,
                 min_gpus=requested_gpu_count,
                 include_preemptible=True,  # Count low-priority GPUs as available
+                instance_count=nodes,
             )
 
             if not best:
@@ -158,9 +163,6 @@ def create(
                     EXIT_VALIDATION_ERROR,
                 )
                 return
-
-            # Calculate effective available (including preemptible)
-            effective_available = best.available_gpus + best.low_priority_gpus
 
             # Map group_id -> location string expected by ResourceManager
             selected_group_name = best.group_name
@@ -178,10 +180,21 @@ def create(
             location = selected_location
 
             if not ctx.json_output:
-                preempt_note = f" (+{best.low_priority_gpus} preemptible)" if best.low_priority_gpus > 0 else ""
-                click.echo(
-                    f"Auto-selected: {selected_group_name}, {best.available_gpus} GPUs available{preempt_note}"
-                )
+                if best.selection_source == "nodes" and best.free_nodes:
+                    click.echo(
+                        "Auto-selected: "
+                        f"{selected_group_name}, {best.free_nodes} full nodes free "
+                        f"({best.available_gpus} GPUs)"
+                    )
+                else:
+                    preempt_note = (
+                        f" (+{best.low_priority_gpus} preemptible)"
+                        if best.low_priority_gpus > 0
+                        else ""
+                    )
+                    click.echo(
+                        f"Auto-selected: {selected_group_name}, {best.available_gpus} GPUs available{preempt_note}"
+                    )
 
         # Wrap in bash for consistent shell behavior
         command = _wrap_in_bash(command)
@@ -313,6 +326,73 @@ def status(ctx: Context, job_id: str):
             _handle_error(ctx, "JobNotFound", str(e), EXIT_JOB_NOT_FOUND)
         else:
             _handle_error(ctx, "APIError", str(e), EXIT_API_ERROR)
+
+
+@job.command("command")
+@click.argument("job_id")
+@pass_context
+def show_command(ctx: Context, job_id: str):
+    """Show the training command used for a job."""
+    # Validate job ID format early (before auth/API calls)
+    format_error = _validate_job_id_format(job_id)
+    if format_error:
+        _handle_error(ctx, "InvalidJobID", format_error, EXIT_JOB_NOT_FOUND)
+        return
+
+    cached_command = None
+    cache = JobCache(os.getenv("INSPIRE_JOB_CACHE"))
+    cached_job = cache.get_job(job_id)
+    if cached_job:
+        cached_command = cached_job.get("command")
+
+    command_value = None
+    source = None
+
+    try:
+        config = Config.from_env()
+        api = AuthManager.get_api(config)
+
+        result = api.get_job_detail(job_id)
+        job_data = result.get("data", {})
+        command_value = job_data.get("command")
+        if command_value:
+            source = "api"
+    except ConfigError as e:
+        if not cached_command:
+            _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
+            return
+    except AuthenticationError as e:
+        if not cached_command:
+            _handle_error(ctx, "AuthenticationError", str(e), EXIT_AUTH_ERROR)
+            return
+    except Exception as e:
+        if not cached_command:
+            if "not found" in str(e).lower() or "invalid job id" in str(e).lower():
+                _handle_error(ctx, "JobNotFound", str(e), EXIT_JOB_NOT_FOUND)
+            else:
+                _handle_error(ctx, "APIError", str(e), EXIT_API_ERROR)
+            return
+
+    if not command_value and cached_command:
+        command_value = cached_command
+        source = "cache"
+
+    if not command_value:
+        _handle_error(
+            ctx,
+            "CommandNotFound",
+            f"No command found for job {job_id}",
+            EXIT_API_ERROR,
+        )
+        return
+
+    if ctx.json_output:
+        payload = {"job_id": job_id, "command": command_value}
+        if source:
+            payload["source"] = source
+        click.echo(json_formatter.format_json(payload))
+    else:
+        click.echo(command_value)
 
 
 @job.command("stop")

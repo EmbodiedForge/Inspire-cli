@@ -18,6 +18,23 @@ uv tool install git+ssh://git@<your-gitea-host>/cyteena/inspire-cli.git
 
 > **Tip**: If you use SSH keys for Git, the SSH method is simpler - no need to set up access tokens.
 
+### Local Checkout (No Venv Activation)
+
+If you are working from a git clone and do not want to `source .venv/bin/activate`:
+
+```bash
+uv tool install -e .
+inspire --help
+```
+
+Alternative (repo-local wrapper):
+
+```bash
+uv venv .venv
+uv pip install -e .
+./bin/inspire --help
+```
+
 ## Configuration
 
 Set the required environment variables:
@@ -86,6 +103,9 @@ inspire job create \
 # Check job status
 inspire job status <job-id>
 
+# Show the command used by a job
+inspire job command <job-id>
+
 # View logs
 inspire job logs <job-id> --tail 100 --follow
 ```
@@ -149,7 +169,7 @@ inspire resources list --all
 | `--watch, -w` | Continuously watch availability (refreshes every 30s) |
 | `--interval, -i` | Watch refresh interval in seconds (default: 30) |
 | `--all` | Show all accessible compute groups |
-| `--no-cache` | Bypass cache and fetch fresh data |
+| `--no-cache` | Bypass cached node availability (workspace view only) |
 
 ### Code Sync
 
@@ -170,6 +190,7 @@ inspire sync --force            # Force sync, discard local changes on Bridge
 |---------|-------------|
 | `inspire job create` | Create a training job |
 | `inspire job status <id>` | Check job status |
+| `inspire job command <id>` | Show job start command |
 | `inspire job stop <id>` | Stop a running job |
 | `inspire job wait <id>` | Wait for job completion |
 | `inspire job list` | List recent jobs |
@@ -282,6 +303,10 @@ inspire job create \
   --max-time 2 \
   --location "H200 机房3"
 ```
+
+By default, `inspire job create` auto-selects a compute group using node-level
+browser API data (same source as `inspire resources list --workspace` and
+`inspire resources nodes`). Use `--no-auto` to skip auto-selection.
 
 ### JSON Output for Automation
 

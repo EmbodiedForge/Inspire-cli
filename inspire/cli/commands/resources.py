@@ -34,7 +34,7 @@ def resources():
 @click.option(
     "--no-cache",
     is_flag=True,
-    help="Bypass cache and fetch fresh availability data",
+    help="Bypass cached node availability (workspace view only)",
 )
 @click.option(
     "--all",
