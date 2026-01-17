@@ -26,11 +26,7 @@ from inspire.cli.context import (
 )
 from inspire.cli.utils.config import Config, ConfigError
 from inspire.cli.utils.auth import AuthManager, AuthenticationError
-from inspire.cli.utils.resources import (
-    fetch_resource_availability,
-    find_best_compute_group,
-    clear_availability_cache,
-)
+from inspire.cli.utils.browser_api import find_best_compute_group_accurate
 from inspire.cli.formatters import json_formatter, human_formatter
 
 
@@ -137,11 +133,6 @@ def _exec_inspire_subcommand(args: list[str]) -> None:
     help="Custom Docker image",
 )
 @click.option(
-    "--no-cache",
-    is_flag=True,
-    help="Bypass availability cache and fetch fresh data",
-)
-@click.option(
     "--nodes",
     type=int,
     default=1,
@@ -160,7 +151,6 @@ def run(
     location: str,
     max_time: float,
     image: str,
-    no_cache: bool,
     nodes: int,
 ):
     """Quick job submission with smart resource allocation.
@@ -180,10 +170,6 @@ def run(
         2. Create job
         3. Follow logs until completion
     """
-    # Clear cache if requested
-    if no_cache:
-        clear_availability_cache()
-
     # Step 1: Sync if requested
     if sync or watch:
         if not ctx.json_output:
@@ -218,35 +204,14 @@ def run(
             # Use user-specified location
             resource_str = f"{gpus}x{gpu_type}"
         else:
-            # Smart selection
+            # Smart selection using accurate browser API
             if not ctx.json_output:
                 click.echo("Checking GPU availability...")
 
-            availability = fetch_resource_availability(config, known_only=True)
-
-            if not availability:
-                if ctx.json_output:
-                    click.echo(
-                        json_formatter.format_json_error(
-                            "NoResources",
-                            "No available compute groups found with GPUs",
-                            EXIT_VALIDATION_ERROR,
-                        )
-                    )
-                else:
-                    click.echo(
-                        human_formatter.format_error(
-                            "No available compute groups found",
-                            hint="Check 'inspire resources list' for options",
-                        ),
-                        err=True,
-                    )
-                sys.exit(EXIT_VALIDATION_ERROR)
-
-            best = find_best_compute_group(
-                availability,
+            best = find_best_compute_group_accurate(
                 gpu_type=gpu_type,
                 min_gpus=gpus,
+                include_preemptible=True,  # Count low-priority GPUs as available
             )
 
             if not best:
@@ -262,7 +227,7 @@ def run(
                     click.echo(
                         human_formatter.format_error(
                             f"No compute groups with at least {gpus} {gpu_type} GPUs available",
-                            hint="Try different GPU type or fewer GPUs",
+                            hint="Try different GPU type or fewer GPUs. Run 'inspire resources list' to see availability.",
                         ),
                         err=True,
                     )
@@ -284,9 +249,9 @@ def run(
                 location = selected_location
 
             if not ctx.json_output:
-                msg_loc = f" ({location})" if location else ""
+                preempt_note = f" (+{best.low_priority_gpus} preemptible)" if best.low_priority_gpus > 0 else ""
                 click.echo(
-                    f"Auto-selected: {selected_group_name}{msg_loc} ({best.free_gpus} GPUs available)"
+                    f"Auto-selected: {selected_group_name}, {best.available_gpus} GPUs available{preempt_note}"
                 )
 
         # Step 3: Generate job name if not provided

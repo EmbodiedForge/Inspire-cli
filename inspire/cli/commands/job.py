@@ -46,7 +46,7 @@ from inspire.cli.utils.tunnel import (
     run_ssh_command,
     TunnelNotAvailableError,
 )
-from inspire.cli.utils.resources import fetch_resource_availability, find_best_compute_group, clear_availability_cache
+from inspire.cli.utils.browser_api import find_best_compute_group_accurate
 from inspire.cli.formatters import json_formatter, human_formatter
 
 
@@ -137,30 +137,30 @@ def create(
 
         # Auto-select location based on GPU availability (if requested)
         if auto and not location:
-            if no_cache:
-                clear_availability_cache()
-
             try:
                 requested_gpu_type, requested_gpu_count = api.resource_manager.parse_resource_request(resource)
             except Exception as e:
                 _handle_error(ctx, "ValidationError", f"Invalid resource spec: {e}", EXIT_VALIDATION_ERROR)
                 return
 
-            availability = fetch_resource_availability(config, known_only=True)
-            best = find_best_compute_group(
-                availability,
+            # Use accurate browser API for resource selection
+            best = find_best_compute_group_accurate(
                 gpu_type=requested_gpu_type.value,
                 min_gpus=requested_gpu_count,
+                include_preemptible=True,  # Count low-priority GPUs as available
             )
 
             if not best:
                 _handle_error(
                     ctx,
                     "InsufficientResources",
-                    f"No {requested_gpu_type.value} compute group has at least {requested_gpu_count} free GPUs",
+                    f"No {requested_gpu_type.value} compute group has at least {requested_gpu_count} available GPUs",
                     EXIT_VALIDATION_ERROR,
                 )
                 return
+
+            # Calculate effective available (including preemptible)
+            effective_available = best.available_gpus + best.low_priority_gpus
 
             # Map group_id -> location string expected by ResourceManager
             selected_group_name = best.group_name
@@ -178,8 +178,9 @@ def create(
             location = selected_location
 
             if not ctx.json_output:
+                preempt_note = f" (+{best.low_priority_gpus} preemptible)" if best.low_priority_gpus > 0 else ""
                 click.echo(
-                    f"Auto-selected location: {selected_group_name} ({selected_location}), free GPUs: {best.free_gpus}"
+                    f"Auto-selected: {selected_group_name}, {best.available_gpus} GPUs available{preempt_note}"
                 )
 
         # Wrap in bash for consistent shell behavior

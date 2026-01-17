@@ -417,6 +417,192 @@ def get_accurate_gpu_availability(
     return results
 
 
+def find_best_compute_group_accurate(
+    gpu_type: Optional[str] = None,
+    min_gpus: int = 8,
+    preferred_groups: Optional[list[str]] = None,
+    include_preemptible: bool = True,
+) -> Optional[GPUAvailability]:
+    """Find the best compute group using accurate browser API data.
+
+    This uses real-time GPU availability from the browser API, which provides
+    accurate per-GPU usage counts rather than per-node estimates.
+
+    Args:
+        gpu_type: Filter by GPU type ("H100", "H200", or None for any)
+        min_gpus: Minimum required GPUs
+        preferred_groups: Preferred group IDs (checked first)
+        include_preemptible: If True, count low-priority GPUs as available
+                            (they can be preempted for higher priority jobs)
+
+    Returns:
+        Best matching GPUAvailability, or None if no suitable group found
+    """
+    availability = get_accurate_gpu_availability()
+
+    if not availability:
+        return None
+
+    def effective_available(group: GPUAvailability) -> int:
+        """Calculate effective available GPUs including preemptible."""
+        if include_preemptible:
+            return group.available_gpus + group.low_priority_gpus
+        return group.available_gpus
+
+    # Filter by GPU type (normalize: "H100" matches "NVIDIA H100 (80GB)")
+    if gpu_type and gpu_type.upper() != "ANY":
+        gpu_type_upper = gpu_type.upper()
+        filtered = [
+            g for g in availability
+            if gpu_type_upper in g.gpu_type.upper()
+        ]
+    else:
+        filtered = list(availability)
+
+    # Sort by effective available GPUs descending
+    filtered.sort(key=effective_available, reverse=True)
+
+    # Check preferred groups first
+    if preferred_groups:
+        for group in filtered:
+            if group.group_id in preferred_groups and effective_available(group) >= min_gpus:
+                return group
+
+    # Find group with most available GPUs that meets min_gpus
+    for group in filtered:
+        if effective_available(group) >= min_gpus:
+            return group
+
+    return None
+
+
+@dataclass
+class FullFreeNodeCount:
+    """Full-free (idle) node counts for a compute group.
+
+    These counts come from the browser-only endpoint POST /api/v1/cluster_nodes/list,
+    filtered by logic_compute_group_id.
+    """
+
+    group_id: str
+    group_name: str
+    gpu_per_node: int
+    total_nodes: int
+    ready_nodes: int
+    full_free_nodes: int  # READY nodes with gpu_per_node GPUs and empty task_list
+
+
+def get_full_free_node_counts(
+    group_ids: list[str],
+    *,
+    gpu_per_node: int = 8,
+    session: Optional[WebSession] = None,
+    _retry: bool = True,
+) -> list[FullFreeNodeCount]:
+    """Get per-group counts of fully-free 8-GPU nodes using browser API.
+
+    This answers: "How many nodes in this compute group can run an 8-GPU job now?"
+
+    It does NOT rely on aggregated GPU counts (which can be fragmented across nodes).
+
+    Args:
+        group_ids: logic_compute_group_id values.
+        gpu_per_node: Node GPU count to consider as a "full" node (default 8).
+        session: Optional existing WebSession.
+        _retry: Internal flag to prevent infinite retry loops.
+
+    Returns:
+        List of FullFreeNodeCount sorted by full_free_nodes (desc).
+    """
+    from playwright.sync_api import sync_playwright
+
+    if session is None:
+        session = get_web_session()
+
+    results: list[FullFreeNodeCount] = []
+
+    with sync_playwright() as p:
+        browser = _launch_browser(p)
+        context = _new_context(browser, storage_state=session.storage_state)
+
+        try:
+            for gid in group_ids:
+                body = {
+                    "page_num": 1,
+                    "page_size": -1,
+                    "filter": {"logic_compute_group_id": gid},
+                }
+
+                resp = context.request.post(
+                    f"{BASE_URL}/api/v1/cluster_nodes/list",
+                    headers={
+                        "Accept": "application/json, text/plain, */*",
+                        "Content-Type": "application/json",
+                        "Referer": f"{BASE_URL}/jobs/distributedTraining",
+                    },
+                    data=json.dumps(body),
+                    timeout=30000,
+                )
+
+                if resp.status == 401:
+                    raise SessionExpiredError("Session expired or invalid")
+                if resp.status >= 400:
+                    raise ValueError(f"API returned {resp.status}")
+
+                payload = resp.json()
+                if payload.get("code") != 0:
+                    raise ValueError(f"API error: {payload.get('message')}")
+
+                data = payload.get("data", {})
+                nodes = data.get("nodes", []) or []
+
+                total_nodes = len(nodes)
+                ready_nodes = 0
+                full_free_nodes = 0
+                group_name = ""
+
+                for n in nodes:
+                    if not group_name:
+                        group_name = n.get("logic_compute_group_name", "") or ""
+
+                    status = (n.get("status") or "").upper()
+                    if status == "READY":
+                        ready_nodes += 1
+
+                        node_gpu = n.get("gpu_count", 0) or 0
+                        task_list = n.get("task_list") or []
+                        if node_gpu == gpu_per_node and len(task_list) == 0:
+                            full_free_nodes += 1
+
+                results.append(
+                    FullFreeNodeCount(
+                        group_id=gid,
+                        group_name=group_name,
+                        gpu_per_node=gpu_per_node,
+                        total_nodes=total_nodes,
+                        ready_nodes=ready_nodes,
+                        full_free_nodes=full_free_nodes,
+                    )
+                )
+
+        except SessionExpiredError:
+            if _retry:
+                clear_session_cache()
+                return get_full_free_node_counts(
+                    group_ids,
+                    gpu_per_node=gpu_per_node,
+                    session=None,
+                    _retry=False,
+                )
+            raise
+        finally:
+            context.close()
+            browser.close()
+
+    results.sort(key=lambda r: r.full_free_nodes, reverse=True)
+    return results
+
+
 # =============================================================================
 # Notebook (Interactive Modeling) APIs
 # =============================================================================
