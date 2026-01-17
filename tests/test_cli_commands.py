@@ -19,6 +19,7 @@ from inspire.cli.context import (
 )
 from inspire.cli.utils import config as config_module
 from inspire.cli.utils import auth as auth_module
+from inspire.cli.utils.auth import AuthenticationError
 from inspire.cli.utils.config import ConfigError
 from inspire.cli.utils.job_cache import JobCache
 from inspire.inspire_api_control import ResourceManager
@@ -98,6 +99,7 @@ def patch_config_and_auth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Du
     """Patch Config.from_env and AuthManager.get_api to use local stubs."""
     config = make_test_config(tmp_path)
     config.target_dir and Path(config.target_dir).mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("INSPIRE_JOB_CACHE", config.job_cache_path)
 
     def fake_from_env(cls, require_target_dir: bool = False) -> config_module.Config:  # type: ignore[override]
         if require_target_dir and not config.target_dir:
@@ -296,6 +298,62 @@ def test_job_status_updates_cache_and_formats(monkeypatch: pytest.MonkeyPatch, t
     assert result.exit_code == 0
     assert "Job Status" in result.output
     assert TEST_JOB_ID in result.output
+
+
+def test_job_command_prefers_api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    api = patch_config_and_auth(monkeypatch, tmp_path)
+
+    # Seed cache with a different command to ensure API is preferred
+    config = make_test_config(tmp_path)
+    cache = JobCache(config.get_expanded_cache_path())
+    cache.add_job(
+        job_id=TEST_JOB_ID,
+        name="test-job",
+        resource="H200",
+        command="cached command",
+        status="RUNNING",
+        log_path=None,
+    )
+
+    def api_detail(job_id: str) -> Dict[str, Any]:
+        api.calls.setdefault("get_job_detail", []).append(job_id)
+        return {"data": {"job_id": job_id, "command": "api command"}}
+
+    api.get_job_detail = api_detail  # type: ignore[assignment]
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["job", "command", TEST_JOB_ID])
+
+    assert result.exit_code == 0
+    assert "api command" in result.output
+    assert "cached command" not in result.output
+    assert api.calls["get_job_detail"] == [TEST_JOB_ID]
+
+
+def test_job_command_falls_back_to_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    api = patch_config_and_auth(monkeypatch, tmp_path)
+
+    config = make_test_config(tmp_path)
+    cache = JobCache(config.get_expanded_cache_path())
+    cache.add_job(
+        job_id=TEST_JOB_ID,
+        name="test-job",
+        resource="H200",
+        command="cached command",
+        status="RUNNING",
+        log_path=None,
+    )
+
+    def api_detail(job_id: str) -> Dict[str, Any]:  # noqa: ARG001
+        raise AuthenticationError("bad credentials")
+
+    api.get_job_detail = api_detail  # type: ignore[assignment]
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["job", "command", TEST_JOB_ID])
+
+    assert result.exit_code == 0
+    assert "cached command" in result.output
 
 
 def test_job_status_not_found_sets_specific_exit_code(

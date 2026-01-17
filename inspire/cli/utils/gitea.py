@@ -220,6 +220,37 @@ def _extract_total_count(response: dict) -> Optional[int]:
         return None
 
 
+def _parse_event_inputs(run: dict) -> dict:
+    event_payload = run.get("event_payload", "")
+    if not event_payload:
+        return {}
+    try:
+        payload = json.loads(event_payload)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    inputs = payload.get("inputs", {}) or {}
+    return inputs if isinstance(inputs, dict) else {}
+
+
+def _matches_inputs(inputs: dict, expected_inputs: dict) -> bool:
+    for key, value in expected_inputs.items():
+        if not value:
+            continue
+        if str(inputs.get(key, "")) != str(value):
+            return False
+    return True
+
+
+def _find_run_by_inputs(runs: list, expected_inputs: dict) -> Optional[dict]:
+    for run in runs:
+        inputs = _parse_event_inputs(run)
+        if not inputs:
+            continue
+        if _matches_inputs(inputs, expected_inputs):
+            return run
+    return None
+
+
 def _artifact_name(job_id: str, request_id: str) -> str:
     """Compute the artifact name from job_id and request_id."""
     return f"job-{job_id}-log-{request_id}"
@@ -326,30 +357,9 @@ def trigger_sync_workflow(
             response = client.request_json("GET", runs_url)
             runs = response.get("workflow_runs", []) or []
 
-            def _find_matching_run_id(runs_list: list) -> Optional[str]:
-                for run in runs_list:
-                    event_payload = run.get("event_payload", "")
-                    if not event_payload:
-                        continue
-                    try:
-                        payload = json.loads(event_payload)
-                        inputs = payload.get("inputs", {}) or {}
-                        matched = True
-                        for key, value in expected_inputs.items():
-                            if not value:
-                                continue
-                            if str(inputs.get(key, "")) != str(value):
-                                matched = False
-                                break
-                        if matched:
-                            return str(run.get("id", ""))
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-                return None
-
-            run_id = _find_matching_run_id(runs)
-            if run_id:
-                return run_id
+            run = _find_run_by_inputs(runs, expected_inputs)
+            if run:
+                return str(run.get("id", ""))
 
             total_count = _extract_total_count(response)
             if total_count and total_count > limit:
@@ -360,9 +370,9 @@ def trigger_sync_workflow(
                 )
                 response = client.request_json("GET", runs_url)
                 runs = response.get("workflow_runs", []) or []
-                run_id = _find_matching_run_id(runs)
-                if run_id:
-                    return run_id
+                run = _find_run_by_inputs(runs, expected_inputs)
+                if run:
+                    return str(run.get("id", ""))
         except GiteaError:
             pass
 
@@ -674,32 +684,24 @@ def wait_for_bridge_action_completion(
     limit = 20
 
     def _find_matching_run(runs_list: list) -> Optional[dict]:
-        for run in runs_list:
-            # Match by request_id in event_payload (Codeberg/Forgejo)
-            event_payload = run.get("event_payload", "")
-            if not event_payload:
-                continue
-            try:
-                payload = json.loads(event_payload)
-                inputs = payload.get("inputs", {})
-                if inputs.get("request_id") == request_id:
-                    status = run.get("status")
-                    conclusion = run.get("conclusion")
-                    logging.debug(
-                        "Found matching run: status=%s, conclusion=%s",
-                        status,
-                        conclusion,
-                    )
-                    # Codeberg uses 'success'/'failure' as status, not 'completed'
-                    if status in ("completed", "success", "failure"):
-                        return {
-                            "status": status,
-                            "conclusion": conclusion or status,
-                            "run_id": run.get("id"),
-                            "html_url": run.get("html_url", ""),
-                        }
-            except (json.JSONDecodeError, TypeError):
-                continue
+        run = _find_run_by_inputs(runs_list, {"request_id": request_id})
+        if not run:
+            return None
+        status = run.get("status")
+        conclusion = run.get("conclusion")
+        logging.debug(
+            "Found matching run: status=%s, conclusion=%s",
+            status,
+            conclusion,
+        )
+        # Codeberg uses 'success'/'failure' as status, not 'completed'
+        if status in ("completed", "success", "failure"):
+            return {
+                "status": status,
+                "conclusion": conclusion or status,
+                "run_id": run.get("id"),
+                "html_url": run.get("html_url", ""),
+            }
         return None
 
     while True:

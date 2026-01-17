@@ -53,7 +53,7 @@ def test_bridge_exec_triggers_and_no_wait(monkeypatch: pytest.MonkeyPatch, tmp_p
     monkeypatch.setattr(bridge_module, "trigger_bridge_action_workflow", fake_trigger)
 
     runner = CliRunner()
-    result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--no-wait"])
+    result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--no-wait", "--no-tunnel"])
 
     assert result.exit_code == EXIT_SUCCESS
     assert "trigger" in called
@@ -80,7 +80,7 @@ def test_bridge_exec_uses_env_denylist(monkeypatch: pytest.MonkeyPatch, tmp_path
     monkeypatch.setattr(bridge_module, "trigger_bridge_action_workflow", fake_trigger)
 
     runner = CliRunner()
-    result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--no-wait"])
+    result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--no-wait", "--no-tunnel"])
 
     assert result.exit_code == EXIT_SUCCESS
     assert captured["denylist"] == ["rm -rf /"]
@@ -105,7 +105,7 @@ def test_bridge_exec_reports_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     monkeypatch.setattr(bridge_module, "fetch_bridge_output_log", fake_fetch_log)
 
     runner = CliRunner()
-    result = runner.invoke(cli_main, ["bridge", "exec", "echo hi"])
+    result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--no-tunnel"])
 
     assert result.exit_code == EXIT_GENERAL_ERROR
 
@@ -130,7 +130,7 @@ def test_bridge_exec_displays_output_log(monkeypatch: pytest.MonkeyPatch, tmp_pa
     monkeypatch.setattr(bridge_module, "fetch_bridge_output_log", fake_fetch_log)
 
     runner = CliRunner()
-    result = runner.invoke(cli_main, ["bridge", "exec", "echo hi"])
+    result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--no-tunnel"])
 
     assert result.exit_code == EXIT_SUCCESS
     assert "--- Command Output ---" in result.output
@@ -159,9 +159,10 @@ def test_bridge_exec_json_includes_output(monkeypatch: pytest.MonkeyPatch, tmp_p
     monkeypatch.setattr(bridge_module, "fetch_bridge_output_log", fake_fetch_log)
 
     runner = CliRunner()
-    result = runner.invoke(cli_main, ["--json", "bridge", "exec", "echo hi"])
+    result = runner.invoke(cli_main, ["--json", "bridge", "exec", "echo hi", "--no-tunnel"])
 
     assert result.exit_code == EXIT_SUCCESS
-    data = json.loads(result.output)
-    assert data["status"] == "success"
-    assert data["output"] == "Test output"
+    payload = json.loads(result.output)
+    assert payload["success"] is True
+    assert payload["data"]["status"] == "success"
+    assert payload["data"]["output"] == "Test output"
