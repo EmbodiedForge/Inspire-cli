@@ -110,10 +110,13 @@ class _BrowserRequestClient:
         if method_upper == "GET":
             resp = self._context.get(url, headers=req_headers, timeout=timeout_ms)
         elif method_upper == "POST":
+            post_headers = dict(req_headers)
+            if not any(key.lower() == "content-type" for key in post_headers):
+                post_headers["Content-Type"] = "application/json"
             resp = self._context.post(
                 url,
-                headers=req_headers,
-                json=body or {},
+                headers=post_headers,
+                data=json.dumps(body or {}),
                 timeout=timeout_ms,
             )
         else:
@@ -224,13 +227,17 @@ def request_json(
             http.close()
 
     client = _get_browser_client(session)
-    return client.request_json(
-        method,
-        url,
-        headers=headers,
-        body=body,
-        timeout=timeout,
-    )
+    try:
+        return client.request_json(
+            method,
+            url,
+            headers=headers,
+            body=body,
+            timeout=timeout,
+        )
+    except SessionExpiredError:
+        _close_browser_client()
+        raise
 
 
 @dataclass
