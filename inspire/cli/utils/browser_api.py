@@ -13,8 +13,10 @@ Discovered endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import math
 import os
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -31,6 +33,32 @@ from .web_session import (
 
 
 BASE_URL = os.environ.get("INSPIRE_BASE_URL", "https://qz.sii.edu.cn")
+
+
+def _in_asyncio_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+def _run_in_thread(func, *args, **kwargs):
+    result: dict[str, Any] = {}
+    error: dict[str, BaseException] = {}
+
+    def runner() -> None:
+        try:
+            result["value"] = func(*args, **kwargs)
+        except BaseException as exc:  # pragma: no cover - re-raised in main thread
+            error["exc"] = exc
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    thread.join()
+    if error:
+        raise error["exc"]
+    return result.get("value")
 
 
 def _request_json(
@@ -1022,6 +1050,38 @@ def setup_notebook_rtunnel(
     Returns:
         HTTPS proxy URL for the rtunnel WebSocket endpoint (to be used as PROXY_URL).
     """
+    if _in_asyncio_loop():
+        return _run_in_thread(
+            _setup_notebook_rtunnel_sync,
+            notebook_id=notebook_id,
+            port=port,
+            ssh_port=ssh_port,
+            ssh_public_key=ssh_public_key,
+            session=session,
+            headless=headless,
+            timeout=timeout,
+        )
+    return _setup_notebook_rtunnel_sync(
+        notebook_id=notebook_id,
+        port=port,
+        ssh_port=ssh_port,
+        ssh_public_key=ssh_public_key,
+        session=session,
+        headless=headless,
+        timeout=timeout,
+    )
+
+
+def _setup_notebook_rtunnel_sync(
+    notebook_id: str,
+    port: int = 31337,
+    ssh_port: int = 22222,
+    ssh_public_key: Optional[str] = None,
+    session: Optional[WebSession] = None,
+    headless: bool = True,
+    timeout: int = 120,
+) -> str:
+    """Sync implementation for setup_notebook_rtunnel."""
     from playwright.sync_api import sync_playwright
 
     if session is None:
