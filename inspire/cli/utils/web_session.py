@@ -19,6 +19,11 @@ import requests
 SESSION_CACHE_FILE = Path.home() / ".cache" / "inspire-cli" / "web_session.json"
 SESSION_TTL = 3600  # 1 hour
 
+
+class SessionExpiredError(Exception):
+    """Raised when the web session has expired (401 from server)."""
+    pass
+
 # Default workspace (most commonly used - has 1388 nodes)
 DEFAULT_WORKSPACE_ID = "ws-9dcc0e1f-80a4-4af2-bc2f-0e352e7b17e6"
 

@@ -24,6 +24,8 @@ from .web_session import (
     WebSession,
     DEFAULT_WORKSPACE_ID,
     get_playwright_proxy,
+    SessionExpiredError,
+    clear_session_cache,
 )
 
 
@@ -219,6 +221,8 @@ def list_compute_groups(
                 timeout=30000,
             )
 
+            if resp.status == 401:
+                raise SessionExpiredError("Session expired or invalid")
             if resp.status >= 400:
                 raise ValueError(f"API returned {resp.status}")
 
@@ -320,6 +324,7 @@ def list_job_users(
 def get_accurate_gpu_availability(
     workspace_id: Optional[str] = None,
     session: Optional[WebSession] = None,
+    _retry: bool = True,
 ) -> list[GPUAvailability]:
     """Get accurate GPU availability for all compute groups.
 
@@ -332,6 +337,7 @@ def get_accurate_gpu_availability(
     Args:
         workspace_id: Workspace to get availability for.
         session: Optional pre-existing web session.
+        _retry: Internal flag to prevent infinite retry loops.
 
     Returns:
         List of GPUAvailability objects with accurate usage stats.
@@ -344,8 +350,19 @@ def get_accurate_gpu_availability(
     if workspace_id is None:
         workspace_id = session.workspace_id or DEFAULT_WORKSPACE_ID
 
-    # First get all compute groups
-    groups = list_compute_groups(workspace_id=workspace_id, session=session)
+    # First get all compute groups - this may raise SessionExpiredError
+    try:
+        groups = list_compute_groups(workspace_id=workspace_id, session=session)
+    except SessionExpiredError:
+        if _retry:
+            # Clear cached session and retry with fresh login
+            clear_session_cache()
+            return get_accurate_gpu_availability(
+                workspace_id=workspace_id,
+                session=None,  # Force fresh session
+                _retry=False,  # Don't retry again
+            )
+        raise
 
     results = []
 
