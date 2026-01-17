@@ -87,8 +87,7 @@ class _BrowserRequestClient:
 
         proxy = get_playwright_proxy()
         self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.launch(headless=True, proxy=proxy)
-        self._context = self._browser.new_context(
+        self._context = self._playwright.request.new_context(
             storage_state=session.storage_state,
             proxy=proxy,
             ignore_https_errors=True,
@@ -109,12 +108,12 @@ class _BrowserRequestClient:
         timeout_ms = timeout * 1000
 
         if method_upper == "GET":
-            resp = self._context.request.get(url, headers=req_headers, timeout=timeout_ms)
+            resp = self._context.get(url, headers=req_headers, timeout=timeout_ms)
         elif method_upper == "POST":
-            resp = self._context.request.post(
+            resp = self._context.post(
                 url,
                 headers=req_headers,
-                data=json.dumps(body or {}),
+                json=body or {},
                 timeout=timeout_ms,
             )
         else:
@@ -129,11 +128,7 @@ class _BrowserRequestClient:
 
     def close(self) -> None:
         try:
-            self._context.close()
-        except Exception:
-            pass
-        try:
-            self._browser.close()
+            self._context.dispose()
         except Exception:
             pass
         try:
@@ -217,8 +212,12 @@ def request_json(
                 raise SessionExpiredError("Session expired or invalid")
             if resp.status_code >= 400:
                 raise ValueError(f"API returned {resp.status_code}: {resp.text}")
-
-            return resp.json()
+            try:
+                return resp.json()
+            except ValueError as e:
+                raise SessionExpiredError(
+                    "Session expired or invalid (non-JSON response)"
+                ) from e
         except SessionExpiredError:
             _BROWSER_API_FORCE_BROWSER = True
         finally:

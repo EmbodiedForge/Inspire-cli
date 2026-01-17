@@ -19,7 +19,6 @@ from typing import Optional
 
 import click
 import requests
-from playwright.sync_api import sync_playwright
 
 from inspire.cli.context import (
     Context,
@@ -28,7 +27,7 @@ from inspire.cli.context import (
     EXIT_API_ERROR,
 )
 from inspire.cli.formatters import json_formatter
-from inspire.cli.utils.web_session import get_web_session, get_playwright_proxy
+from inspire.cli.utils.web_session import get_web_session
 
 
 def _get_base_url() -> str:
@@ -78,8 +77,7 @@ def list_notebooks(
         inspire notebook list --workspace-id ws-xxx
         inspire notebook list --json
     """
-    from playwright.sync_api import sync_playwright
-    from inspire.cli.utils.web_session import get_web_session, WebSession
+    from inspire.cli.utils.web_session import get_web_session
 
     json_output = _resolve_json_output(ctx, json_output)
 
@@ -274,8 +272,7 @@ def notebook_status(
     Examples:
         inspire notebook status notebook-abc-123
     """
-    from playwright.sync_api import sync_playwright
-    from inspire.cli.utils.web_session import get_web_session
+    from inspire.cli.utils.web_session import get_web_session, request_json
 
     json_output = _resolve_json_output(ctx, json_output)
 
@@ -298,63 +295,40 @@ def notebook_status(
 
     base_url = _get_base_url()
 
-    proxy = get_playwright_proxy()
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, proxy=proxy)
-            context = browser.new_context(storage_state=session.storage_state, proxy=proxy, ignore_https_errors=True)
-
-            try:
-                url = f"{base_url}/api/v1/notebook/{instance_id}"
-                resp = context.request.get(
-                    url,
-                    headers={"Accept": "application/json"},
-                    timeout=30000,
+        data = request_json(
+            session,
+            "GET",
+            f"{base_url}/api/v1/notebook/{instance_id}",
+            headers={"Accept": "application/json"},
+            timeout=30,
+        )
+    except ValueError as e:
+        message = str(e)
+        if "API returned 404" in message:
+            if json_output:
+                click.echo(
+                    json_formatter.format_json_error(
+                        "NotFound",
+                        f"Notebook instance '{instance_id}' not found",
+                        EXIT_API_ERROR,
+                    ),
+                    err=True,
                 )
-
-                if resp.status == 404:
-                    if json_output:
-                        click.echo(
-                            json_formatter.format_json_error(
-                                "NotFound",
-                                f"Notebook instance '{instance_id}' not found",
-                                EXIT_API_ERROR,
-                            ),
-                            err=True,
-                        )
-                    else:
-                        click.echo(
-                            f"Error: Notebook instance '{instance_id}' not found",
-                            err=True,
-                        )
-                    return sys.exit(EXIT_API_ERROR)
-
-                data = resp.json()
-
-                if data.get("code") == 0:
-                    notebook = data.get("data", {})
-                    if json_output:
-                        click.echo(json_formatter.format_json(notebook))
-                    else:
-                        _print_notebook_detail(notebook)
-                else:
-                    if json_output:
-                        click.echo(
-                            json_formatter.format_json_error(
-                                "APIError",
-                                data.get("message", "Unknown error"),
-                                EXIT_API_ERROR,
-                            ),
-                            err=True,
-                        )
-                    else:
-                        click.echo(f"Error: {data.get('message', 'Unknown error')}", err=True)
-                    return sys.exit(EXIT_API_ERROR)
-
-            finally:
-                context.close()
-                browser.close()
-
+            else:
+                click.echo(
+                    f"Error: Notebook instance '{instance_id}' not found",
+                    err=True,
+                )
+        else:
+            if json_output:
+                click.echo(
+                    json_formatter.format_json_error("APIError", message, EXIT_API_ERROR),
+                    err=True,
+                )
+            else:
+                click.echo(f"Error: {message}", err=True)
+        return sys.exit(EXIT_API_ERROR)
     except Exception as e:
         if json_output:
             click.echo(
@@ -363,6 +337,26 @@ def notebook_status(
             )
         else:
             click.echo(f"Error: {e}", err=True)
+        return sys.exit(EXIT_API_ERROR)
+
+    if data.get("code") == 0:
+        notebook = data.get("data", {})
+        if json_output:
+            click.echo(json_formatter.format_json(notebook))
+        else:
+            _print_notebook_detail(notebook)
+    else:
+        if json_output:
+            click.echo(
+                json_formatter.format_json_error(
+                    "APIError",
+                    data.get("message", "Unknown error"),
+                    EXIT_API_ERROR,
+                ),
+                err=True,
+            )
+        else:
+            click.echo(f"Error: {data.get('message', 'Unknown error')}", err=True)
         return sys.exit(EXIT_API_ERROR)
 
 
