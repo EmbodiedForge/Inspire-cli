@@ -365,44 +365,55 @@ def login_with_playwright(
             ("input[placeholder='Username/alias']", "input[placeholder='Password']"),
         ]
 
-        def _fill_login_form() -> bool:
+        def _fill_login_form() -> Optional[object]:
             for user_sel, pass_sel in login_pairs:
                 try:
                     page.wait_for_selector(user_sel, timeout=5000, state="visible")
                     page.wait_for_selector(pass_sel, timeout=5000, state="visible")
-                    page.locator(user_sel).first.fill(username)
-                    page.locator(pass_sel).first.fill(password)
-                    return True
+                    user_locator = page.locator(user_sel).first
+                    pass_locator = page.locator(pass_sel).first
+                    user_locator.fill(username)
+                    pass_locator.fill(password)
+                    return pass_locator
                 except Exception:
                     continue
-            return False
+            return None
 
-        def _submit_login_form() -> None:
+        def _submit_login_form(pass_locator) -> None:  # noqa: ANN001
             try:
-                page.locator("button[type='submit'], input[type='submit']").first.click(
-                    timeout=5000,
-                    force=True,
-                    no_wait_after=True,
-                )
+                pass_locator.press("Enter", timeout=3000)
                 return
             except Exception:
                 pass
             try:
-                page.keyboard.press("Enter")
+                pass_locator.evaluate("el => el.form && el.form.submit()")
+                return
+            except Exception:
+                pass
+            try:
+                pass_locator.evaluate(
+                    """
+                    el => {
+                      const btn = el.form?.querySelector('#passbutton,button[type="submit"],input[type="submit"]');
+                      if (btn) { btn.click(); return true; }
+                      return false;
+                    }
+                    """
+                )
             except Exception:
                 pass
 
-        filled = _fill_login_form()
-        if not filled:
+        pass_locator = _fill_login_form()
+        if not pass_locator:
             try:
                 page.get_by_text("Account login", exact=True).click(timeout=3000, force=True)
                 page.wait_for_timeout(500)
             except Exception:
                 pass
-            filled = _fill_login_form()
+            pass_locator = _fill_login_form()
 
-        if filled:
-            _submit_login_form()
+        if pass_locator:
+            _submit_login_form(pass_locator)
 
         # Visit a real page to ensure app session cookies and localStorage are set.
         # Use domcontentloaded with fallback since some pages have long-polling.
