@@ -563,7 +563,8 @@ def fetch_workspace_availability(
 ) -> list[dict]:
     """Fetch workspace-specific GPU availability.
 
-    Uses the browser API endpoint that returns nodes filtered by workspace.
+    Uses the browser API endpoint POST /api/v1/cluster_nodes/list which returns
+    nodes with complete task_list data for accurate free node counting.
     This matches what the user sees in the browser.
 
     Args:
@@ -584,12 +585,18 @@ def fetch_workspace_availability(
     if not session.workspace_id:
         raise ValueError("No workspace_id in session. Please login again.")
 
-    url = f"{base_url}/api/v1/cluster_nodes/workspace/{session.workspace_id}"
+    url = f"{base_url}/api/v1/cluster_nodes/list"
+    body = {
+        "page_num": 1,
+        "page_size": -1,  # Get all nodes
+        "filter": {},  # No filter to get all workspace nodes
+    }
 
     data = request_json(
         session,
-        "GET",
+        "POST",
         url,
+        body=body,
         headers={"Referer": f"{base_url}/jobs/distributedTraining"},
         timeout=30,
     )

@@ -130,10 +130,17 @@ def list_nodes(ctx: Context, group: str):
         inspire resources nodes --group H200
     """
     try:
-        from inspire.cli.utils.browser_api import get_full_free_node_counts
+        from inspire.cli.utils.browser_api import (
+            get_full_free_node_counts,
+            get_accurate_gpu_availability,
+        )
 
         group_ids = list(KNOWN_COMPUTE_GROUPS.keys())
         counts = get_full_free_node_counts(group_ids, gpu_per_node=8)
+
+        # Get accurate GPU availability for matching free GPU counts
+        accurate_availability = get_accurate_gpu_availability()
+        accurate_map = {a.group_id: a.available_gpus for a in accurate_availability}
 
         # Fill missing names from KNOWN_COMPUTE_GROUPS and apply filter
         filtered: list[dict] = []
@@ -142,6 +149,8 @@ def list_nodes(ctx: Context, group: str):
             name = c.group_name or KNOWN_COMPUTE_GROUPS.get(c.group_id, c.group_id[-12:])
             if group_lower and group_lower not in name.lower():
                 continue
+            # Use accurate available GPUs if available, otherwise fall back to computed
+            free_gpus = accurate_map.get(c.group_id, c.full_free_nodes * c.gpu_per_node)
             filtered.append({
                 "group_id": c.group_id,
                 "group_name": name,
@@ -149,7 +158,7 @@ def list_nodes(ctx: Context, group: str):
                 "total_nodes": c.total_nodes,
                 "ready_nodes": c.ready_nodes,
                 "full_free_nodes": c.full_free_nodes,
-                "full_free_gpus": c.full_free_nodes * c.gpu_per_node,
+                "full_free_gpus": free_gpus,
             })
 
         # Sort by full_free_nodes descending
@@ -195,6 +204,7 @@ def list_nodes(ctx: Context, group: str):
         click.echo(f"{'TOTAL':<25} {total_full_free:>10} {'':>8} {'':>8} {total_free_gpus:>10}")
         click.echo("")
         click.echo("Full Free = READY nodes with 8 GPUs and no running tasks")
+        click.echo("Free GPUs = Total available GPUs (matches 'inspire resources list')")
         click.echo("")
 
     except (SessionExpiredError, ValueError) as e:
