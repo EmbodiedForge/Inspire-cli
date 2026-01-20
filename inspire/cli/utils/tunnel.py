@@ -179,16 +179,19 @@ def save_tunnel_config(config: TunnelConfig) -> None:
         f.write("\n")
 
 
-def _get_proxy_command(bridge: BridgeProfile, rtunnel_bin: Path) -> str:
+def _get_proxy_command(bridge: BridgeProfile, rtunnel_bin: Path, quiet: bool = False) -> str:
     """Build the ProxyCommand string for SSH.
 
     Args:
         bridge: Bridge profile with proxy_url
         rtunnel_bin: Path to rtunnel binary
+        quiet: If True, suppress rtunnel stderr output (startup/shutdown messages)
 
     Returns:
         ProxyCommand string for SSH -o option
     """
+    import shlex
+
     # Convert https:// URL to wss:// for websocket
     proxy_url = bridge.proxy_url
     if proxy_url.startswith("https://"):
@@ -201,9 +204,12 @@ def _get_proxy_command(bridge: BridgeProfile, rtunnel_bin: Path) -> str:
     # ProxyCommand is executed by a shell on the client; quote the URL because it
     # can contain characters like '?' (e.g. token query params) that some shells
     # treat as glob patterns.
-    import shlex
-
-    return f"{shlex.quote(str(rtunnel_bin))} {shlex.quote(ws_url)} {shlex.quote('stdio://%h:%p')}"
+    if quiet:
+        # Wrap in sh -c to redirect stderr, suppressing rtunnel's verbose output
+        cmd = f"{rtunnel_bin} {shlex.quote(ws_url)} stdio://%h:%p 2>/dev/null"
+        return f"sh -c {shlex.quote(cmd)}"
+    else:
+        return f"{shlex.quote(str(rtunnel_bin))} {shlex.quote(ws_url)} {shlex.quote('stdio://%h:%p')}"
 
 
 def _test_ssh_connection(
@@ -227,7 +233,7 @@ def _test_ssh_connection(
     except TunnelError:
         return False
 
-    proxy_cmd = _get_proxy_command(bridge, config.rtunnel_bin)
+    proxy_cmd = _get_proxy_command(bridge, config.rtunnel_bin, quiet=True)
 
     try:
         result = subprocess.run(
@@ -324,7 +330,11 @@ def run_ssh_command(
     # Ensure rtunnel binary exists
     _ensure_rtunnel_binary(config)
 
-    proxy_cmd = _get_proxy_command(bridge, config.rtunnel_bin)
+    proxy_cmd = _get_proxy_command(bridge, config.rtunnel_bin, quiet=True)
+
+    # Wrap command in login shell to source ~/.bash_profile for PATH etc.
+    import shlex
+    wrapped_command = f"bash -l -c {shlex.quote(command)}"
 
     ssh_cmd = [
         "ssh",
@@ -335,7 +345,7 @@ def run_ssh_command(
         "-o", "LogLevel=ERROR",
         "-p", str(bridge.ssh_port),
         f"{bridge.ssh_user}@localhost",
-        command,
+        wrapped_command,
     ]
 
     return subprocess.run(
