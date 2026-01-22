@@ -334,7 +334,7 @@ def run_ssh_command(
 
     # Wrap command in login shell to source ~/.bash_profile for PATH etc.
     import shlex
-    wrapped_command = f"bash -l -c {shlex.quote(command)}"
+    wrapped_command = f"LC_ALL=C LANG=C bash -l -c {shlex.quote(command)}"
 
     ssh_cmd = [
         "ssh",
