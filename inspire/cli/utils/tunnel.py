@@ -390,7 +390,7 @@ def get_ssh_command_args(
     # Ensure rtunnel binary exists
     _ensure_rtunnel_binary(config)
 
-    proxy_cmd = _get_proxy_command(bridge, config.rtunnel_bin)
+    proxy_cmd = _get_proxy_command(bridge, config.rtunnel_bin, quiet=True)
 
     args = [
         "ssh",
