@@ -861,11 +861,20 @@ def logs(
                     # Real-time streaming via SSH
                     if not ctx.json_output:
                         click.echo("Using SSH tunnel (fast path)")
-                    _follow_logs_via_ssh(
+                    final_status = _follow_logs_via_ssh(
+                        job_id=job_id,
+                        config=config,
                         remote_log_path=str(remote_log_path_str),
                         tail_lines=tail or 50,
                     )
-                    sys.exit(EXIT_SUCCESS)
+                    # Exit code based on job status
+                    if final_status in {"SUCCEEDED", "job_succeeded"}:
+                        sys.exit(EXIT_SUCCESS)
+                    elif final_status in {"FAILED", "CANCELLED", "job_failed", "job_cancelled"}:
+                        sys.exit(EXIT_GENERAL_ERROR)
+                    else:
+                        # User interrupted or status unknown
+                        sys.exit(EXIT_SUCCESS)
                 else:
                     # One-time fetch via SSH
                     if not ctx.json_output:
@@ -1606,23 +1615,41 @@ def _fetch_log_via_ssh(
 
 
 def _follow_logs_via_ssh(
+    job_id: str,
+    config: Config,
     remote_log_path: str,
     tail_lines: int = 50,
     wait_timeout: int = 300,
-) -> None:
-    """Stream log content via SSH tail -f.
+) -> Optional[str]:
+    """Stream log content via SSH tail -f with auto-stop on job completion.
 
     This uses SSH's tail -f for real-time streaming.
     Waits for the log file to exist if the job is still queuing.
+    Periodically checks job status and stops when job reaches terminal state.
 
     Args:
+        job_id: The job ID to monitor
+        config: CLI configuration for API access
         remote_log_path: Path to log file on Bridge
         tail_lines: Initial number of lines to show
         wait_timeout: Max seconds to wait for log file to appear (default: 300)
+
+    Returns:
+        Final job status if job completed, None if interrupted by user
     """
+    import select
     import subprocess
     import time
     from inspire.cli.utils.tunnel import get_ssh_command_args, run_ssh_command
+
+    # Initialize API client for status checking
+    api = AuthManager.get_api(config)
+    terminal_statuses = {
+        "SUCCEEDED", "FAILED", "CANCELLED",
+        "job_succeeded", "job_failed", "job_cancelled",
+    }
+    final_status = None
+    status_check_interval = 5  # Check status every 5 seconds
 
     click.echo(f"Log file: {remote_log_path}")
 
@@ -1657,6 +1684,7 @@ def _follow_logs_via_ssh(
     command = f"tail -n {tail_lines} -f '{remote_log_path}'"
     ssh_args = get_ssh_command_args(remote_command=command)
 
+    process = None
     try:
         # Run SSH with real-time output
         process = subprocess.Popen(
@@ -1667,16 +1695,60 @@ def _follow_logs_via_ssh(
             universal_newlines=True,
         )
 
-        # Stream output line by line
-        for line in iter(process.stdout.readline, ''):
-            click.echo(line, nl=False)
+        # Use select for non-blocking I/O with periodic status checks
+        last_status_check = time.time()
+
+        while True:
+            # Check if process has ended
+            if process.poll() is not None:
+                # Drain any remaining output
+                for line in process.stdout:
+                    click.echo(line, nl=False)
+                break
+
+            # Use select to wait for output with timeout
+            ready, _, _ = select.select([process.stdout], [], [], 1.0)
+
+            if ready:
+                line = process.stdout.readline()
+                if line:
+                    click.echo(line, nl=False)
+                else:
+                    # EOF reached
+                    break
+
+            # Periodically check job status
+            current_time = time.time()
+            if current_time - last_status_check >= status_check_interval:
+                last_status_check = current_time
+                try:
+                    result = api.get_job_detail(job_id)
+                    job_data = result.get("data", {})
+                    current_status = job_data.get("status", "UNKNOWN")
+
+                    if current_status in terminal_statuses:
+                        final_status = current_status
+                        # Grace period: wait a bit for final logs
+                        time.sleep(3)
+                        # Drain remaining output
+                        process.stdout.close()
+                        break
+                except Exception:
+                    # Status check failed, continue streaming
+                    pass
+
+        # Show completion message
+        if final_status:
+            click.echo(f"\n\nJob completed with status: {final_status}")
 
     except KeyboardInterrupt:
         click.echo("\n\nStopped following logs.")
     finally:
-        if process.poll() is None:
+        if process is not None and process.poll() is None:
             process.terminate()
             process.wait()
+
+    return final_status
 
 
 def _handle_error(ctx: Context, error_type: str, message: str, exit_code: int):
