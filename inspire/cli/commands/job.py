@@ -1718,9 +1718,10 @@ def _follow_logs_via_ssh(
                 line = process.stdout.readline()
                 if line:
                     click.echo(line, nl=False)
-                else:
-                    # EOF reached
+                elif process.poll() is not None:
+                    # EOF reached (process exited)
                     break
+                # else: temporary no data, continue waiting
 
             # Periodically check job status
             current_time = time.time()
