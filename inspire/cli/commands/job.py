@@ -1642,6 +1642,11 @@ def _follow_logs_via_ssh(
     import time
     from inspire.cli.utils.tunnel import get_ssh_command_args, run_ssh_command
 
+    # Suppress API logging during streaming to keep output clean
+    api_logger = logging.getLogger("inspire.inspire_api_control")
+    original_level = api_logger.level
+    api_logger.setLevel(logging.CRITICAL)
+
     # Initialize API client for status checking
     api = AuthManager.get_api(config)
     terminal_statuses = {
@@ -1747,6 +1752,8 @@ def _follow_logs_via_ssh(
         if process is not None and process.poll() is None:
             process.terminate()
             process.wait()
+        # Restore API logging level
+        api_logger.setLevel(original_level)
 
     return final_status
 
