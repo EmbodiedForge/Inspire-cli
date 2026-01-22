@@ -1083,9 +1083,13 @@ def _setup_notebook_rtunnel_sync(
 ) -> str:
     """Sync implementation for setup_notebook_rtunnel."""
     from playwright.sync_api import sync_playwright
+    import sys as _sys
 
     if session is None:
         session = get_web_session()
+
+    _sys.stderr.write("Setting up rtunnel tunnel via browser automation...\n")
+    _sys.stderr.flush()
 
     with sync_playwright() as p:
         browser = _launch_browser(p, headless=headless)
@@ -1359,12 +1363,16 @@ def _setup_notebook_rtunnel_sync(
                     "nohup \"$RTUNNEL_BIN\" \"127.0.0.1:$SSH_PORT\" \"0.0.0.0:$PORT\" >/tmp/rtunnel-server.log 2>&1 &",
                 ])
 
+            _sys.stderr.write("  Executing setup commands in terminal...\n")
+            _sys.stderr.flush()
             for line in cmd_lines:
-                page.keyboard.type(line, delay=8)
+                page.keyboard.type(line, delay=2)
                 page.keyboard.press("Enter")
-                page.wait_for_timeout(300)
+                page.wait_for_timeout(100)
 
             # Wait for script to complete and take debug screenshot
+            _sys.stderr.write("  Waiting for services to start...\n")
+            _sys.stderr.flush()
             page.wait_for_timeout(5000)
             try:
                 page.screenshot(path="/tmp/notebook_terminal_debug.png")
@@ -1401,9 +1409,18 @@ def _setup_notebook_rtunnel_sync(
                 proxy_url = jupyter_proxy_url
 
             # Probe the proxy endpoint until it stops reporting connection refused.
+            _sys.stderr.write("  Verifying rtunnel is reachable...\n")
+            _sys.stderr.flush()
             start = time.time()
             last_status = None
+            last_progress_time = start
             while time.time() - start < timeout:
+                elapsed = time.time() - start
+                # Print progress every 30 seconds
+                if time.time() - last_progress_time >= 30:
+                    _sys.stderr.write(f"  Waiting for rtunnel... ({int(elapsed)}s elapsed)\n")
+                    _sys.stderr.flush()
+                    last_progress_time = time.time()
                 try:
                     resp = context.request.get(proxy_url, timeout=5000)
                     body = ""
@@ -1419,9 +1436,19 @@ def _setup_notebook_rtunnel_sync(
 
                 page.wait_for_timeout(1000)
 
-            raise ValueError(
-                f"rtunnel server did not become reachable via proxy URL. Last response: {last_status}"
+            # Build detailed error message with debugging hints
+            error_msg = (
+                f"rtunnel server did not become reachable within {timeout}s.\n"
+                f"Last response: {last_status}\n\n"
+                "Debugging hints:\n"
+                "  1. Check if rtunnel binary is present: ls -la /tmp/rtunnel\n"
+                "  2. Check rtunnel server log: cat /tmp/rtunnel-server.log\n"
+                "  3. Check if sshd/dropbear is running: ps aux | grep -E 'sshd|dropbear'\n"
+                "  4. Check dropbear log: cat /tmp/dropbear.log\n"
+                "  5. Try running with --debug-playwright to see the browser\n"
+                f"  6. Screenshot saved to /tmp/notebook_terminal_debug.png"
             )
+            raise ValueError(error_msg)
 
         finally:
             try:

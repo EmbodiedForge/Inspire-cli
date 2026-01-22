@@ -62,6 +62,10 @@ export INSPIRE_TIMEOUT="30"  # API timeout in seconds
 export INSPIRE_MAX_RETRIES="3"  # Max API retries
 export INSPIRE_RETRY_DELAY="1.0"  # Retry delay in seconds
 
+# Notebook SSH helpers (for notebook instances without internet access)
+export INSPIRE_RTUNNEL_BIN="/inspire/hdd/global_user/.../tools/rtunnel"
+export INSPIRE_DROPBEAR_DEB_DIR="/inspire/hdd/global_user/.../tools/debs/dropbear"
+
 # Optional profile shortcuts (env-only)
 # Use: inspire --profile 4090 <command>
 export INSPIRE_PROFILE_4090_WORKSPACE_ID="ws-..."
@@ -198,6 +202,16 @@ inspire sync --force            # Force sync, discard local changes on Bridge
 | `inspire job logs <id>` | View job logs |
 | `inspire job logs <id> --follow` | Stream logs in real-time |
 
+### Notebook Management
+
+| Command | Description |
+|---------|-------------|
+| `inspire notebook list` | List all notebook instances |
+| `inspire notebook status <id>` | Get detailed notebook status |
+| `inspire notebook create` | Create a new notebook instance |
+| `inspire notebook stop <id>` | Stop a running notebook |
+| `inspire notebook ssh <id>` | SSH into notebook *(experimental)* |
+
 ### SSH Tunnel (Fast Bridge Access)
 
 The SSH tunnel provides ~100x faster command execution compared to Gitea Actions.
@@ -217,6 +231,16 @@ inspire tunnel stop
 ```
 
 Once the tunnel is running, `bridge exec`, `job logs`, and `sync` automatically use it for faster execution.
+
+### Notebook SSH (Experimental)
+
+SSH into notebook instances via browser automation. Sets up rtunnel automatically:
+
+```bash
+inspire notebook ssh <notebook-id> --save-as my-notebook
+```
+
+**Options:** `--save-as`, `--command`, `--rtunnel-bin`, `--timeout`, `--debug-playwright`
 
 #### Proxy Configuration (WSL Users)
 

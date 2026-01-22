@@ -1136,6 +1136,22 @@ def stop_notebook_cmd(
     "--command",
     help="Optional remote command to run (if omitted, opens an interactive shell)",
 )
+@click.option(
+    "--rtunnel-bin",
+    help="Path to pre-cached rtunnel binary (e.g., /inspire/.../rtunnel)",
+)
+@click.option(
+    "--debug-playwright",
+    is_flag=True,
+    help="Run browser automation with visible window for debugging",
+)
+@click.option(
+    "--timeout",
+    "setup_timeout",
+    default=300,
+    show_default=True,
+    help="Timeout in seconds for rtunnel setup to complete",
+)
 @pass_context
 def ssh_notebook_cmd(
     ctx: Context,
@@ -1146,6 +1162,9 @@ def ssh_notebook_cmd(
     port: int,
     ssh_port: int,
     command: Optional[str],
+    rtunnel_bin: Optional[str],
+    debug_playwright: bool,
+    setup_timeout: int,
 ) -> None:
     """SSH into a running notebook instance via rtunnel ProxyCommand."""
 
@@ -1199,6 +1218,9 @@ def ssh_notebook_cmd(
         return
 
     # Set up rtunnel + sshd in notebook and derive proxy URL from Jupyter
+    # Pass rtunnel_bin to setup function via environment variable if specified
+    if rtunnel_bin:
+        os.environ["INSPIRE_RTUNNEL_BIN"] = rtunnel_bin
     try:
         proxy_url = setup_notebook_rtunnel(
             notebook_id=notebook_id,
@@ -1206,7 +1228,8 @@ def ssh_notebook_cmd(
             ssh_port=ssh_port,
             ssh_public_key=ssh_public_key,
             session=session,
-            headless=True,
+            headless=not debug_playwright,
+            timeout=setup_timeout,
         )
     except Exception as e:
         click.echo(f"Error setting up notebook tunnel: {e}", err=True)
