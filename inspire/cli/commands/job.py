@@ -1111,6 +1111,14 @@ def _follow_logs(
     interval: int,
 ) -> None:
     """Continuously fetch and display new log content."""
+    # Initialize API client for status checking
+    api = AuthManager.get_api(config)
+    terminal_statuses = {
+        "SUCCEEDED", "FAILED", "CANCELLED",
+        "job_succeeded", "job_failed", "job_cancelled",
+    }
+    final_status = None
+
     try:
         # Get current offset
         current_offset = 0 if refresh else cache.get_log_offset(job_id)
@@ -1210,6 +1218,73 @@ def _follow_logs(
             except (GiteaError, TimeoutError) as e:
                 if not ctx.json_output:
                     click.echo(f"\nWarning: Fetch failed: {e}", err=True)
+
+            # Check job status
+            try:
+                result = api.get_job_detail(job_id)
+                job_data = result.get("data", {})
+                current_status = job_data.get("status", "UNKNOWN")
+                cache.update_status(job_id, current_status)
+
+                if current_status in terminal_statuses:
+                    final_status = current_status
+                    break  # Exit loop to do final fetch
+            except Exception as e:
+                if not ctx.json_output:
+                    click.echo(f"\nWarning: Status check failed: {e}", err=True)
+
+        # Grace period for final logs after job completion
+        if final_status:
+            time.sleep(5)
+            # One final log fetch
+            try:
+                fetch_remote_log_via_bridge(
+                    config=config,
+                    job_id=job_id,
+                    remote_log_path=remote_log_path,
+                    cache_path=cache_path,
+                    refresh=True,
+                )
+                # Display any remaining content
+                size_after = cache_path.stat().st_size if cache_path.exists() else 0
+                bytes_added = size_after - last_displayed
+                if bytes_added > 0:
+                    with cache_path.open("rb") as f:
+                        f.seek(last_displayed)
+                        new_content = f.read().decode("utf-8", errors="replace")
+                    if ctx.json_output:
+                        click.echo(
+                            json_formatter.format_json(
+                                {
+                                    "event": "final_content",
+                                    "job_id": job_id,
+                                    "bytes_added": bytes_added,
+                                    "content": new_content,
+                                }
+                            )
+                        )
+                    else:
+                        click.echo(new_content, nl=False)
+            except (GiteaError, TimeoutError):
+                pass
+
+            if ctx.json_output:
+                click.echo(
+                    json_formatter.format_json(
+                        {
+                            "event": "job_completed",
+                            "job_id": job_id,
+                            "status": final_status,
+                        }
+                    )
+                )
+            else:
+                click.echo(f"\nJob completed with status: {final_status}")
+
+            if final_status in {"SUCCEEDED", "job_succeeded"}:
+                sys.exit(EXIT_SUCCESS)
+            else:
+                sys.exit(EXIT_GENERAL_ERROR)
 
     except KeyboardInterrupt:
         if not ctx.json_output:
