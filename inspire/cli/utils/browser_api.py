@@ -844,6 +844,7 @@ def create_notebook(
     gpu_count: int = 1,
     cpu_count: int = 20,
     memory_size: int = 200,
+    shared_memory_size: int = 0,
     auto_stop: bool = False,
     priority: int = 10,
     vscode_version: str = "1.101.2",
@@ -864,6 +865,7 @@ def create_notebook(
         gpu_count: Number of GPUs (default: 1).
         cpu_count: Number of CPUs (default: 20).
         memory_size: Memory in GB (default: 200).
+        shared_memory_size: Shared memory (/dev/shm) in GB (default: 0).
         auto_stop: Auto-stop when idle (default: False).
         priority: Task priority (default: 10).
         vscode_version: VS Code version (default: "1.101.2").
@@ -892,6 +894,7 @@ def create_notebook(
         "cpu_count": cpu_count,
         "gpu_count": gpu_count,
         "memory_size": memory_size,
+        "shared_memory_size": shared_memory_size,
         "resource_spec_price": {
             "cpu_type": "",
             "cpu_count": cpu_count,
@@ -1087,6 +1090,25 @@ def _setup_notebook_rtunnel_sync(
 
     if session is None:
         session = get_web_session()
+
+    # Fast-path: Try to connect to rtunnel via known proxy URL pattern first.
+    # This avoids slow browser automation if rtunnel is already running.
+    known_proxy_url = f"{BASE_URL}/api/v1/notebook/lab/{notebook_id}/proxy/{port}/"
+    try:
+        import requests as _requests
+        http = build_requests_session(session, BASE_URL)
+        resp = http.get(known_proxy_url, timeout=5)
+        body = resp.text[:200] if resp.text else ""
+        # Only use fast path if we get a valid response (not 401/302 auth redirects)
+        # rtunnel returns 200 with specific body when running
+        if resp.status_code == 200 and "ECONNREFUSED" not in body and "<html>" not in body.lower():
+            _sys.stderr.write("Using existing rtunnel connection (fast path).\n")
+            _sys.stderr.flush()
+            http.close()
+            return known_proxy_url
+        http.close()
+    except Exception:
+        pass  # Fall through to browser automation
 
     _sys.stderr.write("Setting up rtunnel tunnel via browser automation...\n")
     _sys.stderr.flush()

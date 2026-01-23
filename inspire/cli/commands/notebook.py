@@ -58,6 +58,12 @@ def notebook():
     help="Workspace ID (defaults to configured workspace)",
 )
 @click.option(
+    "--all", "-a",
+    "show_all",
+    is_flag=True,
+    help="Show all notebooks (not just your own)",
+)
+@click.option(
     "--json",
     "json_output",
     is_flag=True,
@@ -67,6 +73,7 @@ def notebook():
 def list_notebooks(
     ctx: Context,
     workspace_id: Optional[str],
+    show_all: bool,
     json_output: bool,
 ) -> None:
     """List notebook/interactive instances.
@@ -74,10 +81,11 @@ def list_notebooks(
     \b
     Examples:
         inspire notebook list
+        inspire notebook list --all
         inspire notebook list --workspace-id ws-xxx
         inspire notebook list --json
     """
-    from inspire.cli.utils.web_session import get_web_session
+    from inspire.cli.utils.web_session import get_web_session, request_json
 
     json_output = _resolve_json_output(ctx, json_output)
 
@@ -128,88 +136,79 @@ def list_notebooks(
 
     base_url = _get_base_url()
 
-    # First try a direct requests call using stored cookies (honors proxy env)
-    cookies = (session.storage_state or {}).get("cookies") if session else None
-    error_message = None
-    if cookies:
-        s = requests.Session()
-        proxy_url = os.environ.get("https_proxy") or os.environ.get("http_proxy")
-        if proxy_url:
-            s.proxies.update({"http": proxy_url, "https": proxy_url})
-        for c in cookies:
-            try:
-                s.cookies.set(c.get("name"), c.get("value"), domain=c.get("domain"), path=c.get("path", "/"))
-            except Exception:
-                continue
+    # Get current user ID for filtering (unless --all is specified)
+    user_ids: list[str] = []
+    if not show_all:
         try:
-            # Bootstrap SSO cookies via /login (keycloak cookies usually allow silent auth)
-            try:
-                s.get(f"{base_url}/login", timeout=20, allow_redirects=True)
-            except Exception:
-                pass
-
-            resp = s.get(
-                f"{base_url}/api/v1/notebook/list",
-                params={"workspace_id": workspace_id},
-                headers={"Accept": "application/json", "Referer": f"{base_url}/lab"},
-                timeout=20,
-                allow_redirects=False,
+            user_data = request_json(
+                session,
+                "GET",
+                f"{base_url}/api/v1/user/detail",
+                timeout=30,
             )
-            if resp.status_code != 200:
-                if json_output:
-                    error_message = f"requests path: status {resp.status_code}"
-                else:
-                    click.echo(f"requests path: status {resp.status_code}", err=True)
-            else:
-                data = resp.json()
-                items = data.get("data", {}).get("items", [])
-                if data.get("code") == 0:
-                    _print_notebook_list(items, json_output, ctx)
-                    return
-                if data.get("message") == "notebook not found":
-                    if json_output:
-                        click.echo(json_formatter.format_json({"items": [], "total": 0}))
-                    else:
-                        click.echo("No notebook instances found.")
-                        click.echo(
-                            "\nYou can create notebook instances through the Bridge web UI at:\n"
-                            f"  {base_url}/lab\n"
-                            "Once created, they will appear here."
-                        )
-                    return
-                if json_output:
-                    error_message = (
-                        f"requests path: api error {data.get('message', 'unknown')} "
-                        f"(code={data.get('code')})"
-                    )
-                else:
-                    click.echo(
-                        f"requests path: api error {data.get('message', 'unknown')} "
-                        f"(code={data.get('code')})",
-                        err=True,
-                    )
-        except Exception as e:
-            if json_output:
-                error_message = f"requests path error: {e}"
-            else:
-                click.echo(f"requests path error: {e}", err=True)
+            user_id = user_data.get("data", {}).get("id")
+            if user_id:
+                user_ids = [user_id]
+        except Exception:
+            pass  # Fall back to showing all if we can't get user ID
 
-    # If we reach here, requests path failed; report and exit.
-    if json_output:
-        if not error_message:
-            error_message = "requests path: fell through; check auth/proxy"
-        click.echo(
-            json_formatter.format_json_error(
-                "APIError",
-                error_message,
-                EXIT_API_ERROR,
-                hint="Check auth and proxy configuration.",
-            ),
-            err=True,
+    # Use POST with structured body (matches web UI API format)
+    body = {
+        "workspace_id": workspace_id,
+        "page": 1,
+        "page_size": 100,
+        "filter_by": {
+            "keyword": "",
+            "user_id": user_ids,
+            "logic_compute_group_id": [],
+            "status": [],
+            "mirror_url": [],
+        },
+        "order_by": [{"field": "created_at", "order": "desc"}],
+    }
+
+    try:
+        data = request_json(
+            session,
+            "POST",
+            f"{base_url}/api/v1/notebook/list",
+            body=body,
+            timeout=30,
         )
-    else:
-        click.echo("requests path: fell through; check auth/proxy", err=True)
-    return sys.exit(EXIT_API_ERROR)
+
+        if data.get("code") != 0:
+            message = data.get("message", "Unknown error")
+            if json_output:
+                click.echo(
+                    json_formatter.format_json_error(
+                        "APIError",
+                        f"API error: {message}",
+                        EXIT_API_ERROR,
+                    ),
+                    err=True,
+                )
+            else:
+                click.echo(f"Error: {message}", err=True)
+            return sys.exit(EXIT_API_ERROR)
+
+        # API returns items in data.list (not data.items)
+        items = data.get("data", {}).get("list", [])
+        _print_notebook_list(items, json_output, ctx)
+
+    except ValueError as e:
+        if json_output:
+            click.echo(
+                json_formatter.format_json_error(
+                    "APIError",
+                    str(e),
+                    EXIT_API_ERROR,
+                    hint="Check auth and proxy configuration.",
+                ),
+                err=True,
+            )
+        else:
+            click.echo(f"Error: {e}", err=True)
+        return sys.exit(EXIT_API_ERROR)
 
 
 def _print_notebook_list(items: list, json_output: bool, ctx: Context) -> None:
@@ -223,33 +222,33 @@ def _print_notebook_list(items: list, json_output: bool, ctx: Context) -> None:
 
         # Table header
         lines = [
-            f"\n{'Name':<25} {'Status':<12} {'GPU':<8} {'Created':<20}",
-            "-" * 65,
+            f"{'Name':<25} {'Status':<12} {'Resource':<12} {'ID':<38}",
+            "-" * 90,
         ]
 
         for item in items:
             name = item.get("name", "N/A")[:25]
             status = item.get("status", "Unknown")[:12]
+            notebook_id = item.get("notebook_id", item.get("id", "N/A"))
 
-            # Try to get GPU info
-            gpu_info = "N/A"
-            if "resource_spec" in item:
-                spec = item["resource_spec"]
-                gpu_count = spec.get("gpu_count", 0)
-                gpu_type = spec.get("gpu_type", "")
-                if gpu_count and gpu_type:
-                    gpu_info = f"{gpu_count}x{gpu_type}"
-                elif gpu_count == 0:
-                    cpu_count = spec.get("cpu_count")
-                    if cpu_count:
-                        gpu_info = f"{cpu_count}xCPU"
+            # Try to get GPU info from quota or resource_spec_price
+            resource_info = "N/A"
+            quota = item.get("quota") or {}
+            gpu_count = quota.get("gpu_count", 0)
 
-            # Created time
-            created = item.get("created_at", "N/A")[:20]
+            if gpu_count and gpu_count > 0:
+                # Get GPU type from resource_spec_price
+                gpu_info = (item.get("resource_spec_price") or {}).get("gpu_info") or {}
+                gpu_type = gpu_info.get("gpu_product_simple", "GPU")
+                resource_info = f"{gpu_count}x{gpu_type}"
+            else:
+                cpu_count = quota.get("cpu_count", 0)
+                if cpu_count:
+                    resource_info = f"{cpu_count}xCPU"
 
-            lines.append(f"{name:<25} {status:<12} {gpu_info:<8} {created:<20}")
+            lines.append(f"{name:<25} {status:<12} {resource_info:<12} {notebook_id:<38}")
 
-        click.echo("\n" + "\n".join(lines))
+        click.echo("\n".join(lines))
 
 
 @notebook.command("status")
@@ -522,6 +521,12 @@ def _load_ssh_public_key(pubkey_path: Optional[str] = None) -> str:
     help="Image name/URL (prompts interactively if omitted)",
 )
 @click.option(
+    "--shm-size",
+    type=int,
+    default=32,
+    help="Shared memory size in GB (default: 32)",
+)
+@click.option(
     "--auto-stop/--no-auto-stop",
     default=False,
     help="Auto-stop when idle",
@@ -539,6 +544,7 @@ def create_notebook_cmd(
     resource: str,
     project: Optional[str],
     image: Optional[str],
+    shm_size: int,
     auto_stop: bool,
     json_output: bool,
 ) -> None:
@@ -550,6 +556,7 @@ def create_notebook_cmd(
         inspire notebook create -r 1xH200           # 1 GPU H200
         inspire notebook create -r 4xH100 -n mytest # 4 GPUs H100
         inspire notebook create -r 4CPU             # 4 CPUs
+        inspire notebook create -r 1xH100 --shm-size 64  # With 64GB shared memory
     """
     from inspire.cli.utils.web_session import get_web_session
     from inspire.cli.utils.browser_api import (
@@ -994,6 +1001,7 @@ def create_notebook_cmd(
             gpu_count=gpu_count,
             cpu_count=cpu_count,
             memory_size=memory_size,
+            shared_memory_size=shm_size,
             auto_stop=auto_stop,
             workspace_id=workspace_id,
             session=session,
@@ -1209,6 +1217,38 @@ def ssh_notebook_cmd(
         sys.exit(EXIT_API_ERROR)
         return
 
+    # Fast-path: Check if we have a cached profile for this notebook and test connectivity
+    profile_name = save_as or f"notebook-{notebook_id[:8]}"
+    cached_config = load_tunnel_config()
+    if profile_name in cached_config.bridges:
+        cached_bridge = cached_config.bridges[profile_name]
+        # Test if the cached tunnel still works by trying a quick SSH connection
+        import subprocess
+        test_args = get_ssh_command_args(
+            bridge_name=profile_name,
+            config=cached_config,
+            remote_command="echo ok",
+        )
+        try:
+            result = subprocess.run(
+                test_args,
+                capture_output=True,
+                timeout=10,
+                text=True,
+            )
+            if result.returncode == 0 and "ok" in result.stdout:
+                click.echo("Using cached tunnel connection (fast path).", err=True)
+                # Reuse the cached config
+                args = get_ssh_command_args(
+                    bridge_name=profile_name,
+                    config=cached_config,
+                    remote_command=command,
+                )
+                os.execvp("ssh", args)
+                return  # execvp doesn't return, but for clarity
+        except (subprocess.TimeoutExpired, Exception):
+            pass  # Fall through to full setup
+
     # Load SSH public key
     try:
         ssh_public_key = _load_ssh_public_key(pubkey)
@@ -1237,7 +1277,7 @@ def ssh_notebook_cmd(
         return
 
     # Build a bridge profile for this notebook
-    profile_name = save_as or f"notebook-{notebook_id[:8]}"
+    # profile_name already set above in fast-path check
     bridge = BridgeProfile(
         name=profile_name,
         proxy_url=proxy_url,
@@ -1245,13 +1285,12 @@ def ssh_notebook_cmd(
         ssh_port=ssh_port,
     )
 
+    # Always save the profile for future fast-path use
+    config = load_tunnel_config()
+    config.add_bridge(bridge)
+    save_tunnel_config(config)
     if save_as:
-        config = load_tunnel_config()
-        config.add_bridge(bridge)
-        save_tunnel_config(config)
-        click.echo(f"Saved notebook tunnel as profile: {profile_name}")
-    else:
-        config = TunnelConfig(bridges={profile_name: bridge}, default_bridge=profile_name)
+        click.echo(f"Saved notebook tunnel as profile: {profile_name}", err=True)
 
     args = get_ssh_command_args(
         bridge_name=profile_name,

@@ -199,6 +199,7 @@ def request_json(
     headers: Optional[dict[str, str]] = None,
     body: Optional[dict] = None,
     timeout: int = 30,
+    _retry_count: int = 0,
 ) -> dict:
     global _BROWSER_API_FORCE_BROWSER
 
@@ -242,6 +243,22 @@ def request_json(
         )
     except SessionExpiredError:
         _close_browser_client()
+        # Auto-retry once with fresh session
+        if _retry_count < 1:
+            import sys
+            sys.stderr.write("Session expired, re-authenticating...\n")
+            sys.stderr.flush()
+            clear_session_cache()
+            new_session = get_web_session()
+            return request_json(
+                new_session,
+                method,
+                url,
+                headers=headers,
+                body=body,
+                timeout=timeout,
+                _retry_count=_retry_count + 1,
+            )
         raise
 
 
