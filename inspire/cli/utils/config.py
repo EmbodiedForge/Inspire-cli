@@ -137,6 +137,9 @@ class Config:
     max_retries: int = 3
     retry_delay: float = 1.0
 
+    # Git platform selection
+    git_platform: Optional[str] = None
+
     # Gitea / remote log settings
     gitea_repo: Optional[str] = None
     gitea_token: Optional[str] = None
@@ -144,6 +147,15 @@ class Config:
     gitea_log_workflow: str = "retrieve_job_log.yml"
     gitea_sync_workflow: str = "sync_code.yml"
     gitea_bridge_workflow: str = "run_bridge_action.yml"
+
+    # GitHub settings
+    github_repo: Optional[str] = None
+    github_token: Optional[str] = None
+    github_server: str = "https://github.com"
+    github_log_workflow: str = "retrieve_job_log.yml"
+    github_sync_workflow: str = "sync_code.yml"
+    github_bridge_workflow: str = "run_bridge_action.yml"
+
     log_cache_dir: str = "~/.inspire/logs"
     remote_timeout: int = 90
 
@@ -280,12 +292,19 @@ class Config:
             timeout=timeout,
             max_retries=max_retries,
             retry_delay=retry_delay,
+            git_platform=os.getenv("INSP_GIT_PLATFORM"),
             gitea_repo=os.getenv("INSP_GITEA_REPO"),
             gitea_token=os.getenv("INSP_GITEA_TOKEN"),
             gitea_server=os.getenv("INSP_GITEA_SERVER", "https://codeberg.org"),
             gitea_log_workflow=os.getenv("INSP_GITEA_LOG_WORKFLOW", "retrieve_job_log.yml"),
             gitea_sync_workflow=os.getenv("INSP_GITEA_SYNC_WORKFLOW", "sync_code.yml"),
             gitea_bridge_workflow=os.getenv("INSP_GITEA_BRIDGE_WORKFLOW", "run_bridge_action.yml"),
+            github_repo=os.getenv("INSP_GITHUB_REPO"),
+            github_token=os.getenv("INSP_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN"),
+            github_server=os.getenv("INSP_GITHUB_SERVER", "https://github.com"),
+            github_log_workflow=os.getenv("INSP_GITHUB_LOG_WORKFLOW", "retrieve_job_log.yml"),
+            github_sync_workflow=os.getenv("INSP_GITHUB_SYNC_WORKFLOW", "sync_code.yml"),
+            github_bridge_workflow=os.getenv("INSP_GITHUB_BRIDGE_WORKFLOW", "run_bridge_action.yml"),
             log_cache_dir=os.getenv("INSP_LOG_CACHE_DIR", "~/.inspire/logs"),
             remote_timeout=_parse_remote_timeout(os.getenv("INSP_REMOTE_TIMEOUT", "90")),
             default_remote=os.getenv("INSPIRE_DEFAULT_REMOTE", "origin"),
@@ -297,7 +316,7 @@ class Config:
     def from_env_for_sync(cls) -> "Config":
         """Create configuration for sync/bridge commands (doesn't require platform credentials).
 
-        The sync and bridge exec commands only need Gitea access and target dir,
+        The sync and bridge exec commands only need Git forge access and target dir,
         not Inspire platform credentials.
 
         Returns:
@@ -315,15 +334,33 @@ class Config:
                 "Set it with: export INSPIRE_TARGET_DIR='/path/to/shared/directory'"
             )
 
-        # Check for Gitea repo
-        gitea_repo = os.getenv("INSP_GITEA_REPO")
-        if not gitea_repo:
-            raise ConfigError(
-                "Missing INSP_GITEA_REPO environment variable.\n"
-                "Set it with: export INSP_GITEA_REPO='owner/repo'"
-            )
-
-        gitea_server = os.getenv("INSP_GITEA_SERVER", "https://codeberg.org")
+        # Determine platform - check GitHub first, then Gitea
+        platform = os.getenv("INSP_GIT_PLATFORM", "gitea").strip().lower()
+        if platform == "github":
+            gitea_repo = None
+            gitea_token = None
+            gitea_server = "https://codeberg.org"
+            github_repo = os.getenv("INSP_GITHUB_REPO")
+            github_token = os.getenv("INSP_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
+            github_server = os.getenv("INSP_GITHUB_SERVER", "https://github.com")
+            if not github_repo:
+                raise ConfigError(
+                    "Missing INSP_GITHUB_REPO environment variable for GitHub platform.\n"
+                    "Set it with: export INSP_GITHUB_REPO='owner/repo'"
+                )
+        else:
+            gitea_repo = os.getenv("INSP_GITEA_REPO")
+            gitea_token = os.getenv("INSP_GITEA_TOKEN")
+            gitea_server = os.getenv("INSP_GITEA_SERVER", "https://codeberg.org")
+            github_repo = None
+            github_token = None
+            github_server = "https://github.com"
+            if not gitea_repo:
+                raise ConfigError(
+                    "Missing INSP_GITEA_REPO environment variable for Gitea platform.\n"
+                    "Set it with: export INSP_GITEA_REPO='owner/repo'\n"
+                    "Or use GitHub by setting INSP_GIT_PLATFORM=github and INSP_GITHUB_REPO."
+                )
 
         bridge_action_timeout = 300
         bat_env = os.getenv("INSPIRE_BRIDGE_ACTION_TIMEOUT")
@@ -340,12 +377,19 @@ class Config:
             username="",
             password="",
             target_dir=target_dir,
+            git_platform=platform,
             gitea_repo=gitea_repo,
-            gitea_token=os.getenv("INSP_GITEA_TOKEN"),
+            gitea_token=gitea_token,
             gitea_server=gitea_server,
             gitea_log_workflow=os.getenv("INSP_GITEA_LOG_WORKFLOW", "retrieve_job_log.yml"),
             gitea_sync_workflow=os.getenv("INSP_GITEA_SYNC_WORKFLOW", "sync_code.yml"),
             gitea_bridge_workflow=os.getenv("INSP_GITEA_BRIDGE_WORKFLOW", "run_bridge_action.yml"),
+            github_repo=github_repo,
+            github_token=github_token,
+            github_server=github_server,
+            github_log_workflow=os.getenv("INSP_GITHUB_LOG_WORKFLOW", "retrieve_job_log.yml"),
+            github_sync_workflow=os.getenv("INSP_GITHUB_SYNC_WORKFLOW", "sync_code.yml"),
+            github_bridge_workflow=os.getenv("INSP_GITHUB_BRIDGE_WORKFLOW", "run_bridge_action.yml"),
             default_remote=os.getenv("INSPIRE_DEFAULT_REMOTE", "origin"),
             remote_timeout=_parse_remote_timeout(os.getenv("INSP_REMOTE_TIMEOUT", "90")),
             bridge_action_timeout=bridge_action_timeout,
@@ -408,6 +452,7 @@ class Config:
             "paths.log_pattern": "log_pattern",
             "paths.job_cache": "job_cache_path",
             "paths.log_cache_dir": "log_cache_dir",
+            "git.platform": "git_platform",
             "gitea.server": "gitea_server",
             "gitea.repo": "gitea_repo",
             "gitea.token": "gitea_token",
@@ -415,6 +460,12 @@ class Config:
             "gitea.sync_workflow": "gitea_sync_workflow",
             "gitea.bridge_workflow": "gitea_bridge_workflow",
             "gitea.remote_timeout": "remote_timeout",
+            "github.server": "github_server",
+            "github.repo": "github_repo",
+            "github.token": "github_token",
+            "github.log_workflow": "github_log_workflow",
+            "github.sync_workflow": "github_sync_workflow",
+            "github.bridge_workflow": "github_bridge_workflow",
             "sync.default_remote": "default_remote",
             "bridge.action_timeout": "bridge_action_timeout",
             "bridge.denylist": "bridge_action_denylist",
@@ -468,12 +519,23 @@ class Config:
             "timeout": 30,
             "max_retries": 3,
             "retry_delay": 1.0,
+            # Git platform
+            "git_platform": None,
+            # Gitea settings
             "gitea_repo": None,
             "gitea_token": None,
             "gitea_server": "https://codeberg.org",
             "gitea_log_workflow": "retrieve_job_log.yml",
             "gitea_sync_workflow": "sync_code.yml",
             "gitea_bridge_workflow": "run_bridge_action.yml",
+            # GitHub settings
+            "github_repo": None,
+            "github_token": None,
+            "github_server": "https://github.com",
+            "github_log_workflow": "retrieve_job_log.yml",
+            "github_sync_workflow": "sync_code.yml",
+            "github_bridge_workflow": "run_bridge_action.yml",
+            # Common settings
             "log_cache_dir": "~/.inspire/logs",
             "remote_timeout": 90,
             "default_remote": "origin",
@@ -561,12 +623,19 @@ class Config:
             "INSPIRE_TIMEOUT": ("timeout", int),
             "INSPIRE_MAX_RETRIES": ("max_retries", int),
             "INSPIRE_RETRY_DELAY": ("retry_delay", float),
+            "INSP_GIT_PLATFORM": "git_platform",
             "INSP_GITEA_REPO": "gitea_repo",
             "INSP_GITEA_TOKEN": "gitea_token",
             "INSP_GITEA_SERVER": "gitea_server",
             "INSP_GITEA_LOG_WORKFLOW": "gitea_log_workflow",
             "INSP_GITEA_SYNC_WORKFLOW": "gitea_sync_workflow",
             "INSP_GITEA_BRIDGE_WORKFLOW": "gitea_bridge_workflow",
+            "INSP_GITHUB_REPO": "github_repo",
+            "INSP_GITHUB_TOKEN": "github_token",
+            "INSP_GITHUB_SERVER": "github_server",
+            "INSP_GITHUB_LOG_WORKFLOW": "github_log_workflow",
+            "INSP_GITHUB_SYNC_WORKFLOW": "github_sync_workflow",
+            "INSP_GITHUB_BRIDGE_WORKFLOW": "github_bridge_workflow",
             "INSP_LOG_CACHE_DIR": "log_cache_dir",
             "INSP_REMOTE_TIMEOUT": ("remote_timeout", int),
             "INSPIRE_DEFAULT_REMOTE": "default_remote",
@@ -618,6 +687,13 @@ class Config:
                     field_name = mapping
                     config_dict[field_name] = value
                 sources[field_name] = SOURCE_ENV
+
+        # Fallback: use GITHUB_TOKEN if INSP_GITHUB_TOKEN is not set
+        if not config_dict.get("github_token"):
+            github_token_fallback = os.getenv("GITHUB_TOKEN")
+            if github_token_fallback:
+                config_dict["github_token"] = github_token_fallback
+                sources["github_token"] = SOURCE_ENV
 
         # Validate required fields
         if require_credentials:

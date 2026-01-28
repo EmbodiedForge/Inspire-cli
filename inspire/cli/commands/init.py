@@ -29,7 +29,7 @@ username = "your_username"
 # password - use INSPIRE_PASSWORD env var
 
 [api]
-base_url = "https://qz.sii.edu.cn"
+base_url = "https://api.example.com"
 timeout = 30
 max_retries = 3
 retry_delay = 1.0
@@ -40,6 +40,10 @@ log_pattern = "training_master_*.log"
 job_cache = "~/.inspire/jobs.json"
 log_cache_dir = "~/.inspire/logs"
 
+[git]
+# Platform selection: "gitea" or "github"
+platform = "gitea"
+
 [gitea]
 server = "https://codeberg.org"
 repo = "owner/repo"
@@ -48,6 +52,14 @@ log_workflow = "retrieve_job_log.yml"
 sync_workflow = "sync_code.yml"
 bridge_workflow = "run_bridge_action.yml"
 remote_timeout = 90
+
+[github]
+server = "https://github.com"
+repo = "owner/repo"
+# token - use INSP_GITHUB_TOKEN env var
+log_workflow = "retrieve_job_log.yml"
+sync_workflow = "sync_code.yml"
+bridge_workflow = "run_bridge_action.yml"
 
 [sync]
 default_remote = "origin"

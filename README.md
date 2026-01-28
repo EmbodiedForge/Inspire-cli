@@ -44,18 +44,28 @@ Set the required environment variables:
 export INSPIRE_USERNAME="your_username"
 export INSPIRE_PASSWORD="your_password"
 
-# Required for sync/bridge/log operations (shared filesystem root) 
+# Required for sync/bridge/log operations (shared filesystem root)
 export INSPIRE_TARGET_DIR="/path/to/shared/filesystem"
 
-# Gitea Actions (required for sync/bridge exec/remote logs, if SSH works, ignore it)
+# Git Platform Selection (optional, defaults to "gitea")
+export INSP_GIT_PLATFORM="gitea"  # or "github"
+
+# === Gitea Configuration ===
+# Required for sync/bridge exec/remote logs when using Gitea
 export INSP_GITEA_REPO="owner/repo"
 export INSP_GITEA_TOKEN="..."          # Gitea personal access token
 export INSP_GITEA_SERVER="https://gitea.example.com"
 
+# === GitHub Configuration ===
+# Required for sync/bridge exec/remote logs when using GitHub
+export INSP_GITHUB_REPO="owner/repo"
+export INSP_GITHUB_TOKEN="ghp_..."     # GitHub personal access token (classic or PAT)
+export INSP_GITHUB_SERVER="https://github.com"  # or your GitHub Enterprise URL
+
 # Optional
 export INSP_IMAGE="your_image:tag"  # Default Docker image
 export INSP_PRIORITY="6"            # Default job priority (1-10)
-export INSPIRE_BASE_URL="https://qz.sii.edu.cn"  # default
+export INSPIRE_BASE_URL="https://api.example.com"  # default
 export INSPIRE_LOG_PATTERN="training_master_*.log"  # default
 export INSPIRE_JOB_CACHE="~/.inspire/jobs.json"  # default
 export INSPIRE_TIMEOUT="30"  # API timeout in seconds
@@ -75,9 +85,9 @@ export INSPIRE_PROFILE_4090_IMAGE="pytorch:tag"
 export INSPIRE_PROFILE_4090_TARGET_DIR="/inspire/hdd/global_user/..."
 export INSPIRE_PROFILE_4090_PRIORITY="6"
 export INSPIRE_PROFILE_4090_RTUNNEL_BIN="/inspire/hdd/global_user/.../rtunnel"
-export INSPIRE_PROFILE_4090_APT_MIRROR_URL="http://nexus.sii.shaipower.online/repository/ubuntu/"
-export INSPIRE_PROFILE_4090_PIP_INDEX_URL="http://nexus.sii.shaipower.online/repository/pypi/simple"
-export INSPIRE_PROFILE_4090_PIP_TRUSTED_HOST="nexus.sii.shaipower.online"
+export INSPIRE_PROFILE_4090_APT_MIRROR_URL="http://packages.example.com/repository/ubuntu/"
+export INSPIRE_PROFILE_4090_PIP_INDEX_URL="http://packages.example.com/repository/pypi/simple"
+export INSPIRE_PROFILE_4090_PIP_TRUSTED_HOST="packages.example.com"
 ```
 
 ## Quick Start
@@ -218,7 +228,7 @@ The SSH tunnel provides ~100x faster command execution compared to Gitea Actions
 
 ```bash
 # Set up tunnel URL (from Bridge notebook's Ports tab, port 31337)
-inspire tunnel set-url "https://nat-notebook-inspire.../proxy/31337/"
+inspire tunnel set-url "https://tunnel.example.com/proxy/31337/"
 
 # Start tunnel
 inspire tunnel start
@@ -356,28 +366,40 @@ inspire --json resources list
 
 ## Remote Log Retrieval
 
-If running `inspire job logs` from a machine without access to the shared filesystem, the CLI can fetch logs via Gitea Actions workflows.
+If running `inspire job logs` from a machine without access to the shared filesystem, the CLI can fetch logs via Git Actions workflows.
 
 ### Setup
 
 1. **Ensure the workflow file exists** in your training repo:
-   - `.gitea/workflows/retrieve_job_log.yml`
+   - `.gitea/workflows/retrieve_job_log.yml` (Gitea/Forgejo)
+   - `.github/workflows/retrieve_job_log.yml` (GitHub)
 
 2. **Set environment variables:**
+
+   **For Gitea:**
    ```bash
+   export INSP_GIT_PLATFORM="gitea"  # (default, can be omitted)
    export INSP_GITEA_REPO="owner/repo"
    export INSP_GITEA_TOKEN="..."
    export INSP_GITEA_SERVER="https://gitea.example.com"
    ```
 
-3. **Ensure your repo has a Gitea Actions runner** with access to the shared filesystem.
+   **For GitHub:**
+   ```bash
+   export INSP_GIT_PLATFORM="github"
+   export INSP_GITHUB_REPO="owner/repo"
+   export INSP_GITHUB_TOKEN="ghp_..."
+   export INSP_GITHUB_SERVER="https://github.com"
+   ```
+
+3. **Ensure your repo has an Actions runner** with access to the shared filesystem.
 
 ### How It Works
 
 ```
 Laptop (inspire job logs)
     ↓
-Gitea API (triggers workflow)
+Git API (triggers workflow)
     ↓
 Self-hosted Runner (reads log)
     ↓
@@ -389,13 +411,25 @@ Laptop (downloads and caches)
 ## Code Sync Setup
 
 1. **Ensure the workflow file exists:**
-   - `.gitea/workflows/sync_code.yml`
+   - `.gitea/workflows/sync_code.yml` (Gitea/Forgejo)
+   - `.github/workflows/sync_code.yml` (GitHub)
 
 2. **Set environment variables:**
+
+   **For Gitea:**
    ```bash
    export INSP_GITEA_REPO="owner/repo"
    export INSP_GITEA_SERVER="https://gitea.example.com"
    export INSP_GITEA_TOKEN="..."
+   export INSPIRE_TARGET_DIR="/path/to/dir"
+   ```
+
+   **For GitHub:**
+   ```bash
+   export INSP_GIT_PLATFORM="github"
+   export INSP_GITHUB_REPO="owner/repo"
+   export INSP_GITHUB_SERVER="https://github.com"
+   export INSP_GITHUB_TOKEN="ghp_..."
    export INSPIRE_TARGET_DIR="/path/to/dir"
    ```
 

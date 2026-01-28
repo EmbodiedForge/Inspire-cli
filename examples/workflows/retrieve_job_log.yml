@@ -64,8 +64,9 @@ jobs:
           git config user.name "Inspire Bot"
           git config user.email "bot@inspire.local"
 
-          # Remote with token auth (adjust URL for your Git forge)
-          REMOTE_URL="https://${GITHUB_ACTOR}:${GIT_TOKEN}@codeberg.org/${GITHUB_REPOSITORY}.git"
+          # Remote with token auth (works on both GitHub and Gitea)
+          # GITHUB_SERVER_URL and GITHUB_REPOSITORY are available on both platforms
+          REMOTE_URL="https://${GITHUB_ACTOR}:${GIT_TOKEN}@${GITHUB_SERVER_URL#https://}/${GITHUB_REPOSITORY}.git"
           git remote add origin "$REMOTE_URL"
 
           # Copy log file (full or partial based on offset)
