@@ -24,6 +24,6 @@ Or create a local venv:
   uv venv .venv
   uv pip install -e .
 Or install globally:
-  uv tool install git+ssh://git@<your-gitea-host>/cyteena/inspire-cli.git
+  uv tool install git+ssh://git@github.com/EmbodiedForge/Inspire-cli.git
 EOF
 exit 1
