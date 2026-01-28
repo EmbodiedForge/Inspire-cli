@@ -27,8 +27,8 @@ class SessionExpiredError(Exception):
     """Raised when the web session has expired (401 from server)."""
     pass
 
-# Default workspace (most commonly used - has 1388 nodes)
-DEFAULT_WORKSPACE_ID = "ws-9dcc0e1f-80a4-4af2-bc2f-0e352e7b17e6"
+# Default workspace placeholder (override with INSPIRE_WORKSPACE_ID env var)
+DEFAULT_WORKSPACE_ID = "ws-00000000-0000-0000-0000-000000000000"
 
 
 def get_playwright_proxy() -> Optional[dict]:

@@ -483,11 +483,11 @@ class InspireAPI:
     DEFAULT_IMAGE_TYPE = "SOURCE_PRIVATE"
     DEFAULT_PROJECT_ID = os.getenv(
         'INSPIRE_PROJECT_ID',
-        "project-c67c548f-f02c-453b-ba5b-8745db6886e7" # Placeholder from EBM_dev
+        "project-00000000-0000-0000-0000-000000000000" # Placeholder - set INSPIRE_PROJECT_ID env var
     )
     DEFAULT_WORKSPACE_ID = os.getenv(
         'INSPIRE_WORKSPACE_ID',
-        "ws-9dcc0e1f-80a4-4af2-bc2f-0e352e7b17e6" # Placeholder from EBM_dev
+        "ws-00000000-0000-0000-0000-000000000000" # Placeholder - set INSPIRE_WORKSPACE_ID env var
     )
     DEFAULT_IMAGE = "docker.example.com/inspire-studio/ngc-cuda12.8-base:1.0"
     DEFAULT_IMAGE_PATH = "inspire-studio/ngc-cuda12.8-base:1.0"

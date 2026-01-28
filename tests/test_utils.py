@@ -246,7 +246,7 @@ class TestConfig:
 
         assert config.username == "testuser"
         assert config.password == "testpass"
-        assert config.base_url == "https://qz.sii.edu.cn"
+        assert config.base_url == "https://api.example.com"
 
     def test_from_env_missing_username(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test error when username is missing."""
