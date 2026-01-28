@@ -32,7 +32,7 @@ from .web_session import (
 )
 
 
-BASE_URL = os.environ.get("INSPIRE_BASE_URL", "https://qz.sii.edu.cn")
+BASE_URL = os.environ.get("INSPIRE_BASE_URL", "https://api.example.com")
 
 # Default browser API prefix (fallback if not configured)
 DEFAULT_BROWSER_API_PREFIX = "/api/v1"
@@ -1015,6 +1015,42 @@ def stop_notebook(
     return data.get("data", {})
 
 
+def start_notebook(
+    notebook_id: str,
+    session: Optional[WebSession] = None,
+) -> dict:
+    """Start a stopped notebook instance.
+
+    Args:
+        notebook_id: ID of the notebook to start.
+        session: Optional pre-existing web session.
+
+    Returns:
+        API response.
+    """
+    if session is None:
+        session = get_web_session()
+
+    body = {
+        "notebook_id": notebook_id,
+        "operation": "START",
+    }
+
+    data = _request_json(
+        session,
+        "POST",
+        _browser_api_path("/notebook/operate"),
+        referer=f"{BASE_URL}/jobs/interactiveModeling",
+        body=body,
+        timeout=30,
+    )
+
+    if data.get("code") != 0:
+        raise ValueError(f"API error: {data.get('message')}")
+
+    return data.get("data", {})
+
+
 def get_notebook_detail(
     notebook_id: str,
     session: Optional[WebSession] = None,
@@ -1415,10 +1451,12 @@ def _setup_notebook_rtunnel_sync(
 
             # Use the setup script from shared path if dropbear is requested
             if dropbear_deb_dir:
-                setup_script = os.environ.get(
-                    "INSPIRE_SETUP_SCRIPT",
-                    "/inspire/hdd/global_user/gongjingjing-25039/ytchen/tools/setup_ssh.sh",
-                )
+                setup_script = os.environ.get("INSPIRE_SETUP_SCRIPT")
+                if not setup_script:
+                    raise ValueError(
+                        "INSPIRE_SETUP_SCRIPT environment variable is required when using dropbear. "
+                        "Set it to the path of your SSH setup script on the cluster."
+                    )
                 rtunnel_bin_arg = rtunnel_bin or "/tmp/rtunnel"
                 cmd_lines.extend(
                     [

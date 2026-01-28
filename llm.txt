@@ -1,0 +1,363 @@
+# Inspire CLI - AI Documentation
+
+> Quick reference for AI assistants working with the Inspire CLI codebase.
+
+## Project Overview
+
+Inspire CLI is a command-line tool for interacting with the Inspire HPC (High Performance Computing) training platform. It enables users to:
+- Submit and manage training jobs on GPU clusters
+- Monitor job status and retrieve logs
+- Sync code to remote clusters via Git Actions workflows (Gitea/GitHub)
+- Launch interactive notebook sessions
+- Execute commands on Bridge runners via SSH tunnel or Actions workflows
+
+## Architecture
+
+```
+inspire-cli/
+├── inspire/
+│   ├── __init__.py              # Package version
+│   ├── inspire_api_control.py   # Low-level OpenAPI client
+│   ├── compute_groups.py        # GPU resource definitions
+│   └── cli/
+│       ├── main.py              # Entry point, Click groups
+│       ├── context.py           # CLI context, exit codes
+│       ├── commands/            # Command implementations
+│       │   ├── job.py           # job create/status/logs/stop/list/wait
+│       │   ├── resources.py     # resources list (GPU availability)
+│       │   ├── config.py        # config show/check/env
+│       │   ├── init.py          # inspire init (create config templates)
+│       │   ├── sync.py          # sync code to Bridge
+│       │   ├── bridge.py        # bridge exec (run commands on Bridge)
+│       │   ├── run.py           # quick job submission with auto-resource
+│       │   ├── notebook.py      # notebook list/create/stop/ssh
+│       │   └── tunnel.py        # SSH tunnel profile management
+│       ├── utils/
+│       │   ├── config.py        # Config class, TOML loading, precedence
+│       │   ├── config_schema.py # All config options metadata
+│       │   ├── auth.py          # OpenAPI authentication manager
+│       │   ├── forge.py         # Git forge abstraction (GitHub/Gitea)
+│       │   ├── gitea.py         # Backward-compat wrapper for forge.py
+│       │   ├── browser_api.py   # Browser API client (SSO-protected)
+│       │   ├── web_session.py   # Playwright login, session caching
+│       │   ├── job_cache.py     # Local job metadata cache
+│       │   ├── logs.py          # Log retrieval utilities
+│       │   ├── resources.py     # Resource availability fetching
+│       │   ├── tunnel.py        # SSH tunnel/rtunnel profiles
+│       │   └── profile.py       # Env profile management
+│       └── formatters/
+│           ├── json_formatter.py   # JSON output
+│           └── human_formatter.py  # Human-readable output
+├── examples/
+│   └── workflows/               # Example Actions workflows
+│       ├── retrieve_job_log.yml
+│       ├── run_bridge_action.yml
+│       └── sync_code.yml
+└── tests/
+    └── test_*.py                # Pytest test files
+```
+
+## Key Commands
+
+```bash
+# Configuration
+inspire init                    # Create config from detected env vars
+inspire init --template         # Create template config.toml
+inspire init --global           # Create global config
+inspire config show             # Display merged config with sources
+inspire config check            # Validate config and test auth
+
+# Jobs
+inspire job create --name "train" --resource "4xH200" --command "bash train.sh"
+inspire job status <job-id>
+inspire job logs <job-id> --follow
+inspire job stop <job-id>
+inspire job list
+inspire job wait <job-id>
+
+# Quick Run (simplified job submission with auto-resource selection)
+inspire run "python train.py"                    # 8xH200, auto-select location
+inspire run "python train.py" --gpus 4 --type H100
+inspire run "python train.py" --watch            # Sync, run, follow logs
+
+# Resources
+inspire resources list                # Show GPU availability
+inspire resources list --watch        # Watch continuously
+inspire resources list --workspace    # Node-level availability
+
+# Code Sync (via Git Actions or SSH tunnel)
+inspire sync                    # Push current branch, sync to Bridge
+inspire sync --force            # Force sync (discard remote changes)
+
+# Bridge Exec (run commands on Bridge runner)
+inspire bridge exec "ls -la"
+inspire bridge exec "pip install torch" --no-wait
+
+# Notebooks
+inspire notebook list
+inspire notebook create --resource 1xH200
+inspire notebook stop <instance-id>
+inspire notebook ssh <instance-id>
+
+# SSH Tunnel Profiles
+inspire tunnel status           # Show current tunnel status
+inspire tunnel add <name> --url <proxy-url>
+inspire tunnel remove <name>
+inspire tunnel list
+inspire tunnel ssh-config       # Generate SSH config snippet
+```
+
+## Configuration System
+
+### Precedence (lowest to highest)
+```
+Hardcoded defaults < Global config.toml < Project config.toml < Environment variables
+```
+
+### Config File Locations
+- **Global**: `~/.config/inspire/config.toml`
+- **Project**: `./.inspire/config.toml` (searched by walking up from cwd)
+
+### All Configuration Options
+
+#### Authentication
+| Env Var | TOML Key | Description | Scope |
+|---------|----------|-------------|-------|
+| INSPIRE_USERNAME | auth.username | Platform username | global |
+| INSPIRE_PASSWORD | auth.password | Platform password (use env var) | global |
+
+#### API Settings
+| Env Var | TOML Key | Description | Default |
+|---------|----------|-------------|---------|
+| INSPIRE_BASE_URL | api.base_url | API base URL | https://api.example.com |
+| INSPIRE_TIMEOUT | api.timeout | API timeout (seconds) | 30 |
+| INSPIRE_MAX_RETRIES | api.max_retries | Max retry attempts | 3 |
+| INSPIRE_RETRY_DELAY | api.retry_delay | Retry delay (seconds) | 1.0 |
+| INSPIRE_SKIP_SSL_VERIFY | api.skip_ssl_verify | Skip SSL verification | false |
+
+#### Paths
+| Env Var | TOML Key | Description | Default |
+|---------|----------|-------------|---------|
+| INSPIRE_TARGET_DIR | paths.target_dir | Bridge target directory | (none) |
+| INSPIRE_LOG_PATTERN | paths.log_pattern | Log file glob pattern | training_master_*.log |
+| INSPIRE_JOB_CACHE | paths.job_cache | Job cache file | ~/.inspire/jobs.json |
+| INSP_LOG_CACHE_DIR | paths.log_cache_dir | Log cache directory | ~/.inspire/logs |
+
+#### Git Platform Selection
+| Env Var | TOML Key | Description | Default |
+|---------|----------|-------------|---------|
+| INSP_GIT_PLATFORM | git.platform | Git platform: "gitea" or "github" | (auto-detect) |
+
+#### Gitea Configuration
+| Env Var | TOML Key | Description | Default |
+|---------|----------|-------------|---------|
+| INSP_GITEA_SERVER | gitea.server | Gitea server URL | https://codeberg.org |
+| INSP_GITEA_REPO | gitea.repo | Gitea repo (owner/repo) | (none) |
+| INSP_GITEA_TOKEN | gitea.token | Gitea personal access token | (none) |
+| INSP_GITEA_LOG_WORKFLOW | gitea.log_workflow | Log retrieval workflow | retrieve_job_log.yml |
+| INSP_GITEA_SYNC_WORKFLOW | gitea.sync_workflow | Code sync workflow | sync_code.yml |
+| INSP_GITEA_BRIDGE_WORKFLOW | gitea.bridge_workflow | Bridge exec workflow | run_bridge_action.yml |
+| INSP_REMOTE_TIMEOUT | gitea.remote_timeout | Artifact wait timeout | 90 |
+
+#### GitHub Configuration
+| Env Var | TOML Key | Description | Default |
+|---------|----------|-------------|---------|
+| INSP_GITHUB_SERVER | github.server | GitHub server URL | https://github.com |
+| INSP_GITHUB_REPO | github.repo | GitHub repo (owner/repo) | (none) |
+| INSP_GITHUB_TOKEN | github.token | GitHub PAT (falls back to GITHUB_TOKEN) | (none) |
+| INSP_GITHUB_LOG_WORKFLOW | github.log_workflow | Log retrieval workflow | retrieve_job_log.yml |
+| INSP_GITHUB_SYNC_WORKFLOW | github.sync_workflow | Code sync workflow | sync_code.yml |
+| INSP_GITHUB_BRIDGE_WORKFLOW | github.bridge_workflow | Bridge exec workflow | run_bridge_action.yml |
+
+#### Sync Settings
+| Env Var | TOML Key | Description | Default |
+|---------|----------|-------------|---------|
+| INSPIRE_DEFAULT_REMOTE | sync.default_remote | Git remote name | origin |
+
+#### Bridge Settings
+| Env Var | TOML Key | Description | Default |
+|---------|----------|-------------|---------|
+| INSPIRE_BRIDGE_ACTION_TIMEOUT | bridge.action_timeout | Bridge action timeout | 300 |
+| INSPIRE_BRIDGE_DENYLIST | bridge.denylist | Patterns to exclude from sync | [] |
+
+#### Job Defaults
+| Env Var | TOML Key | Description | Default |
+|---------|----------|-------------|---------|
+| INSP_PRIORITY | job.priority | Default job priority (1-10) | 6 |
+| INSP_IMAGE | job.image | Default Docker image | (none) |
+| INSPIRE_PROJECT_ID | job.project_id | Default project ID | (none) |
+| INSPIRE_WORKSPACE_ID | job.workspace_id | Default workspace ID | (none) |
+| INSPIRE_SHM_SIZE | job.shm_size | Shared memory size (bytes) | (none) |
+
+#### Notebook Settings
+| Env Var | TOML Key | Description | Default |
+|---------|----------|-------------|---------|
+| INSPIRE_NOTEBOOK_RESOURCE | notebook.resource | Default notebook resource | 1xH200 |
+| INSPIRE_NOTEBOOK_IMAGE | notebook.image | Default notebook image (falls back to INSP_IMAGE) | (none) |
+
+#### SSH / Tunnel Settings
+| Env Var | TOML Key | Description | Default |
+|---------|----------|-------------|---------|
+| INSPIRE_RTUNNEL_BIN | ssh.rtunnel_bin | Path to rtunnel binary | (none) |
+| INSPIRE_SSHD_DEB_DIR | ssh.sshd_deb_dir | SSHD deb package dir | (none) |
+| INSPIRE_DROPBEAR_DEB_DIR | ssh.dropbear_deb_dir | Dropbear deb package dir | (none) |
+| INSPIRE_RTUNNEL_DOWNLOAD_URL | ssh.rtunnel_download_url | rtunnel download URL | (GitHub release) |
+
+#### Mirror Settings
+| Env Var | TOML Key | Description | Default |
+|---------|----------|-------------|---------|
+| INSPIRE_APT_MIRROR_URL | mirrors.apt_mirror_url | APT mirror URL | (none) |
+| INSPIRE_PIP_INDEX_URL | mirrors.pip_index_url | PyPI mirror URL | (none) |
+| INSPIRE_PIP_TRUSTED_HOST | mirrors.pip_trusted_host | Pip trusted host | (none) |
+
+## Example config.toml
+
+```toml
+# ~/.config/inspire/config.toml (global) or ./.inspire/config.toml (project)
+
+[auth]
+username = "your_username"
+# password - use INSPIRE_PASSWORD env var for security
+
+[api]
+base_url = "https://api.example.com"
+timeout = 30
+
+[paths]
+target_dir = "/shared/my-project"
+
+[git]
+platform = "gitea"  # or "github"
+
+[gitea]
+server = "https://codeberg.org"
+repo = "myorg/myrepo"
+# token - use INSP_GITEA_TOKEN env var
+
+[github]
+server = "https://github.com"
+repo = "myorg/myrepo"
+# token - use INSP_GITHUB_TOKEN or GITHUB_TOKEN env var
+
+[job]
+priority = 6
+# image = "pytorch:latest"
+
+[notebook]
+resource = "1xH200"
+```
+
+## Key Code Patterns
+
+### Loading Configuration
+```python
+from inspire.cli.utils.config import Config, ConfigError
+
+# For commands requiring auth
+config = Config.from_env()
+
+# For sync/bridge commands (no platform auth needed)
+config = Config.from_env_for_sync()
+
+# With source tracking for display
+config, sources = Config.from_files_and_env()
+```
+
+### API Client Usage
+```python
+from inspire.cli.utils.auth import AuthManager
+
+api = AuthManager.get_api(config)  # Returns authenticated InspireAPI
+jobs = api.list_tasks()
+```
+
+### Git Forge Client (GitHub/Gitea)
+```python
+from inspire.cli.utils.forge import create_forge_client, trigger_workflow_dispatch
+
+client = create_forge_client(config)  # Returns GiteaClient or GitHubClient
+trigger_workflow_dispatch(config, "sync_code.yml", inputs={"branch": "main"})
+```
+
+### Click Command Structure
+```python
+import click
+from inspire.cli.context import Context, pass_context
+
+@click.command()
+@click.option("--name", required=True)
+@pass_context
+def my_command(ctx: Context, name: str):
+    if ctx.json_output:
+        click.echo(json.dumps({"name": name}))
+    else:
+        click.echo(f"Name: {name}")
+```
+
+### Error Handling
+```python
+from inspire.cli.context import EXIT_CONFIG_ERROR, EXIT_AUTH_ERROR
+
+try:
+    config = Config.from_env()
+except ConfigError as e:
+    click.echo(f"Config error: {e}", err=True)
+    sys.exit(EXIT_CONFIG_ERROR)
+```
+
+## Exit Codes
+
+| Code | Constant | Meaning |
+|------|----------|---------|
+| 0 | - | Success |
+| 1 | - | General error |
+| 10 | EXIT_CONFIG_ERROR | Configuration error |
+| 11 | EXIT_AUTH_ERROR | Authentication failed |
+| 12 | EXIT_VALIDATION_ERROR | Invalid input |
+| 13 | EXIT_API_ERROR | API error |
+| 14 | EXIT_TIMEOUT | Timeout |
+| 15 | EXIT_LOG_NOT_FOUND | Log not found |
+| 16 | EXIT_JOB_NOT_FOUND | Job not found |
+
+## Testing
+
+```bash
+# Run all tests
+pytest tests/ -v
+
+# Run specific test file
+pytest tests/test_forge_utils.py -v
+
+# Run with coverage
+pytest --cov=inspire tests/
+```
+
+## Dependencies
+
+- click: CLI framework
+- requests: HTTP client for API calls
+- playwright: Browser automation for SSO login
+- tomli/tomllib: TOML parsing (tomllib built-in for Python 3.11+)
+
+## Common Tasks for AI Assistants
+
+1. **Adding a new config option**:
+   - Add to `inspire/cli/utils/config_schema.py` (ConfigOption)
+   - Add field to Config dataclass in `config.py`
+   - Add mapping in `_toml_key_to_field()` and `from_files_and_env()`
+   - Update llm.txt documentation
+
+2. **Adding a new command**:
+   - Create `inspire/cli/commands/mycommand.py`
+   - Import and register in `inspire/cli/main.py`
+   - Add tests in `tests/test_mycommand.py`
+
+3. **Adding Git forge support**:
+   - Modify `inspire/cli/utils/forge.py`
+   - Add new client class inheriting from `ForgeClient`
+   - Implement `get_auth_header()`, `get_api_base()`, `get_raw_file_url()`, `get_pagination_params()`
+
+4. **Adding tests**:
+   - Create `tests/test_myfeature.py`
+   - Use Click's `CliRunner` for CLI tests
+   - Use `monkeypatch` for mocking

@@ -31,7 +31,7 @@ from inspire.cli.utils.web_session import get_web_session
 
 
 def _get_base_url() -> str:
-    return os.environ.get("INSPIRE_BASE_URL", "https://qz.sii.edu.cn")
+    return os.environ.get("INSPIRE_BASE_URL", "https://api.example.com")
 
 
 def _resolve_json_output(ctx: Context, json_output: bool) -> bool:
@@ -516,7 +516,6 @@ def _load_ssh_public_key(pubkey_path: Optional[str] = None) -> str:
     default=lambda: (
         os.environ.get("INSPIRE_NOTEBOOK_IMAGE")
         or os.environ.get("INSP_IMAGE")
-        or os.environ.get("INSPIRE_IMAGE")
     ),
     help="Image name/URL (prompts interactively if omitted)",
 )
@@ -1108,6 +1107,105 @@ def stop_notebook_cmd(
             )
         else:
             click.echo(f"Error stopping notebook: {e}", err=True)
+        sys.exit(EXIT_API_ERROR)
+        return
+
+
+@notebook.command("start")
+@click.argument("notebook_id")
+@click.option(
+    "--wait/--no-wait",
+    default=False,
+    help="Wait for notebook to reach RUNNING status",
+)
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    help="Alias for global --json",
+)
+@pass_context
+def start_notebook_cmd(
+    ctx: Context,
+    notebook_id: str,
+    wait: bool,
+    json_output: bool,
+) -> None:
+    """Start a stopped notebook instance.
+
+    \b
+    Examples:
+        inspire notebook start abc123-def456
+        inspire notebook start abc123-def456 --wait
+    """
+    from inspire.cli.utils.web_session import get_web_session
+    from inspire.cli.utils.browser_api import start_notebook, wait_for_notebook_running
+
+    json_output = _resolve_json_output(ctx, json_output)
+
+    try:
+        session = get_web_session()
+    except ValueError as e:
+        if json_output:
+            click.echo(
+                json_formatter.format_json_error(
+                    "ConfigError",
+                    str(e),
+                    EXIT_CONFIG_ERROR,
+                    hint="Set INSPIRE_USERNAME and INSPIRE_PASSWORD environment variables.",
+                ),
+                err=True,
+            )
+        else:
+            click.echo(f"Error: {e}", err=True)
+        sys.exit(EXIT_CONFIG_ERROR)
+        return
+
+    try:
+        result = start_notebook(notebook_id=notebook_id, session=session)
+
+        if not json_output:
+            click.echo(f"Notebook '{notebook_id}' is being started.")
+
+        if wait:
+            if not json_output:
+                click.echo("Waiting for notebook to reach RUNNING status...")
+            try:
+                wait_for_notebook_running(notebook_id=notebook_id, session=session)
+                if not json_output:
+                    click.echo("Notebook is now RUNNING.")
+            except TimeoutError as e:
+                if json_output:
+                    click.echo(
+                        json_formatter.format_json_error("Timeout", str(e), EXIT_API_ERROR),
+                        err=True,
+                    )
+                else:
+                    click.echo(f"Timeout: {e}", err=True)
+                sys.exit(EXIT_API_ERROR)
+                return
+
+        if json_output:
+            click.echo(
+                json_formatter.format_json(
+                    {
+                        "notebook_id": notebook_id,
+                        "status": "starting",
+                        "result": result,
+                    }
+                )
+            )
+        else:
+            click.echo(f"Use 'inspire notebook status {notebook_id}' to check status.")
+
+    except Exception as e:
+        if json_output:
+            click.echo(
+                json_formatter.format_json_error("APIError", str(e), EXIT_API_ERROR),
+                err=True,
+            )
+        else:
+            click.echo(f"Error starting notebook: {e}", err=True)
         sys.exit(EXIT_API_ERROR)
         return
 

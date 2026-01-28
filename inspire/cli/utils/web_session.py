@@ -355,7 +355,7 @@ def get_credentials() -> tuple[str, str]:
 def login_with_playwright(
     username: str,
     password: str,
-    base_url: str = "https://qz.sii.edu.cn",
+    base_url: str = "https://api.example.com",
     headless: bool = True,
 ) -> WebSession:
     """Login to Inspire web UI using Playwright and capture session storage state.
@@ -544,13 +544,14 @@ def get_web_session(force_refresh: bool = False, require_workspace: bool = False
         return cached
 
     # Session is missing or has no cookies, perform fresh login
-    return login_with_playwright(username, password)
+    base_url = os.environ.get("INSPIRE_BASE_URL", "https://api.example.com")
+    return login_with_playwright(username, password, base_url=base_url)
 
 
 def fetch_node_specs(
     session: WebSession,
     compute_group_id: str,
-    base_url: str = "https://qz.sii.edu.cn",
+    base_url: str = "https://api.example.com",
 ) -> dict:
     """Fetch detailed node specs for a compute group using web session.
 
@@ -575,7 +576,7 @@ def fetch_node_specs(
 
 def fetch_workspace_availability(
     session: WebSession,
-    base_url: str = "https://qz.sii.edu.cn",
+    base_url: str = "https://api.example.com",
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> list[dict]:
     """Fetch workspace-specific GPU availability.
@@ -634,7 +635,7 @@ class GPUAvailability:
 def fetch_gpu_availability(
     session: WebSession,
     compute_group_ids: list[str],
-    base_url: str = "https://qz.sii.edu.cn",
+    base_url: str = "https://api.example.com",
 ) -> list[GPUAvailability]:
     """Fetch accurate per-GPU availability for compute groups."""
     results = []

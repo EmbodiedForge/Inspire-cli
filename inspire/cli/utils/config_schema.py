@@ -410,14 +410,6 @@ CONFIG_OPTIONS: list[ConfigOption] = [
         category="Notebook",
         scope="project",
     ),
-    ConfigOption(
-        env_var="INSPIRE_IMAGE",
-        toml_key="notebook.image",
-        description="Default Docker image (legacy, same as notebook.image)",
-        default=None,
-        category="Notebook",
-        scope="project",
-    ),
     # SSH / Tunnel Settings (global scope - local tool paths)
     ConfigOption(
         env_var="INSPIRE_RTUNNEL_BIN",
