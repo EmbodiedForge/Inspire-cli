@@ -31,7 +31,34 @@ class BridgeNotFoundError(TunnelError):
 DEFAULT_SSH_USER = "root"
 DEFAULT_SSH_PORT = 22222
 # nightly release includes stdio:// mode for SSH ProxyCommand support
-RTUNNEL_DOWNLOAD_URL = "https://github.com/Sarfflow/rtunnel/releases/download/nightly/rtunnel-linux-amd64.tar.gz"
+DEFAULT_RTUNNEL_DOWNLOAD_URL = "https://github.com/Sarfflow/rtunnel/releases/download/nightly/rtunnel-linux-amd64.tar.gz"
+
+
+def _get_rtunnel_download_url() -> str:
+    """Get the rtunnel download URL from config or environment.
+
+    Returns:
+        Download URL for rtunnel binary
+    """
+    # Check environment variable first (highest priority)
+    env_url = os.environ.get("INSPIRE_RTUNNEL_DOWNLOAD_URL")
+    if env_url:
+        return env_url
+
+    # Try to load from config files
+    try:
+        from .config import Config
+
+        config, _ = Config.from_files_and_env(
+            require_credentials=False, require_target_dir=False
+        )
+        if config.rtunnel_download_url:
+            return config.rtunnel_download_url
+    except Exception:
+        pass
+
+    # Use default
+    return DEFAULT_RTUNNEL_DOWNLOAD_URL
 
 
 @dataclass
@@ -423,7 +450,7 @@ def _ensure_rtunnel_binary(config: TunnelConfig) -> Path:
 
         # Download tar.gz and extract
         with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
-            urllib.request.urlretrieve(RTUNNEL_DOWNLOAD_URL, tmp.name)
+            urllib.request.urlretrieve(_get_rtunnel_download_url(), tmp.name)
             with tarfile.open(tmp.name, "r:gz") as tar:
                 # Extract the rtunnel binary (should be the only file or named rtunnel*)
                 for member in tar.getmembers():

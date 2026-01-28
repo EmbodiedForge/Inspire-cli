@@ -375,6 +375,14 @@ CONFIG_OPTIONS: list[ConfigOption] = [
         category="SSH",
         scope="global",
     ),
+    ConfigOption(
+        env_var="INSPIRE_RTUNNEL_DOWNLOAD_URL",
+        toml_key="ssh.rtunnel_download_url",
+        description="Download URL for rtunnel binary",
+        default="https://github.com/Sarfflow/rtunnel/releases/download/nightly/rtunnel-linux-amd64.tar.gz",
+        category="SSH",
+        scope="global",
+    ),
     # Mirror Settings (global scope - network-specific)
     ConfigOption(
         env_var="INSPIRE_APT_MIRROR_URL",

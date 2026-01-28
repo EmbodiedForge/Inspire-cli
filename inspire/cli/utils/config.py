@@ -178,6 +178,7 @@ class Config:
     rtunnel_bin: Optional[str] = None
     sshd_deb_dir: Optional[str] = None
     dropbear_deb_dir: Optional[str] = None
+    rtunnel_download_url: str = "https://github.com/Sarfflow/rtunnel/releases/download/nightly/rtunnel-linux-amd64.tar.gz"
 
     # Mirror settings
     apt_mirror_url: Optional[str] = None
@@ -423,6 +424,7 @@ class Config:
             "ssh.rtunnel_bin": "rtunnel_bin",
             "ssh.sshd_deb_dir": "sshd_deb_dir",
             "ssh.dropbear_deb_dir": "dropbear_deb_dir",
+            "ssh.rtunnel_download_url": "rtunnel_download_url",
             "mirrors.apt_mirror_url": "apt_mirror_url",
             "mirrors.pip_index_url": "pip_index_url",
             "mirrors.pip_trusted_host": "pip_trusted_host",
@@ -494,6 +496,7 @@ class Config:
             "rtunnel_bin": None,
             "sshd_deb_dir": None,
             "dropbear_deb_dir": None,
+            "rtunnel_download_url": "https://github.com/Sarfflow/rtunnel/releases/download/nightly/rtunnel-linux-amd64.tar.gz",
             # Mirror settings
             "apt_mirror_url": None,
             "pip_index_url": None,
@@ -569,6 +572,7 @@ class Config:
             "INSPIRE_RTUNNEL_BIN": "rtunnel_bin",
             "INSPIRE_SSHD_DEB_DIR": "sshd_deb_dir",
             "INSPIRE_DROPBEAR_DEB_DIR": "dropbear_deb_dir",
+            "INSPIRE_RTUNNEL_DOWNLOAD_URL": "rtunnel_download_url",
             # Mirror settings
             "INSPIRE_APT_MIRROR_URL": "apt_mirror_url",
             "INSPIRE_PIP_INDEX_URL": "pip_index_url",

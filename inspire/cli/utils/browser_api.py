@@ -1341,7 +1341,8 @@ def _setup_notebook_rtunnel_sync(
 
             # Use the same nightly tarball as the local tunnel client.
             try:
-                from inspire.cli.utils.tunnel import RTUNNEL_DOWNLOAD_URL
+                from inspire.cli.utils.tunnel import _get_rtunnel_download_url
+                RTUNNEL_DOWNLOAD_URL = _get_rtunnel_download_url()
             except Exception:
                 RTUNNEL_DOWNLOAD_URL = "https://github.com/Sarfflow/rtunnel/releases/download/nightly/rtunnel-linux-amd64.tar.gz"
 
