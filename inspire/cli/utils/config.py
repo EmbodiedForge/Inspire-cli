@@ -1,17 +1,48 @@
 """Configuration management for Inspire CLI.
 
-Reads configuration from environment variables with sensible defaults.
+Reads configuration from environment variables and TOML config files with sensible defaults.
+
+Config precedence (lowest to highest):
+    Hardcoded defaults < Global config.toml < Project config.toml < Environment variables
 """
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
+
+try:
+    import tomllib
+except ImportError:
+    # Python < 3.11 fallback
+    import tomli as tomllib
+
+from inspire.cli.utils.config_schema import (
+    CONFIG_OPTIONS,
+    ConfigOption,
+    get_option_by_toml,
+    parse_value as parse_schema_value,
+    get_categories,
+    CATEGORY_ORDER,
+    _parse_bool,
+)
+
+# Config file paths
+CONFIG_FILENAME = "config.toml"
+PROJECT_CONFIG_DIR = ".inspire"  # ./.inspire/config.toml
 
 
 class ConfigError(Exception):
     """Configuration error - missing or invalid settings."""
 
     pass
+
+
+# Source tracking for config values
+SOURCE_DEFAULT = "default"
+SOURCE_GLOBAL = "global"
+SOURCE_PROJECT = "project"
+SOURCE_ENV = "env"
 
 
 def _parse_remote_timeout(value: str) -> int:
@@ -122,6 +153,33 @@ class Config:
     # Bridge action settings
     bridge_action_timeout: int = 300
     bridge_action_denylist: list[str] = field(default_factory=list)
+
+    # API settings (additional)
+    skip_ssl_verify: bool = False
+    force_proxy: bool = False
+
+    # Job settings
+    job_priority: int = 6
+    job_image: Optional[str] = None
+    job_project_id: Optional[str] = None
+    job_workspace_id: Optional[str] = None
+
+    # Notebook settings
+    notebook_resource: str = "1xH200"
+    notebook_image: Optional[str] = None
+
+    # SSH settings
+    rtunnel_bin: Optional[str] = None
+    sshd_deb_dir: Optional[str] = None
+    dropbear_deb_dir: Optional[str] = None
+
+    # Mirror settings
+    apt_mirror_url: Optional[str] = None
+    pip_index_url: Optional[str] = None
+    pip_trusted_host: Optional[str] = None
+
+    # Other
+    default_shm: Optional[str] = None
 
     @classmethod
     def from_env(cls, require_target_dir: bool = False) -> "Config":
@@ -287,3 +345,283 @@ class Config:
     def get_expanded_cache_path(self) -> str:
         """Get the job cache path with ~ expanded."""
         return os.path.expanduser(self.job_cache_path)
+
+    # Class-level config paths
+    GLOBAL_CONFIG_PATH = Path.home() / ".config" / "inspire" / CONFIG_FILENAME
+
+    @classmethod
+    def _find_project_config(cls) -> Path | None:
+        """Walk up from cwd to find inspire/config.toml."""
+        current = Path.cwd()
+        while current != current.parent:
+            config_path = current / PROJECT_CONFIG_DIR / CONFIG_FILENAME
+            if config_path.exists():
+                return config_path
+            current = current.parent
+        return None
+
+    @staticmethod
+    def _load_toml(path: Path) -> dict[str, Any]:
+        """Load and parse a TOML config file."""
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+
+    @staticmethod
+    def _flatten_toml(data: dict[str, Any], prefix: str = "") -> dict[str, Any]:
+        """Flatten nested TOML dict to dotted keys (e.g., auth.username)."""
+        result = {}
+        for key, value in data.items():
+            full_key = f"{prefix}.{key}" if prefix else key
+            if isinstance(value, dict):
+                result.update(Config._flatten_toml(value, full_key))
+            else:
+                result[full_key] = value
+        return result
+
+    @classmethod
+    def _toml_key_to_field(cls, toml_key: str) -> str | None:
+        """Map TOML key to Config field name."""
+        mapping = {
+            "auth.username": "username",
+            "auth.password": "password",
+            "api.base_url": "base_url",
+            "api.timeout": "timeout",
+            "api.max_retries": "max_retries",
+            "api.retry_delay": "retry_delay",
+            "api.skip_ssl_verify": "skip_ssl_verify",
+            "api.force_proxy": "force_proxy",
+            "paths.target_dir": "target_dir",
+            "paths.log_pattern": "log_pattern",
+            "paths.job_cache": "job_cache_path",
+            "paths.log_cache_dir": "log_cache_dir",
+            "gitea.server": "gitea_server",
+            "gitea.repo": "gitea_repo",
+            "gitea.token": "gitea_token",
+            "gitea.log_workflow": "gitea_log_workflow",
+            "gitea.sync_workflow": "gitea_sync_workflow",
+            "gitea.bridge_workflow": "gitea_bridge_workflow",
+            "gitea.remote_timeout": "remote_timeout",
+            "sync.default_remote": "default_remote",
+            "bridge.action_timeout": "bridge_action_timeout",
+            "bridge.denylist": "bridge_action_denylist",
+            "job.priority": "job_priority",
+            "job.image": "job_image",
+            "job.project_id": "job_project_id",
+            "job.workspace_id": "job_workspace_id",
+            "notebook.resource": "notebook_resource",
+            "notebook.image": "notebook_image",
+            "ssh.rtunnel_bin": "rtunnel_bin",
+            "ssh.sshd_deb_dir": "sshd_deb_dir",
+            "ssh.dropbear_deb_dir": "dropbear_deb_dir",
+            "mirrors.apt_mirror_url": "apt_mirror_url",
+            "mirrors.pip_index_url": "pip_index_url",
+            "mirrors.pip_trusted_host": "pip_trusted_host",
+            "other.default_shm": "default_shm",
+        }
+        return mapping.get(toml_key)
+
+    @classmethod
+    def from_files_and_env(
+        cls, require_target_dir: bool = False, require_credentials: bool = True
+    ) -> tuple["Config", dict[str, str]]:
+        """Load config from files + env vars with layered precedence.
+
+        Precedence (lowest to highest):
+            Hardcoded defaults < Global config.toml < Project config.toml < Environment variables
+
+        Args:
+            require_target_dir: If True, raise error if target_dir is not set
+            require_credentials: If True, raise error if username/password not set
+
+        Returns:
+            Tuple of (Config instance, dict mapping field names to their sources)
+
+        Raises:
+            ConfigError: If required configuration is missing
+        """
+        # Track where each value came from
+        sources: dict[str, str] = {}
+
+        # 1. Start with defaults
+        config_dict: dict[str, Any] = {
+            "username": "",
+            "password": "",
+            "base_url": "https://qz.sii.edu.cn",
+            "target_dir": None,
+            "log_pattern": "training_master_*.log",
+            "job_cache_path": "~/.inspire/jobs.json",
+            "timeout": 30,
+            "max_retries": 3,
+            "retry_delay": 1.0,
+            "gitea_repo": None,
+            "gitea_token": None,
+            "gitea_server": "https://codeberg.org",
+            "gitea_log_workflow": "retrieve_job_log.yml",
+            "gitea_sync_workflow": "sync_code.yml",
+            "gitea_bridge_workflow": "run_bridge_action.yml",
+            "log_cache_dir": "~/.inspire/logs",
+            "remote_timeout": 90,
+            "default_remote": "origin",
+            "bridge_action_timeout": 300,
+            "bridge_action_denylist": [],
+            # API settings (additional)
+            "skip_ssl_verify": False,
+            "force_proxy": False,
+            # Job settings
+            "job_priority": 6,
+            "job_image": None,
+            "job_project_id": None,
+            "job_workspace_id": None,
+            # Notebook settings
+            "notebook_resource": "1xH200",
+            "notebook_image": None,
+            # SSH settings
+            "rtunnel_bin": None,
+            "sshd_deb_dir": None,
+            "dropbear_deb_dir": None,
+            # Mirror settings
+            "apt_mirror_url": None,
+            "pip_index_url": None,
+            "pip_trusted_host": None,
+            # Other
+            "default_shm": None,
+        }
+
+        # Mark all as defaults initially
+        for key in config_dict:
+            sources[key] = SOURCE_DEFAULT
+
+        # 2. Merge global config
+        global_config_path: Path | None = None
+        if cls.GLOBAL_CONFIG_PATH.exists():
+            global_config_path = cls.GLOBAL_CONFIG_PATH
+            flat_global = cls._flatten_toml(cls._load_toml(cls.GLOBAL_CONFIG_PATH))
+            for toml_key, value in flat_global.items():
+                field_name = cls._toml_key_to_field(toml_key)
+                if field_name and field_name in config_dict:
+                    config_dict[field_name] = value
+                    sources[field_name] = SOURCE_GLOBAL
+
+        # 3. Merge project config (walk up from cwd to find inspire/config.toml)
+        project_config_path = cls._find_project_config()
+        if project_config_path:
+            flat_project = cls._flatten_toml(cls._load_toml(project_config_path))
+            for toml_key, value in flat_project.items():
+                field_name = cls._toml_key_to_field(toml_key)
+                if field_name and field_name in config_dict:
+                    config_dict[field_name] = value
+                    sources[field_name] = SOURCE_PROJECT
+
+        # 4. Override with env vars (highest priority)
+        env_mapping = {
+            "INSPIRE_USERNAME": "username",
+            "INSPIRE_PASSWORD": "password",
+            "INSPIRE_BASE_URL": "base_url",
+            "INSPIRE_TARGET_DIR": "target_dir",
+            "INSPIRE_LOG_PATTERN": "log_pattern",
+            "INSPIRE_JOB_CACHE": "job_cache_path",
+            "INSPIRE_TIMEOUT": ("timeout", int),
+            "INSPIRE_MAX_RETRIES": ("max_retries", int),
+            "INSPIRE_RETRY_DELAY": ("retry_delay", float),
+            "INSP_GITEA_REPO": "gitea_repo",
+            "INSP_GITEA_TOKEN": "gitea_token",
+            "INSP_GITEA_SERVER": "gitea_server",
+            "INSP_GITEA_LOG_WORKFLOW": "gitea_log_workflow",
+            "INSP_GITEA_SYNC_WORKFLOW": "gitea_sync_workflow",
+            "INSP_GITEA_BRIDGE_WORKFLOW": "gitea_bridge_workflow",
+            "INSP_LOG_CACHE_DIR": "log_cache_dir",
+            "INSP_REMOTE_TIMEOUT": ("remote_timeout", int),
+            "INSPIRE_DEFAULT_REMOTE": "default_remote",
+            "INSPIRE_BRIDGE_ACTION_TIMEOUT": ("bridge_action_timeout", int),
+            "INSPIRE_BRIDGE_DENYLIST": ("bridge_action_denylist", _parse_denylist),
+            # API settings (additional)
+            "INSPIRE_SKIP_SSL_VERIFY": ("skip_ssl_verify", _parse_bool),
+            "INSPIRE_FORCE_PROXY": ("force_proxy", _parse_bool),
+            # Job settings
+            "INSP_PRIORITY": ("job_priority", int),
+            "INSP_IMAGE": "job_image",
+            "INSPIRE_PROJECT_ID": "job_project_id",
+            "INSPIRE_WORKSPACE_ID": "job_workspace_id",
+            # Notebook settings
+            "INSPIRE_NOTEBOOK_RESOURCE": "notebook_resource",
+            "INSPIRE_NOTEBOOK_IMAGE": "notebook_image",
+            # SSH settings
+            "INSPIRE_RTUNNEL_BIN": "rtunnel_bin",
+            "INSPIRE_SSHD_DEB_DIR": "sshd_deb_dir",
+            "INSPIRE_DROPBEAR_DEB_DIR": "dropbear_deb_dir",
+            # Mirror settings
+            "INSPIRE_APT_MIRROR_URL": "apt_mirror_url",
+            "INSPIRE_PIP_INDEX_URL": "pip_index_url",
+            "INSPIRE_PIP_TRUSTED_HOST": "pip_trusted_host",
+            # Other
+            "DEFAULT_SHM_ENV_VAR": "default_shm",
+        }
+
+        for env_var, mapping in env_mapping.items():
+            value = os.getenv(env_var)
+            if value is not None:
+                if isinstance(mapping, tuple):
+                    field_name, parser = mapping
+                    try:
+                        if parser == _parse_denylist:
+                            parsed_value = parser(value)
+                        else:
+                            parsed_value = parser(value)
+                    except (ValueError, TypeError):
+                        raise ConfigError(f"Invalid {env_var} value: {value}")
+                    config_dict[field_name] = parsed_value
+                else:
+                    field_name = mapping
+                    config_dict[field_name] = value
+                sources[field_name] = SOURCE_ENV
+
+        # Validate required fields
+        if require_credentials:
+            if not config_dict["username"]:
+                raise ConfigError(
+                    "Missing username configuration.\n"
+                    "Set INSPIRE_USERNAME env var or add to config.toml:\n"
+                    "  [auth]\n"
+                    "  username = 'your_username'"
+                )
+            if not config_dict["password"]:
+                raise ConfigError(
+                    "Missing password configuration.\n"
+                    "Set INSPIRE_PASSWORD env var (recommended for security)"
+                )
+
+        if require_target_dir and not config_dict["target_dir"]:
+            raise ConfigError(
+                "Missing target directory configuration.\n"
+                "Set INSPIRE_TARGET_DIR env var or add to config.toml:\n"
+                "  [paths]\n"
+                "  target_dir = '/path/to/shared/directory'"
+            )
+
+        # Store config file paths for reference
+        config_dict["_global_config_path"] = global_config_path
+        config_dict["_project_config_path"] = project_config_path
+
+        # Remove internal keys before creating Config
+        global_path = config_dict.pop("_global_config_path", None)
+        project_path = config_dict.pop("_project_config_path", None)
+
+        config = cls(**config_dict)
+
+        # Attach paths for display purposes
+        config._global_config_path = global_path  # type: ignore
+        config._project_config_path = project_path  # type: ignore
+        config._sources = sources  # type: ignore
+
+        return config, sources
+
+    @classmethod
+    def get_config_paths(cls) -> tuple[Path | None, Path | None]:
+        """Get paths to global and project config files if they exist.
+
+        Returns:
+            Tuple of (global_config_path, project_config_path) - None if not found
+        """
+        global_path = cls.GLOBAL_CONFIG_PATH if cls.GLOBAL_CONFIG_PATH.exists() else None
+        project_path = cls._find_project_config()
+        return global_path, project_path
