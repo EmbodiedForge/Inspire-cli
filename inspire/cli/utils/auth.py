@@ -47,6 +47,9 @@ class AuthManager:
             timeout=config.timeout,
             max_retries=config.max_retries,
             retry_delay=config.retry_delay,
+            openapi_prefix=config.openapi_prefix,
+            auth_endpoint=config.auth_endpoint,
+            docker_registry=config.docker_registry,
         )
         api = InspireAPI(api_config)
 

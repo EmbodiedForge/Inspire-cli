@@ -732,10 +732,14 @@ def test_config_check_auth_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 
 
 def test_config_check_config_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    def fake_from_env(cls, require_target_dir: bool = False):  # type: ignore[override]
+    def fake_from_files_and_env(
+        cls, require_target_dir: bool = False, require_credentials: bool = True
+    ):  # type: ignore[override]
         raise ConfigError("missing env")
 
-    monkeypatch.setattr(config_module.Config, "from_env", classmethod(fake_from_env))
+    monkeypatch.setattr(
+        config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env)
+    )
 
     runner = CliRunner()
     result = runner.invoke(cli_main, ["--json", "config", "check"])

@@ -106,6 +106,10 @@ class InspireConfig:
     max_retries: int = 3
     retry_delay: float = 1.0
     verify_ssl: bool = True  # Can be disabled via INSPIRE_SKIP_SSL_VERIFY env var
+    # API path prefixes (None = use code defaults)
+    openapi_prefix: Optional[str] = None
+    auth_endpoint: Optional[str] = None
+    docker_registry: Optional[str] = None  # Docker registry hostname
 
 
 class ResourceManager:
@@ -349,12 +353,45 @@ class ResourceManager:
 
 
 class APIEndpoints:
-    """API endpoint constants."""
-    AUTH_TOKEN = "/auth/token"
-    TRAIN_JOB_CREATE = "/openapi/v1/train_job/create"
-    TRAIN_JOB_DETAIL = "/openapi/v1/train_job/detail"
-    TRAIN_JOB_STOP = "/openapi/v1/train_job/stop"
-    CLUSTER_NODES_LIST = "/openapi/v1/cluster_nodes/list"
+    """API endpoint paths with configurable prefixes.
+
+    Uses configured prefixes if provided, otherwise falls back to
+    hardcoded defaults for backward compatibility.
+    """
+
+    # Default fallback values
+    DEFAULT_AUTH_ENDPOINT = "/auth/token"
+    DEFAULT_OPENAPI_PREFIX = "/openapi/v1"
+
+    def __init__(self, auth_endpoint: Optional[str] = None, openapi_prefix: Optional[str] = None):
+        """Initialize API endpoints with optional configurable prefixes.
+
+        Args:
+            auth_endpoint: Custom auth endpoint path (e.g., "/custom/auth")
+            openapi_prefix: Custom OpenAPI prefix (e.g., "/custom/api/v1")
+        """
+        self._auth_endpoint = auth_endpoint or self.DEFAULT_AUTH_ENDPOINT
+        self._openapi_prefix = openapi_prefix or self.DEFAULT_OPENAPI_PREFIX
+
+    @property
+    def AUTH_TOKEN(self) -> str:
+        return self._auth_endpoint
+
+    @property
+    def TRAIN_JOB_CREATE(self) -> str:
+        return f"{self._openapi_prefix}/train_job/create"
+
+    @property
+    def TRAIN_JOB_DETAIL(self) -> str:
+        return f"{self._openapi_prefix}/train_job/detail"
+
+    @property
+    def TRAIN_JOB_STOP(self) -> str:
+        return f"{self._openapi_prefix}/train_job/stop"
+
+    @property
+    def CLUSTER_NODES_LIST(self) -> str:
+        return f"{self._openapi_prefix}/cluster_nodes/list"
 
 
 class InspireAPIError(Exception):
@@ -450,7 +487,15 @@ class InspireAPI:
         "ws-9dcc0e1f-80a4-4af2-bc2f-0e352e7b17e6" # Placeholder from EBM_dev
     )
     DEFAULT_IMAGE = "docker.sii.shaipower.online/inspire-studio/ngc-cuda12.8-base:1.0"
+    DEFAULT_IMAGE_PATH = "inspire-studio/ngc-cuda12.8-base:1.0"
+    DEFAULT_DOCKER_REGISTRY = "docker.sii.shaipower.online"
     ERROR_BODY_PREVIEW_LIMIT = 4000
+
+    def _get_default_image(self) -> str:
+        """Get the default Docker image, using configurable registry if set."""
+        if self.config.docker_registry:
+            return f"{self.config.docker_registry}/{self.DEFAULT_IMAGE_PATH}"
+        return self.DEFAULT_IMAGE
 
     def __init__(self, config: Optional[InspireConfig] = None):
         """
@@ -460,7 +505,7 @@ class InspireAPI:
             config: API configuration object, uses default config if None
         """
         self.config = config or InspireConfig()
-        
+
         # Check for SSL verification override via environment variable
         if os.getenv('INSPIRE_SKIP_SSL_VERIFY', '').lower() in ('1', 'true', 'yes'):
             self.config.verify_ssl = False
@@ -471,7 +516,13 @@ class InspireAPI:
             'Content-Type': 'application/json',
             'Accept': 'application/json'
         }
-        
+
+        # Initialize API endpoints with configurable prefixes
+        self.endpoints = APIEndpoints(
+            auth_endpoint=self.config.auth_endpoint,
+            openapi_prefix=self.config.openapi_prefix,
+        )
+
         # Initialize resource manager
         self.resource_manager = ResourceManager()
 
@@ -641,7 +692,7 @@ class InspireAPI:
         }
         
         try:
-            result = self._make_request('POST', APIEndpoints.AUTH_TOKEN, payload)
+            result = self._make_request('POST', self.endpoints.AUTH_TOKEN, payload)
             
             if result.get('code') == 0:
                 self.token = result['data']['access_token']
@@ -728,7 +779,7 @@ class InspireAPI:
         # Fill optional parameters with defaults
         project_id = project_id or self.DEFAULT_PROJECT_ID
         workspace_id = workspace_id or self.DEFAULT_WORKSPACE_ID
-        image = image or self.DEFAULT_IMAGE
+        image = image or self._get_default_image()
 
         # Call the original create method
         return self.create_training_job(
@@ -796,7 +847,7 @@ class InspireAPI:
 
         # Use default image if not provided
         if not image:
-            image = self.DEFAULT_IMAGE
+            image = self._get_default_image()
 
         # Build request payload
         payload = {
@@ -828,7 +879,7 @@ class InspireAPI:
         logger.debug("Creating training job with payload structure defined")
         
         try:
-            result = self._make_request('POST', APIEndpoints.TRAIN_JOB_CREATE, payload)
+            result = self._make_request('POST', self.endpoints.TRAIN_JOB_CREATE, payload)
             
             if result.get('code') == 0:
                 logger.info(f"✅ Training job '{name}' created successfully.")
@@ -856,7 +907,7 @@ class InspireAPI:
 
         payload = {"job_id": job_id}
 
-        result = self._make_request('POST', APIEndpoints.TRAIN_JOB_DETAIL, payload)
+        result = self._make_request('POST', self.endpoints.TRAIN_JOB_DETAIL, payload)
 
         if result.get('code') == 0:
             logger.info(f"📋 Retrieved details for job {job_id}")
@@ -882,7 +933,7 @@ class InspireAPI:
 
         payload = {"job_id": job_id}
 
-        result = self._make_request('POST', APIEndpoints.TRAIN_JOB_STOP, payload)
+        result = self._make_request('POST', self.endpoints.TRAIN_JOB_STOP, payload)
 
         if result.get('code') == 0:
             logger.info(f"🛑 Training job {job_id} stopped successfully.")
@@ -919,7 +970,7 @@ class InspireAPI:
         if resource_pool:
             payload["filter"] = {"resource_pool": resource_pool}
         
-        result = self._make_request('POST', APIEndpoints.CLUSTER_NODES_LIST, payload)
+        result = self._make_request('POST', self.endpoints.CLUSTER_NODES_LIST, payload)
         
         if result.get('code') == 0:
             node_count = len(result['data'].get('nodes', []))

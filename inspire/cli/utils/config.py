@@ -158,6 +158,12 @@ class Config:
     skip_ssl_verify: bool = False
     force_proxy: bool = False
 
+    # API path prefixes (None = use code defaults)
+    openapi_prefix: Optional[str] = None
+    browser_api_prefix: Optional[str] = None
+    auth_endpoint: Optional[str] = None
+    docker_registry: Optional[str] = None
+
     # Job settings
     job_priority: int = 6
     job_image: Optional[str] = None
@@ -390,6 +396,10 @@ class Config:
             "api.retry_delay": "retry_delay",
             "api.skip_ssl_verify": "skip_ssl_verify",
             "api.force_proxy": "force_proxy",
+            "api.openapi_prefix": "openapi_prefix",
+            "api.browser_api_prefix": "browser_api_prefix",
+            "api.auth_endpoint": "auth_endpoint",
+            "api.docker_registry": "docker_registry",
             "paths.target_dir": "target_dir",
             "paths.log_pattern": "log_pattern",
             "paths.job_cache": "job_cache_path",
@@ -467,6 +477,11 @@ class Config:
             # API settings (additional)
             "skip_ssl_verify": False,
             "force_proxy": False,
+            # API path prefixes
+            "openapi_prefix": None,
+            "browser_api_prefix": None,
+            "auth_endpoint": None,
+            "docker_registry": None,
             # Job settings
             "job_priority": 6,
             "job_image": None,
@@ -537,6 +552,11 @@ class Config:
             # API settings (additional)
             "INSPIRE_SKIP_SSL_VERIFY": ("skip_ssl_verify", _parse_bool),
             "INSPIRE_FORCE_PROXY": ("force_proxy", _parse_bool),
+            # API path prefixes
+            "INSPIRE_OPENAPI_PREFIX": "openapi_prefix",
+            "INSPIRE_BROWSER_API_PREFIX": "browser_api_prefix",
+            "INSPIRE_AUTH_ENDPOINT": "auth_endpoint",
+            "INSPIRE_DOCKER_REGISTRY": "docker_registry",
             # Job settings
             "INSP_PRIORITY": ("job_priority", int),
             "INSP_IMAGE": "job_image",

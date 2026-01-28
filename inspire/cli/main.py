@@ -25,7 +25,7 @@ from inspire.cli.context import (
     EXIT_LOG_NOT_FOUND,
     EXIT_JOB_NOT_FOUND,
 )
-from inspire.cli.commands import job, resources, config, sync, bridge, tunnel, run, notebook
+from inspire.cli.commands import job, resources, config, sync, bridge, tunnel, run, notebook, init
 
 
 def _apply_profile_option(ctx: click.Context, param: click.Parameter, value: str | None) -> str | None:
@@ -86,6 +86,7 @@ main.add_command(bridge)
 main.add_command(tunnel)
 main.add_command(run)
 main.add_command(notebook)
+main.add_command(init)
 
 
 def cli() -> None:

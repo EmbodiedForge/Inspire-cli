@@ -34,6 +34,47 @@ from .web_session import (
 
 BASE_URL = os.environ.get("INSPIRE_BASE_URL", "https://qz.sii.edu.cn")
 
+# Default browser API prefix (fallback if not configured)
+DEFAULT_BROWSER_API_PREFIX = "/api/v1"
+
+# Cached browser API prefix (loaded once at module import)
+_cached_browser_api_prefix: str | None = None
+
+
+def _get_browser_api_prefix() -> str:
+    """Get the browser API prefix from config or environment.
+
+    Returns:
+        Browser API prefix (e.g., "/api/v1" or custom)
+    """
+    global _cached_browser_api_prefix
+
+    if _cached_browser_api_prefix is not None:
+        return _cached_browser_api_prefix
+
+    # Check environment variable first (highest priority)
+    env_prefix = os.environ.get("INSPIRE_BROWSER_API_PREFIX")
+    if env_prefix:
+        _cached_browser_api_prefix = env_prefix
+        return _cached_browser_api_prefix
+
+    # Try to load from config files
+    try:
+        from .config import Config
+
+        config, _ = Config.from_files_and_env(
+            require_credentials=False, require_target_dir=False
+        )
+        if config.browser_api_prefix:
+            _cached_browser_api_prefix = config.browser_api_prefix
+            return _cached_browser_api_prefix
+    except Exception:
+        pass
+
+    # Use default
+    _cached_browser_api_prefix = DEFAULT_BROWSER_API_PREFIX
+    return _cached_browser_api_prefix
+
 
 def _in_asyncio_loop() -> bool:
     try:
@@ -80,6 +121,21 @@ def _request_json(
         body=body,
         timeout=timeout,
     )
+
+
+def _browser_api_path(endpoint_path: str) -> str:
+    """Build a browser API path with configurable prefix.
+
+    Args:
+        endpoint_path: The endpoint path (e.g., "/train_job/list")
+
+    Returns:
+        Full path with prefix (e.g., "/api/v1/train_job/list")
+    """
+    # Strip leading slash from endpoint_path if present
+    endpoint = endpoint_path.lstrip("/")
+    prefix = _get_browser_api_prefix().rstrip("/")
+    return f"{prefix}/{endpoint}"
 
 
 def _launch_browser(p, headless: bool = True):
@@ -196,7 +252,7 @@ def list_jobs(
     data = _request_json(
         session,
         "POST",
-        "/api/v1/train_job/list",
+        _browser_api_path("/train_job/list"),
         referer=f"{BASE_URL}/jobs/distributedTraining",
         body=body,
         timeout=30,
@@ -240,7 +296,7 @@ def list_compute_groups(
     data = _request_json(
         session,
         "POST",
-        "/api/v1/logic_compute_groups/list",
+        _browser_api_path("/logic_compute_groups/list"),
         referer=f"{BASE_URL}/jobs/distributedTraining",
         body=body,
         timeout=30,
@@ -263,7 +319,7 @@ def get_current_user(session: Optional[WebSession] = None) -> dict:
     data = _request_json(
         session,
         "GET",
-        "/api/v1/user/detail",
+        _browser_api_path("/user/detail"),
         referer=f"{BASE_URL}/jobs/distributedTraining",
         timeout=30,
     )
@@ -292,7 +348,7 @@ def list_job_users(
     data = _request_json(
         session,
         "POST",
-        "/api/v1/train_job/users",
+        _browser_api_path("/train_job/users"),
         referer=f"{BASE_URL}/jobs/distributedTraining",
         body={"workspace_id": workspace_id},
         timeout=30,
@@ -351,7 +407,7 @@ def get_accurate_gpu_availability(
             data = _request_json(
                 session,
                 "GET",
-                f"/api/v1/compute_resources/logic_compute_groups/{group_id}",
+                _browser_api_path(f"/compute_resources/logic_compute_groups/{group_id}"),
                 referer=f"{BASE_URL}/jobs/distributedTraining",
                 timeout=30,
             )
@@ -564,7 +620,7 @@ def get_full_free_node_counts(
             payload = _request_json(
                 session,
                 "POST",
-                "/api/v1/cluster_nodes/list",
+                _browser_api_path("/cluster_nodes/list"),
                 referer=f"{BASE_URL}/jobs/distributedTraining",
                 body=body,
                 timeout=30,
@@ -674,7 +730,7 @@ def list_projects(
     data = _request_json(
         session,
         "POST",
-        "/api/v1/project/list",
+        _browser_api_path("/project/list"),
         referer=f"{BASE_URL}/jobs/interactiveModeling",
         body=body,
         timeout=30,
@@ -728,7 +784,7 @@ def list_images(
     data = _request_json(
         session,
         "POST",
-        "/api/v1/image/list",
+        _browser_api_path("/image/list"),
         referer=f"{BASE_URL}/jobs/interactiveModeling",
         body=body,
         timeout=30,
@@ -780,7 +836,7 @@ def get_notebook_schedule(
     data = _request_json(
         session,
         "GET",
-        f"/api/v1/notebook/schedule/{workspace_id}",
+        _browser_api_path(f"/notebook/schedule/{workspace_id}"),
         referer=f"{BASE_URL}/jobs/interactiveModeling",
         timeout=30,
     )
@@ -911,7 +967,7 @@ def create_notebook(
     data = _request_json(
         session,
         "POST",
-        "/api/v1/notebook/create",
+        _browser_api_path("/notebook/create"),
         referer=f"{BASE_URL}/jobs/interactiveModeling",
         body=body,
         timeout=60,
@@ -947,7 +1003,7 @@ def stop_notebook(
     data = _request_json(
         session,
         "POST",
-        "/api/v1/notebook/operate",
+        _browser_api_path("/notebook/operate"),
         referer=f"{BASE_URL}/jobs/interactiveModeling",
         body=body,
         timeout=30,
@@ -978,7 +1034,7 @@ def get_notebook_detail(
     data = _request_json(
         session,
         "GET",
-        f"/api/v1/notebook/{notebook_id}",
+        _browser_api_path(f"/notebook/{notebook_id}"),
         referer=f"{BASE_URL}/jobs/interactiveModeling",
         timeout=30,
     )
@@ -1093,7 +1149,8 @@ def _setup_notebook_rtunnel_sync(
 
     # Fast-path: Try to connect to rtunnel via known proxy URL pattern first.
     # This avoids slow browser automation if rtunnel is already running.
-    known_proxy_url = f"{BASE_URL}/api/v1/notebook/lab/{notebook_id}/proxy/{port}/"
+    notebook_lab_path = _browser_api_path(f"/notebook/lab/{notebook_id}/proxy/{port}/")
+    known_proxy_url = f"{BASE_URL}{notebook_lab_path}"
     try:
         import requests as _requests
         http = build_requests_session(session, BASE_URL)
@@ -1128,13 +1185,14 @@ def _setup_notebook_rtunnel_sync(
             # Find the embedded JupyterLab frame (notebook-inspire host).
             start = time.time()
             lab_frame = None
+            notebook_lab_pattern = _browser_api_path("/notebook/lab/")
             while time.time() - start < 60:
                 for fr in page.frames:
                     url = fr.url or ""
                     if "notebook-inspire" in url and url.rstrip("/").endswith("/lab"):
                         lab_frame = fr
                         break
-                    if "/api/v1/notebook/lab/" in url:
+                    if notebook_lab_pattern.lstrip("/") in url:
                         lab_frame = fr
                         break
                 if lab_frame:
@@ -1142,7 +1200,8 @@ def _setup_notebook_rtunnel_sync(
                 page.wait_for_timeout(500)
 
             if lab_frame is None:
-                direct_lab_url = f"{BASE_URL}/api/v1/notebook/lab/{notebook_id}/"
+                notebook_lab_prefix = _browser_api_path("/notebook/lab").rstrip("/")
+                direct_lab_url = f"{BASE_URL}{notebook_lab_prefix}/{notebook_id}/"
                 page.goto(
                     direct_lab_url,
                     timeout=60000,
@@ -1151,7 +1210,9 @@ def _setup_notebook_rtunnel_sync(
                 lab_frame = page
 
             jupyter_url = lab_frame.url
-            if "/api/v1/notebook/lab/" in jupyter_url:
+            notebook_lab_pattern = _browser_api_path("/notebook/lab/")
+            # Check if the URL contains the notebook lab path pattern
+            if notebook_lab_pattern.lstrip("/") in jupyter_url:
                 from urllib.parse import urlsplit, urlunsplit
 
                 parsed = urlsplit(jupyter_url)

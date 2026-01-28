@@ -48,3 +48,4 @@ internal/
 
 # Development/exploration scripts (contain hardcoded IDs)
 scripts/
+API_ENDPOINTS.md
