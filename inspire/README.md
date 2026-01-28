@@ -162,7 +162,6 @@ python inspire_api_control.py list-nodes --page 1 --size 20
 | 8xH200 | 8 × H200 (141GB) | 120核/1600GB | b618f5cb-c119-4422-937e-f39131853076 |
 
 > **Note**: Compute Group IDs are configured via `config.toml`. See the [Configuration](#configuration) section below.
-> Internal users can copy the provided `secrets.toml` to their config directory for pre-configured compute groups.
 
 ### Configuration
 
