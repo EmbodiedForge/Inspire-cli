@@ -6,13 +6,8 @@ Provides authenticated API client with token caching.
 import time
 from typing import Optional
 
-from inspire.inspire_api_control import InspireAPI, InspireConfig, AuthenticationError as APIAuthError, JobNotFoundError
+from inspire.inspire_api_control import InspireAPI, InspireConfig, AuthenticationError, JobNotFoundError
 from inspire.cli.utils.config import Config, ConfigError
-
-
-class AuthenticationError(Exception):
-    """Authentication failed."""
-    pass
 
 
 class AuthManager:
@@ -58,7 +53,7 @@ class AuthManager:
         # Authenticate
         try:
             api.authenticate(config.username, config.password)
-        except APIAuthError as e:
+        except AuthenticationError as e:
             raise AuthenticationError(f"Authentication failed: {e}")
         except Exception as e:
             raise AuthenticationError(f"Authentication request failed: {e}")

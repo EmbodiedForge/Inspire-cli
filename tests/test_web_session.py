@@ -134,9 +134,14 @@ def test_browser_client_reset_on_expired(monkeypatch: pytest.MonkeyPatch):
     def fake_close() -> None:
         closed["called"] = True
 
+    def fake_get_web_session(**_kwargs):
+        # Simulate re-authentication failure by raising SessionExpiredError
+        raise ws.SessionExpiredError("re-auth failed")
+
     monkeypatch.setattr(ws, "_get_browser_client", lambda _session: ExpiringBrowserClient())
     monkeypatch.setattr(ws, "_close_browser_client", fake_close)
     monkeypatch.setattr(ws, "_BROWSER_API_FORCE_BROWSER", True)
+    monkeypatch.setattr(ws, "get_web_session", fake_get_web_session)
 
     with pytest.raises(ws.SessionExpiredError):
         ws.request_json(session, "GET", "https://example.test")

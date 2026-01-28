@@ -683,6 +683,22 @@ def test_nodes_list_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
             )
         ],
     )
+    # Also mock get_accurate_gpu_availability which is called by the nodes command
+    monkeypatch.setattr(
+        browser_api_module,
+        "get_accurate_gpu_availability",
+        lambda workspace_id=None, session=None, _retry=True: [  # noqa: ARG005
+            browser_api_module.GPUAvailability(
+                group_id="cg-test-id",
+                group_name="H200 Room1",
+                gpu_type="H200",
+                total_gpus=80,
+                used_gpus=68,
+                available_gpus=12,
+                low_priority_gpus=0,
+            )
+        ],
+    )
     runner = CliRunner()
 
     result = runner.invoke(cli_main, ["--json", "resources", "nodes"])
