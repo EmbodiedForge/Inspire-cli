@@ -225,7 +225,7 @@ class TestLayeredConfig:
 
         cfg, sources = Config.from_files_and_env(require_credentials=False)
 
-        assert cfg.base_url == "https://qz.sii.edu.cn"
+        assert cfg.base_url == "https://api.example.com"
         assert cfg.timeout == 30
         assert sources["base_url"] == SOURCE_DEFAULT
         assert sources["timeout"] == SOURCE_DEFAULT
@@ -854,7 +854,7 @@ class TestConfigShowCommand:
         monkeypatch.chdir(tmp_path)
 
         runner = CliRunner()
-        result = runner.invoke(config_command, ["show", "--filter", "auth", "--all"])
+        result = runner.invoke(config_command, ["show", "--filter", "auth"])
 
         assert result.exit_code == 0
         assert "Authentication" in result.output

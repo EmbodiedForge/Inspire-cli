@@ -66,11 +66,10 @@ def config() -> None:
     help="Output format (table, json, env)",
 )
 @click.option(
-    "--all",
-    "-a",
-    "show_all",
+    "--compact",
+    "-c",
     is_flag=True,
-    help="Show all options including unset ones",
+    help="Hide unset options",
 )
 @click.option(
     "--filter",
@@ -80,7 +79,7 @@ def config() -> None:
 )
 @pass_context
 def show_config(
-    ctx: Context, output_format: str, show_all: bool, filter_category: str | None
+    ctx: Context, output_format: str, compact: bool, filter_category: str | None
 ) -> None:
     """Display merged configuration with value sources.
 
@@ -88,12 +87,15 @@ def show_config(
     project config, environment variables) with clear indication of where
     each value comes from.
 
+    By default, all options are shown including unset ones. Use --compact
+    to hide unset options.
+
     \b
     Examples:
         inspire config show
         inspire config show --format json
         inspire config show --filter API
-        inspire config show --all
+        inspire config show --compact
     """
     try:
         # Load config with source tracking (don't require credentials for show)
@@ -105,11 +107,11 @@ def show_config(
         global_path, project_path = Config.get_config_paths()
 
         if output_format == "json":
-            _show_json(cfg, sources, global_path, project_path, show_all, filter_category)
+            _show_json(cfg, sources, global_path, project_path, compact, filter_category)
         elif output_format == "env":
-            _show_env(cfg, sources, show_all, filter_category)
+            _show_env(cfg, sources, compact, filter_category)
         else:
-            _show_table(cfg, sources, global_path, project_path, show_all, filter_category)
+            _show_table(cfg, sources, global_path, project_path, compact, filter_category)
 
     except ConfigError as e:
         _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
@@ -155,6 +157,7 @@ def _get_field_value(cfg: Config, option: ConfigOption) -> tuple[str | None, boo
         "job.image": "job_image",
         "job.project_id": "job_project_id",
         "job.workspace_id": "job_workspace_id",
+        "job.shm_size": "shm_size",
         "notebook.resource": "notebook_resource",
         "notebook.image": "notebook_image",
         "ssh.rtunnel_bin": "rtunnel_bin",
@@ -164,7 +167,6 @@ def _get_field_value(cfg: Config, option: ConfigOption) -> tuple[str | None, boo
         "mirrors.apt_mirror_url": "apt_mirror_url",
         "mirrors.pip_index_url": "pip_index_url",
         "mirrors.pip_trusted_host": "pip_trusted_host",
-        "other.default_shm": "default_shm",
     }
 
     field_name = field_mapping.get(option.toml_key)
@@ -219,6 +221,7 @@ def _get_source_for_option(sources: dict[str, str], option: ConfigOption) -> str
         "job.image": "job_image",
         "job.project_id": "job_project_id",
         "job.workspace_id": "job_workspace_id",
+        "job.shm_size": "shm_size",
         "notebook.resource": "notebook_resource",
         "notebook.image": "notebook_image",
         "ssh.rtunnel_bin": "rtunnel_bin",
@@ -228,7 +231,6 @@ def _get_source_for_option(sources: dict[str, str], option: ConfigOption) -> str
         "mirrors.apt_mirror_url": "apt_mirror_url",
         "mirrors.pip_index_url": "pip_index_url",
         "mirrors.pip_trusted_host": "pip_trusted_host",
-        "other.default_shm": "default_shm",
     }
 
     field_name = field_mapping.get(option.toml_key)
@@ -240,7 +242,7 @@ def _show_table(
     sources: dict[str, str],
     global_path: Path | None,
     project_path: Path | None,
-    show_all: bool,
+    compact: bool,
     filter_category: str | None,
 ) -> None:
     """Display configuration in table format."""
@@ -278,8 +280,8 @@ def _show_table(
         if not options:
             continue
 
-        # Filter to only show set options unless --all
-        if not show_all:
+        # Filter to hide unset options when --compact is used
+        if compact:
             options = [opt for opt in options if _get_field_value(cfg, opt)[1]]
             if not options:
                 continue
@@ -321,7 +323,7 @@ def _show_json(
     sources: dict[str, str],
     global_path: Path | None,
     project_path: Path | None,
-    show_all: bool,
+    compact: bool,
     filter_category: str | None,
 ) -> None:
     """Display configuration as JSON."""
@@ -345,7 +347,7 @@ def _show_json(
 
         for option in options:
             value_str, is_set = _get_field_value(cfg, option)
-            if not show_all and not is_set:
+            if compact and not is_set:
                 continue
 
             source = _get_source_for_option(sources, option)
@@ -362,7 +364,7 @@ def _show_json(
 def _show_env(
     cfg: Config,
     sources: dict[str, str],
-    show_all: bool,
+    compact: bool,
     filter_category: str | None,
 ) -> None:
     """Display configuration as environment variables."""
@@ -376,8 +378,8 @@ def _show_env(
         if not options:
             continue
 
-        # Filter to only show set options unless --all
-        if not show_all:
+        # Filter to hide unset options when --compact is used
+        if compact:
             options = [opt for opt in options if _get_field_value(cfg, opt)[1]]
             if not options:
                 continue

@@ -90,7 +90,7 @@ CONFIG_OPTIONS: list[ConfigOption] = [
         env_var="INSPIRE_BASE_URL",
         toml_key="api.base_url",
         description="API base URL",
-        default="https://qz.sii.edu.cn",
+        default="https://api.example.com",
         category="API",
         scope="global",
     ),
@@ -325,6 +325,15 @@ CONFIG_OPTIONS: list[ConfigOption] = [
         category="Job",
         scope="project",
     ),
+    ConfigOption(
+        env_var="INSPIRE_SHM_SIZE",
+        toml_key="job.shm_size",
+        description="Default shared memory size in GB for jobs",
+        default=None,
+        category="Job",
+        parser=_parse_int,
+        scope="project",
+    ),
     # Notebook Settings (project scope)
     ConfigOption(
         env_var="INSPIRE_NOTEBOOK_RESOURCE",
@@ -376,6 +385,15 @@ CONFIG_OPTIONS: list[ConfigOption] = [
         scope="global",
     ),
     ConfigOption(
+        env_var="INSPIRE_SETUP_SCRIPT",
+        toml_key="ssh.setup_script",
+        description="Path to SSH setup script on the cluster",
+        default=None,
+        category="SSH",
+        scope="global",
+        secret=True,
+    ),
+    ConfigOption(
         env_var="INSPIRE_RTUNNEL_DOWNLOAD_URL",
         toml_key="ssh.rtunnel_download_url",
         description="Download URL for rtunnel binary",
@@ -408,15 +426,7 @@ CONFIG_OPTIONS: list[ConfigOption] = [
         category="Mirrors",
         scope="global",
     ),
-    # Other (project scope)
-    ConfigOption(
-        env_var="DEFAULT_SHM_ENV_VAR",
-        toml_key="other.default_shm",
-        description="Default SHM environment variable",
-        default=None,
-        category="Other",
-        scope="project",
-    ),
+    # Compute groups (loaded from config.toml [[compute_groups]] sections - not an env var)
 ]
 
 
@@ -432,7 +442,6 @@ CATEGORY_ORDER = [
     "Notebook",
     "SSH",
     "Mirrors",
-    "Other",
 ]
 
 

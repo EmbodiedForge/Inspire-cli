@@ -29,7 +29,6 @@ from inspire.cli.utils.config_schema import (
 
 # Config file paths
 CONFIG_FILENAME = "config.toml"
-SECRETS_FILENAME = "secrets.toml"
 PROJECT_CONFIG_DIR = ".inspire"  # ./.inspire/config.toml
 
 
@@ -187,7 +186,7 @@ class Config:
     pip_trusted_host: Optional[str] = None
 
     # Other
-    default_shm: Optional[str] = None
+    shm_size: Optional[int] = None
 
     # Compute groups (loaded from config.toml [[compute_groups]] sections)
     compute_groups: list[dict] = field(default_factory=list)
@@ -359,7 +358,6 @@ class Config:
 
     # Class-level config paths
     GLOBAL_CONFIG_PATH = Path.home() / ".config" / "inspire" / CONFIG_FILENAME
-    GLOBAL_SECRETS_PATH = Path.home() / ".config" / "inspire" / SECRETS_FILENAME
 
     @classmethod
     def _find_project_config(cls) -> Path | None:
@@ -369,17 +367,6 @@ class Config:
             config_path = current / PROJECT_CONFIG_DIR / CONFIG_FILENAME
             if config_path.exists():
                 return config_path
-            current = current.parent
-        return None
-
-    @classmethod
-    def _find_project_secrets(cls) -> Path | None:
-        """Walk up from cwd to find .inspire/secrets.toml."""
-        current = Path.cwd()
-        while current != current.parent:
-            secrets_path = current / PROJECT_CONFIG_DIR / SECRETS_FILENAME
-            if secrets_path.exists():
-                return secrets_path
             current = current.parent
         return None
 
@@ -435,6 +422,7 @@ class Config:
             "job.image": "job_image",
             "job.project_id": "job_project_id",
             "job.workspace_id": "job_workspace_id",
+            "job.shm_size": "shm_size",
             "notebook.resource": "notebook_resource",
             "notebook.image": "notebook_image",
             "ssh.rtunnel_bin": "rtunnel_bin",
@@ -444,7 +432,6 @@ class Config:
             "mirrors.apt_mirror_url": "apt_mirror_url",
             "mirrors.pip_index_url": "pip_index_url",
             "mirrors.pip_trusted_host": "pip_trusted_host",
-            "other.default_shm": "default_shm",
         }
         return mapping.get(toml_key)
 
@@ -518,7 +505,7 @@ class Config:
             "pip_index_url": None,
             "pip_trusted_host": None,
             # Other
-            "default_shm": None,
+            "shm_size": None,
             # Compute groups
             "compute_groups": [],
         }
@@ -545,22 +532,6 @@ class Config:
                 config_dict["compute_groups"] = global_compute_groups
                 sources["compute_groups"] = SOURCE_GLOBAL
 
-        # 2b. Merge global secrets.toml (same precedence as global config)
-        if cls.GLOBAL_SECRETS_PATH.exists():
-            global_secrets_raw = cls._load_toml(cls.GLOBAL_SECRETS_PATH)
-            # Extract compute_groups array before flattening
-            global_secrets_compute_groups = global_secrets_raw.pop("compute_groups", [])
-            flat_global_secrets = cls._flatten_toml(global_secrets_raw)
-            for toml_key, value in flat_global_secrets.items():
-                field_name = cls._toml_key_to_field(toml_key)
-                if field_name and field_name in config_dict:
-                    config_dict[field_name] = value
-                    sources[field_name] = SOURCE_GLOBAL
-            # Secrets compute_groups replace config ones
-            if global_secrets_compute_groups:
-                config_dict["compute_groups"] = global_secrets_compute_groups
-                sources["compute_groups"] = SOURCE_GLOBAL
-
         # 3. Merge project config.toml (walk up from cwd to find .inspire/config.toml)
         project_config_path = cls._find_project_config()
         project_compute_groups: list[dict] = []
@@ -577,23 +548,6 @@ class Config:
             # Project compute_groups replace global ones entirely (not merge)
             if project_compute_groups:
                 config_dict["compute_groups"] = project_compute_groups
-                sources["compute_groups"] = SOURCE_PROJECT
-
-        # 3b. Merge project secrets.toml (walk up from cwd to find .inspire/secrets.toml)
-        project_secrets_path = cls._find_project_secrets()
-        if project_secrets_path:
-            project_secrets_raw = cls._load_toml(project_secrets_path)
-            # Extract compute_groups array before flattening
-            project_secrets_compute_groups = project_secrets_raw.pop("compute_groups", [])
-            flat_project_secrets = cls._flatten_toml(project_secrets_raw)
-            for toml_key, value in flat_project_secrets.items():
-                field_name = cls._toml_key_to_field(toml_key)
-                if field_name and field_name in config_dict:
-                    config_dict[field_name] = value
-                    sources[field_name] = SOURCE_PROJECT
-            # Secrets compute_groups replace config ones
-            if project_secrets_compute_groups:
-                config_dict["compute_groups"] = project_secrets_compute_groups
                 sources["compute_groups"] = SOURCE_PROJECT
 
         # 4. Override with env vars (highest priority)
@@ -643,8 +597,8 @@ class Config:
             "INSPIRE_APT_MIRROR_URL": "apt_mirror_url",
             "INSPIRE_PIP_INDEX_URL": "pip_index_url",
             "INSPIRE_PIP_TRUSTED_HOST": "pip_trusted_host",
-            # Other
-            "DEFAULT_SHM_ENV_VAR": "default_shm",
+            # Job settings
+            "INSPIRE_SHM_SIZE": ("shm_size", int),
         }
 
         for env_var, mapping in env_mapping.items():
