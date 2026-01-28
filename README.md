@@ -115,7 +115,3 @@ inspire config show
 | `INSPIRE_PROJECT_ID` | Default project ID |
 | `INSP_IMAGE` | Default Docker image |
 | `INSP_PRIORITY` | Job priority (1-10) |
-
-## License
-
-MIT
