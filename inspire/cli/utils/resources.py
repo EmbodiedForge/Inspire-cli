@@ -14,7 +14,7 @@ from enum import Enum
 
 from inspire.cli.utils.config import Config
 from inspire.cli.utils.web_session import get_web_session, fetch_workspace_availability
-from inspire.compute_groups import compute_group_name_map
+from inspire.compute_groups import compute_group_name_map, load_compute_groups_from_config
 
 
 class GPUType(Enum):
@@ -41,7 +41,8 @@ class ComputeGroupAvailability:
 
 # Known compute groups for smart allocation
 # Only these groups will be used for auto-selection
-KNOWN_COMPUTE_GROUPS = compute_group_name_map()
+# Will be initialized on first use from config
+KNOWN_COMPUTE_GROUPS: dict[str, str] = {}
 
 
 # Cache for availability data
@@ -76,14 +77,22 @@ def fetch_resource_availability(
     availability and free GPU counts.
 
     Args:
-        config: Optional CLI configuration (used for base_url override)
+        config: Optional CLI configuration (used for base_url override and compute_groups)
         known_only: If True, only return known compute groups (for auto-selection)
         progress_callback: Optional callback(fetched, total) for progress updates
 
     Returns:
         List of ComputeGroupAvailability sorted by free_gpus (descending)
     """
-    global _availability_cache, _cache_time
+    global _availability_cache, _cache_time, KNOWN_COMPUTE_GROUPS
+
+    # Load known compute groups from config
+    known_groups_map: dict[str, str] = {}
+    if config is not None and hasattr(config, "compute_groups"):
+        compute_groups_tuples = load_compute_groups_from_config(config.compute_groups)
+        known_groups_map = compute_group_name_map(compute_groups_tuples)
+    # Update global for backward compatibility
+    KNOWN_COMPUTE_GROUPS = known_groups_map
 
     # Check cache
     if _availability_cache and (time.time() - _cache_time < _CACHE_TTL):
@@ -95,7 +104,7 @@ def fetch_resource_availability(
     if config is not None:
         base_url = getattr(config, "base_url", None)
     if not base_url:
-        base_url = os.environ.get("INSPIRE_BASE_URL", "https://qz.sii.edu.cn")
+        base_url = os.environ.get("INSPIRE_BASE_URL", "https://api.example.com")
 
     session = get_web_session(require_workspace=True)
     nodes = fetch_workspace_availability(session, base_url=base_url)
@@ -116,7 +125,7 @@ def fetch_resource_availability(
             continue
 
         # Skip if known_only and group is not known
-        if known_only and group_id not in KNOWN_COMPUTE_GROUPS:
+        if known_only and group_id not in known_groups_map:
             continue
 
         if group_id not in groups:
@@ -125,8 +134,8 @@ def fetch_resource_availability(
             gpu_type = _normalize_gpu_type(gpu_display)
 
             group_name = node.get("logic_compute_group_name", "")
-            if not group_name and group_id in KNOWN_COMPUTE_GROUPS:
-                group_name = KNOWN_COMPUTE_GROUPS[group_id]
+            if not group_name and group_id in known_groups_map:
+                group_name = known_groups_map[group_id]
             if not group_name:
                 group_name = "Unknown"
 

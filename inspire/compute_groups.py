@@ -13,39 +13,52 @@ class ComputeGroupDefinition:
     location: str = ""
 
 
-COMPUTE_GROUPS: tuple[ComputeGroupDefinition, ...] = (
-    ComputeGroupDefinition(
-        name="H100 (CUDA 12.8)",
-        compute_group_id="lcg-79b2ad0e-a375-43f3-a0b1-b4ce79710fd7",
-        gpu_type="H100",
-        location="CUDA 12.8版本",
-    ),
-    ComputeGroupDefinition(
-        name="H200 机房1",
-        compute_group_id="lcg-df089db8-817a-4aa8-a164-eb1a32948564",
-        gpu_type="H200",
-        location="1号机房",
-    ),
-    ComputeGroupDefinition(
-        name="H200 机房2",
-        compute_group_id="lcg-303ac8c6-aa19-4284-af03-2296592326e5",
-        gpu_type="H200",
-        location="2号机房",
-    ),
-    ComputeGroupDefinition(
-        name="H200 机房3",
-        compute_group_id="lcg-a91ad10b-415d-4abd-8170-828a2feae5d2",
-        gpu_type="H200",
-        location="3号机房",
-    ),
-    ComputeGroupDefinition(
-        name="H200 3号-2",
-        compute_group_id="lcg-95e38be4-4842-4155-af13-4325aa744bca",
-        gpu_type="H200",
-        location="3号-2",
-    ),
-)
+# Default empty tuple - compute groups are loaded from config
+COMPUTE_GROUPS: tuple[ComputeGroupDefinition, ...] = ()
 
 
-def compute_group_name_map() -> dict[str, str]:
-    return {group.compute_group_id: group.name for group in COMPUTE_GROUPS}
+def load_compute_groups_from_config(raw_list: list[dict]) -> tuple[ComputeGroupDefinition, ...]:
+    """Load compute groups from config file.
+
+    Args:
+        raw_list: List of compute group dicts from config.toml
+
+    Returns:
+        Tuple of ComputeGroupDefinition objects
+
+    Example config.toml:
+        [[compute_groups]]
+        name = "H100 (CUDA 12.8)"
+        id = "lcg-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        gpu_type = "H100"
+        location = "CUDA 12.8"
+    """
+    groups = []
+    for item in raw_list:
+        try:
+            groups.append(
+                ComputeGroupDefinition(
+                    name=item.get("name", ""),
+                    compute_group_id=item.get("id", ""),
+                    gpu_type=item.get("gpu_type", ""),
+                    location=item.get("location", ""),
+                )
+            )
+        except (KeyError, TypeError) as e:
+            # Skip invalid entries
+            continue
+    return tuple(groups)
+
+
+def compute_group_name_map(
+    groups: tuple[ComputeGroupDefinition, ...] = COMPUTE_GROUPS,
+) -> dict[str, str]:
+    """Create a mapping from compute group ID to name.
+
+    Args:
+        groups: Tuple of ComputeGroupDefinition objects
+
+    Returns:
+        Dict mapping compute_group_id to name
+    """
+    return {group.compute_group_id: group.name for group in groups}

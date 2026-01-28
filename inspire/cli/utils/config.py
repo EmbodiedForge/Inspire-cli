@@ -92,7 +92,7 @@ class Config:
     **Platform API (required for job commands):**
     - INSPIRE_USERNAME: Platform username
     - INSPIRE_PASSWORD: Platform password
-    - INSPIRE_BASE_URL: API base URL (default: https://qz.sii.edu.cn)
+    - INSPIRE_BASE_URL: API base URL (default: https://api.example.com)
 
     **Target directory (unified for all Bridge operations):**
     - INSPIRE_TARGET_DIR: Shared filesystem path on Bridge (e.g., /shared/EBM_dev)
@@ -127,7 +127,7 @@ class Config:
     password: str
 
     # Optional with defaults
-    base_url: str = "https://qz.sii.edu.cn"
+    base_url: str = "https://api.example.com"
     target_dir: Optional[str] = None  # INSPIRE_TARGET_DIR - unified for all Bridge operations
     log_pattern: str = "training_master_*.log"
     job_cache_path: str = "~/.inspire/jobs.json"
@@ -187,6 +187,9 @@ class Config:
 
     # Other
     default_shm: Optional[str] = None
+
+    # Compute groups (loaded from config.toml [[compute_groups]] sections)
+    compute_groups: list[dict] = field(default_factory=list)
 
     @classmethod
     def from_env(cls, require_target_dir: bool = False) -> "Config":
@@ -270,7 +273,7 @@ class Config:
         return cls(
             username=username,
             password=password,
-            base_url=os.getenv("INSPIRE_BASE_URL", "https://qz.sii.edu.cn"),
+            base_url=os.getenv("INSPIRE_BASE_URL", "https://api.example.com"),
             target_dir=target_dir,
             log_pattern=os.getenv("INSPIRE_LOG_PATTERN", "training_master_*.log"),
             job_cache_path=os.getenv("INSPIRE_JOB_CACHE", "~/.inspire/jobs.json"),
@@ -458,7 +461,7 @@ class Config:
         config_dict: dict[str, Any] = {
             "username": "",
             "password": "",
-            "base_url": "https://qz.sii.edu.cn",
+            "base_url": "https://api.example.com",
             "target_dir": None,
             "log_pattern": "training_master_*.log",
             "job_cache_path": "~/.inspire/jobs.json",
@@ -503,6 +506,8 @@ class Config:
             "pip_trusted_host": None,
             # Other
             "default_shm": None,
+            # Compute groups
+            "compute_groups": [],
         }
 
         # Mark all as defaults initially
@@ -511,24 +516,39 @@ class Config:
 
         # 2. Merge global config
         global_config_path: Path | None = None
+        global_compute_groups: list[dict] = []
         if cls.GLOBAL_CONFIG_PATH.exists():
             global_config_path = cls.GLOBAL_CONFIG_PATH
-            flat_global = cls._flatten_toml(cls._load_toml(cls.GLOBAL_CONFIG_PATH))
+            global_raw = cls._load_toml(cls.GLOBAL_CONFIG_PATH)
+            # Extract compute_groups array before flattening
+            global_compute_groups = global_raw.pop("compute_groups", [])
+            flat_global = cls._flatten_toml(global_raw)
             for toml_key, value in flat_global.items():
                 field_name = cls._toml_key_to_field(toml_key)
                 if field_name and field_name in config_dict:
                     config_dict[field_name] = value
                     sources[field_name] = SOURCE_GLOBAL
+            if global_compute_groups:
+                config_dict["compute_groups"] = global_compute_groups
+                sources["compute_groups"] = SOURCE_GLOBAL
 
         # 3. Merge project config (walk up from cwd to find inspire/config.toml)
         project_config_path = cls._find_project_config()
+        project_compute_groups: list[dict] = []
         if project_config_path:
-            flat_project = cls._flatten_toml(cls._load_toml(project_config_path))
+            project_raw = cls._load_toml(project_config_path)
+            # Extract compute_groups array before flattening
+            project_compute_groups = project_raw.pop("compute_groups", [])
+            flat_project = cls._flatten_toml(project_raw)
             for toml_key, value in flat_project.items():
                 field_name = cls._toml_key_to_field(toml_key)
                 if field_name and field_name in config_dict:
                     config_dict[field_name] = value
                     sources[field_name] = SOURCE_PROJECT
+            # Project compute_groups replace global ones entirely (not merge)
+            if project_compute_groups:
+                config_dict["compute_groups"] = project_compute_groups
+                sources["compute_groups"] = SOURCE_PROJECT
 
         # 4. Override with env vars (highest priority)
         env_mapping = {

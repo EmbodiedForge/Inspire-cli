@@ -16,7 +16,7 @@ New Features:
 - Interactive resource selection
 - Enhanced user experience
 
-API Documentation: https://qz.sii.edu.cn/openapi/
+API Documentation: https://api.example.com/openapi/
 """
 
 import os
@@ -30,7 +30,7 @@ from typing import Dict, Any, Optional, Tuple, List
 from dataclasses import dataclass
 from enum import Enum
 
-from inspire.compute_groups import COMPUTE_GROUPS
+from inspire.compute_groups import load_compute_groups_from_config
 
 # Suppress SSL warnings when verification is disabled
 import urllib3
@@ -101,7 +101,7 @@ class ComputeGroup:
 @dataclass
 class InspireConfig:
     """Inspire API configuration class."""
-    base_url: str = "https://qz.sii.edu.cn"
+    base_url: str = "https://api.example.com"
     timeout: int = 30
     max_retries: int = 3
     retry_delay: float = 1.0
@@ -110,12 +110,14 @@ class InspireConfig:
     openapi_prefix: Optional[str] = None
     auth_endpoint: Optional[str] = None
     docker_registry: Optional[str] = None  # Docker registry hostname
+    # Compute groups configuration
+    compute_groups: Optional[list[dict]] = None  # List of compute group dicts from config
 
 
 class ResourceManager:
     """Resource manager - handles resource spec and compute group matching."""
 
-    def __init__(self):
+    def __init__(self, compute_groups_raw: Optional[list[dict]] = None):
         # Define available resource specs
         self.resource_specs = [
             ResourceSpec(
@@ -147,7 +149,8 @@ class ResourceManager:
             )
         ]
 
-        # Define available compute groups
+        # Define available compute groups from config
+        compute_groups_tuples = load_compute_groups_from_config(compute_groups_raw or [])
         self.compute_groups = [
             ComputeGroup(
                 name=group.name,
@@ -155,7 +158,7 @@ class ResourceManager:
                 gpu_type=GPUType(group.gpu_type),
                 location=group.location,
             )
-            for group in COMPUTE_GROUPS
+            for group in compute_groups_tuples
         ]
     
     def parse_resource_request(self, resource_str: str) -> Tuple[GPUType, int]:
@@ -486,9 +489,9 @@ class InspireAPI:
         'INSPIRE_WORKSPACE_ID',
         "ws-9dcc0e1f-80a4-4af2-bc2f-0e352e7b17e6" # Placeholder from EBM_dev
     )
-    DEFAULT_IMAGE = "docker.sii.shaipower.online/inspire-studio/ngc-cuda12.8-base:1.0"
+    DEFAULT_IMAGE = "docker.example.com/inspire-studio/ngc-cuda12.8-base:1.0"
     DEFAULT_IMAGE_PATH = "inspire-studio/ngc-cuda12.8-base:1.0"
-    DEFAULT_DOCKER_REGISTRY = "docker.sii.shaipower.online"
+    DEFAULT_DOCKER_REGISTRY = "docker.example.com"
     ERROR_BODY_PREVIEW_LIMIT = 4000
 
     def _get_default_image(self) -> str:
@@ -524,7 +527,7 @@ class InspireAPI:
         )
 
         # Initialize resource manager
-        self.resource_manager = ResourceManager()
+        self.resource_manager = ResourceManager(self.config.compute_groups)
 
         # Use simple requests session
         self.session = requests.Session()
@@ -1012,8 +1015,8 @@ def main():
 
     # Global options
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
-    parser.add_argument('--base-url', type=str, default="https://qz.sii.edu.cn",
-                       help='API base URL (default: https://qz.sii.edu.cn)')
+    parser.add_argument('--base-url', type=str, default="https://api.example.com",
+                       help='API base URL (default: https://api.example.com)')
     parser.add_argument('--show-resources', action='store_true',
                        help='Show all available resource configurations and exit')
 

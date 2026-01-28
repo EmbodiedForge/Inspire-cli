@@ -50,6 +50,7 @@ class AuthManager:
             openapi_prefix=config.openapi_prefix,
             auth_endpoint=config.auth_endpoint,
             docker_registry=config.docker_registry,
+            compute_groups=config.compute_groups,
         )
         api = InspireAPI(api_config)
 

@@ -22,7 +22,7 @@ python inspire_api_control.py --show-resources
 # 旧方式（需要手动指定复杂ID）
 python old_script.py create --name "my-job" --start-command "python train.py" \
   --spec-id "4dd0e854-e2a4-4253-95e6-64c13f0b5117" \
-  --compute-group-id "lcg-303ac8c6-aa19-4284-af03-2296592326e5"
+  --compute-group-id "lcg-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
 # 新方式（自然语言指定）
 python inspire_api_control.py create --name "my-job" --start-command "python train.py" \
@@ -105,7 +105,7 @@ python inspire_api_control.py stop --job-id "your-job-id"
 python inspire_api_control.py list-specs --resource "H200"
 
 # 手动指定计算组
-python inspire_api_control.py list-specs --compute-group-id "lcg-303ac8c6-aa19-4284-af03-2296592326e5"
+python inspire_api_control.py list-specs --compute-group-id "lcg-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
 
 #### 查看集群节点
@@ -161,13 +161,30 @@ python inspire_api_control.py list-nodes --page 1 --size 20
 | 4xH200 | 4 × H200 (141GB) | 60核/800GB | 45ab2351-fc8a-4d50-a30b-b39a5306c906 |
 | 8xH200 | 8 × H200 (141GB) | 120核/1600GB | b618f5cb-c119-4422-937e-f39131853076 |
 
-| 计算类型 | 位置 | Compute Group ID |
-|---------|-----|------------------|
-| H100 | CUDA 12.8版本 | lcg-79b2ad0e-a375-43f3-a0b1-b4ce79710fd7 |
-| H200 | 1号机房 | lcg-df089db8-817a-4aa8-a164-eb1a32948564 |
-| H200 | 2号机房 | lcg-303ac8c6-aa19-4284-af03-2296592326e5 |
-| H200 | 3号机房 | lcg-a91ad10b-415d-4abd-8170-828a2feae5d2 |
-| H200 | 3号-2 | lcg-95e38be4-4842-4155-af13-4325aa744bca |
+> **Note**: Compute Group IDs are configured via `config.toml`. See the [Configuration](#configuration) section below.
+> Internal users can copy the provided `secrets.toml` to their config directory for pre-configured compute groups.
+
+### Configuration
+
+Compute groups are configured via TOML config files using the `[[compute_groups]]` array syntax:
+
+```toml
+# ~/.config/inspire/config.toml or ./.inspire/config.toml
+[[compute_groups]]
+name = "H100 (CUDA 12.8)"
+id = "lcg-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+gpu_type = "H100"
+location = "CUDA 12.8"
+
+[[compute_groups]]
+name = "H200 Room 1"
+id = "lcg-yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
+gpu_type = "H200"
+location = "1号机房"
+```
+
+Config precedence (lowest to highest):
+- Hardcoded defaults < Global config (`~/.config/inspire/config.toml`) < Project config (`.inspire/config.toml`)
 
 ## 🚨 常见问题
 

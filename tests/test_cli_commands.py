@@ -30,8 +30,14 @@ TEST_JOB_ID_2 = "job-abcdef12-3456-7890-abcd-ef1234567890"
 TEST_JOB_ID_3 = "job-11111111-2222-3333-4444-555555555555"
 
 
-def make_test_config(tmp_path: Path) -> config_module.Config:
-    return config_module.Config(
+def make_test_config(tmp_path: Path, include_compute_groups: bool = False) -> config_module.Config:
+    """Create a test Config object.
+
+    Args:
+        tmp_path: Temporary directory path
+        include_compute_groups: If True, include test compute groups
+    """
+    config = config_module.Config(
         username="user",
         password="pass",
         base_url="https://example.invalid",
@@ -42,6 +48,18 @@ def make_test_config(tmp_path: Path) -> config_module.Config:
         max_retries=0,
         retry_delay=0.0,
     )
+    # Add test compute groups if requested
+    if include_compute_groups:
+        test_group_id = "lcg-test000-0000-0000-0000-000000000000"
+        config.compute_groups = [
+            {
+                "name": "H200 TestRoom",
+                "id": test_group_id,
+                "gpu_type": "H200",
+                "location": "Test",
+            }
+        ]
+    return config
 
 
 class DummyAPI:
@@ -95,9 +113,15 @@ class DummyAPI:
         }
 
 
-def patch_config_and_auth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> DummyAPI:
-    """Patch Config.from_env and AuthManager.get_api to use local stubs."""
-    config = make_test_config(tmp_path)
+def patch_config_and_auth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, include_compute_groups: bool = False) -> DummyAPI:
+    """Patch Config.from_env and AuthManager.get_api to use local stubs.
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture
+        tmp_path: Temporary directory path
+        include_compute_groups: If True, include test compute groups in config
+    """
+    config = make_test_config(tmp_path, include_compute_groups=include_compute_groups)
     config.target_dir and Path(config.target_dir).mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("INSPIRE_JOB_CACHE", config.job_cache_path)
 
@@ -106,7 +130,13 @@ def patch_config_and_auth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Du
             raise ConfigError("Missing INSPIRE_TARGET_DIR")
         return config
 
+    def fake_from_files_and_env(cls, require_target_dir: bool = False, require_credentials: bool = True) -> tuple:  # type: ignore[override]
+        if require_target_dir and not config.target_dir:
+            raise ConfigError("Missing INSPIRE_TARGET_DIR")
+        return config, {}
+
     monkeypatch.setattr(config_module.Config, "from_env", classmethod(fake_from_env))
+    monkeypatch.setattr(config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env))
 
     api = DummyAPI()
 
@@ -127,16 +157,19 @@ def patch_config_and_auth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Du
 
 
 def test_global_json_flag_with_resources_list(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    patch_config_and_auth(monkeypatch, tmp_path)
+    # Include test compute groups in config
+    patch_config_and_auth(monkeypatch, tmp_path, include_compute_groups=True)
     from inspire.cli.utils import browser_api as browser_api_module
 
+    # Use a test placeholder UUID instead of real compute group ID
+    test_group_id = "lcg-test000-0000-0000-0000-000000000000"
     monkeypatch.setattr(
         browser_api_module,
         "get_accurate_gpu_availability",
         lambda: [
             browser_api_module.GPUAvailability(
-                group_id="lcg-df089db8-817a-4aa8-a164-eb1a32948564",
-                group_name="H200 Room1",
+                group_id=test_group_id,
+                group_name="H200 TestRoom",
                 gpu_type="NVIDIA H200",
                 total_gpus=128,
                 used_gpus=32,
@@ -153,7 +186,7 @@ def test_global_json_flag_with_resources_list(monkeypatch: pytest.MonkeyPatch, t
     payload = json.loads(result.output)
     assert payload["success"] is True
     assert "availability" in payload["data"]
-    assert payload["data"]["availability"][0]["group_id"] == "lcg-df089db8-817a-4aa8-a164-eb1a32948564"
+    assert payload["data"]["availability"][0]["group_id"] == test_group_id
 
 
 def test_global_debug_flag_runs_subcommand(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
@@ -666,16 +699,18 @@ def test_job_logs_missing_file_sets_exit_code(monkeypatch: pytest.MonkeyPatch, t
 
 
 def test_nodes_list_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    patch_config_and_auth(monkeypatch, tmp_path)
+    # Include test compute groups in config
+    patch_config_and_auth(monkeypatch, tmp_path, include_compute_groups=True)
     from inspire.cli.utils import browser_api as browser_api_module
 
+    test_group_id = "lcg-test000-0000-0000-0000-000000000000"
     monkeypatch.setattr(
         browser_api_module,
         "get_full_free_node_counts",
         lambda group_ids, gpu_per_node=8, session=None, _retry=True: [  # noqa: ARG005
             browser_api_module.FullFreeNodeCount(
-                group_id=group_ids[0],
-                group_name="H200 Room1",
+                group_id=test_group_id,
+                group_name="H200 TestRoom",
                 gpu_per_node=gpu_per_node,
                 total_nodes=10,
                 ready_nodes=8,
@@ -689,8 +724,8 @@ def test_nodes_list_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         "get_accurate_gpu_availability",
         lambda workspace_id=None, session=None, _retry=True: [  # noqa: ARG005
             browser_api_module.GPUAvailability(
-                group_id="cg-test-id",
-                group_name="H200 Room1",
+                group_id=test_group_id,
+                group_name="H200 TestRoom",
                 gpu_type="H200",
                 total_gpus=80,
                 used_gpus=68,
@@ -715,7 +750,11 @@ def test_config_check_auth_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     def fake_from_env(cls, require_target_dir: bool = False) -> config_module.Config:  # type: ignore[override]
         return config
 
+    def fake_from_files_and_env(cls, require_target_dir: bool = False, require_credentials: bool = True) -> tuple:  # type: ignore[override]
+        return config, {}
+
     monkeypatch.setattr(config_module.Config, "from_env", classmethod(fake_from_env))
+    monkeypatch.setattr(config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env))
 
     def fake_get_api(self_or_cls, cfg: Optional[config_module.Config] = None):  # type: ignore[override]
         from inspire.cli.utils.auth import AuthenticationError

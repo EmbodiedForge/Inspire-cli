@@ -22,6 +22,8 @@ from inspire.cli.utils.resources import (
 )
 from inspire.cli.utils.web_session import SessionExpiredError, get_web_session
 from inspire.cli.formatters import json_formatter, human_formatter
+from inspire.compute_groups import load_compute_groups_from_config, compute_group_name_map
+from inspire.cli.utils.config import Config
 
 
 @click.group()
@@ -222,14 +224,25 @@ def _list_accurate_resources(ctx: Context, show_all: bool) -> None:
     try:
         from inspire.cli.utils.browser_api import get_accurate_gpu_availability
 
+        # Load known compute groups from config
+        known_groups = KNOWN_COMPUTE_GROUPS
+        if not show_all:
+            try:
+                config, _ = Config.from_files_and_env(require_credentials=False)
+                if config.compute_groups:
+                    groups_tuple = load_compute_groups_from_config(config.compute_groups)
+                    known_groups = compute_group_name_map(groups_tuple)
+            except Exception:
+                pass  # Fall back to global KNOWN_COMPUTE_GROUPS
+
         # Get accurate GPU stats
         availability = get_accurate_gpu_availability()
 
         if not show_all:
-            availability = [a for a in availability if a.group_id in KNOWN_COMPUTE_GROUPS]
+            availability = [a for a in availability if a.group_id in known_groups]
             for entry in availability:
                 if not entry.group_name:
-                    entry.group_name = KNOWN_COMPUTE_GROUPS.get(entry.group_id, entry.group_name)
+                    entry.group_name = known_groups.get(entry.group_id, entry.group_name)
 
         if not availability:
             if ctx.json_output:
@@ -273,7 +286,15 @@ def _list_workspace_resources(ctx: Context, show_all: bool, no_cache: bool) -> N
         if no_cache:
             clear_availability_cache()
 
+        # Load config to get compute_groups
+        config = None
+        try:
+            config, _ = Config.from_files_and_env(require_credentials=False)
+        except Exception:
+            pass
+
         availability = fetch_resource_availability(
+            config=config,
             known_only=not show_all,
         )
 
@@ -483,7 +504,14 @@ def _watch_resources(
             try:
                 if mode == "nodes":
                     clear_availability_cache()
+                    # Load config for compute_groups
+                    config = None
+                    try:
+                        config, _ = Config.from_files_and_env(require_credentials=False)
+                    except Exception:
+                        pass
                     availability = fetch_resource_availability(
+                        config=config,
                         known_only=not show_all,
                         progress_callback=on_progress,
                     )
@@ -491,11 +519,21 @@ def _watch_resources(
                     from inspire.cli.utils.browser_api import get_accurate_gpu_availability
 
                     availability = get_accurate_gpu_availability()
+                    # Load known compute groups from config
+                    known_groups = KNOWN_COMPUTE_GROUPS
                     if not show_all:
-                        availability = [a for a in availability if a.group_id in KNOWN_COMPUTE_GROUPS]
+                        try:
+                            cfg, _ = Config.from_files_and_env(require_credentials=False)
+                            if cfg.compute_groups:
+                                groups_tuple = load_compute_groups_from_config(cfg.compute_groups)
+                                known_groups = compute_group_name_map(groups_tuple)
+                        except Exception:
+                            pass
+                    if not show_all:
+                        availability = [a for a in availability if a.group_id in known_groups]
                         for entry in availability:
                             if not entry.group_name:
-                                entry.group_name = KNOWN_COMPUTE_GROUPS.get(entry.group_id, entry.group_name)
+                                entry.group_name = known_groups.get(entry.group_id, entry.group_name)
             except (SessionExpiredError, ValueError) as e:
                 api_logger.setLevel(original_level)
                 click.echo(human_formatter.format_error(str(e)), err=True)
