@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV_DIR="${INSPIRE_VENV:-$ROOT_DIR/.venv}"
+
+if [ -x "$VENV_DIR/bin/inspire" ]; then
+  exec "$VENV_DIR/bin/inspire" "$@"
+fi
+
+if [ -x "$VENV_DIR/bin/python" ]; then
+  exec "$VENV_DIR/bin/python" -m inspire.cli.main "$@"
+fi
+
+if command -v uv >/dev/null 2>&1; then
+  exec uv run --project "$ROOT_DIR" inspire "$@"
+fi
+
+cat >&2 <<'EOF'
+No local virtual environment found.
+Install into uv toolchain:
+  uv tool install -e .
+Or create a local venv:
+  uv venv .venv
+  uv pip install -e .
+Or install globally:
+  uv tool install git+ssh://git@github.com/EmbodiedForge/Inspire-cli.git
+EOF
+exit 1
