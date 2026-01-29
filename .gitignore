@@ -47,6 +47,7 @@ scripts/inspire-tunnel
 internal/
 inspire/Inspire_OpenAPI_Reference.md
 config.toml.example
+CLAUDE.md
 
 # Development/exploration scripts (contain hardcoded IDs)
 scripts/
