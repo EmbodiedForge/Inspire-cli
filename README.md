@@ -83,6 +83,8 @@ Config files are loaded from:
 - Global: `~/.config/inspire/config.toml`
 - Project: `./.inspire/config.toml`
 
+Download the official config template (internal network only): [config.toml.example](https://nc.sii.e-forge.org/s/b42pj6oxfY7ikrM)
+
 Example `config.toml`:
 
 ```toml

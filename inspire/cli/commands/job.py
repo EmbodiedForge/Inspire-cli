@@ -33,7 +33,7 @@ from inspire.cli.context import (
     EXIT_JOB_NOT_FOUND,
 )
 from inspire.inspire_api_control import _validate_job_id_format
-from inspire.cli.utils.config import Config, ConfigError
+from inspire.cli.utils.config import Config, ConfigError, build_env_exports
 from inspire.cli.utils.auth import AuthManager, AuthenticationError
 from inspire.cli.utils.job_cache import JobCache
 from inspire.cli.utils.gitea import (
@@ -136,7 +136,7 @@ def create(
         inspire job create -n test -r 4xH200 -c "python train.py" --no-auto
     """
     try:
-        config = Config.from_env(require_target_dir=True)
+        config, _ = Config.from_files_and_env(require_target_dir=True)
         api = AuthManager.get_api(config)
 
         # Auto-select location based on GPU availability (if requested)
@@ -199,17 +199,20 @@ def create(
         # Wrap in bash for consistent shell behavior
         command = _wrap_in_bash(command)
 
+        # Prepend remote_env exports to command
+        env_exports = build_env_exports(config.remote_env)
+
         # If INSPIRE_TARGET_DIR is configured, wrap the command so
         # stdout/stderr land in a single master log file under
         # ${INSPIRE_TARGET_DIR}/.inspire/.
-        final_command = command
+        final_command = f"{env_exports}{command}" if env_exports else command
         log_path = None
         if config.target_dir:
             timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
             log_dir = os.path.join(config.target_dir, ".inspire")
             log_filename = f"training_master_{timestamp}.log"
             log_path = os.path.join(log_dir, log_filename)
-            final_command = f'mkdir -p "{log_dir}" && ( {command} ) > "{log_path}" 2>&1'
+            final_command = f'{env_exports}mkdir -p "{log_dir}" && ( {command} ) > "{log_path}" 2>&1'
 
         # Convert hours to milliseconds
         max_time_ms = str(int(max_time * 3600 * 1000))

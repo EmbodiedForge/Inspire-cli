@@ -34,7 +34,11 @@ def test_bridge_exec_triggers_and_no_wait(monkeypatch: pytest.MonkeyPatch, tmp_p
 
     called: Dict[str, Any] = {}
 
-    monkeypatch.setattr(Config, "from_env_for_sync", classmethod(lambda cls: config))
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
 
     def fake_trigger(
         config: Config,
@@ -66,7 +70,11 @@ def test_bridge_exec_uses_env_denylist(monkeypatch: pytest.MonkeyPatch, tmp_path
 
     captured: Dict[str, Any] = {}
 
-    monkeypatch.setattr(Config, "from_env_for_sync", classmethod(lambda cls: config))
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
 
     def fake_trigger(
         config: Config,
@@ -89,7 +97,11 @@ def test_bridge_exec_uses_env_denylist(monkeypatch: pytest.MonkeyPatch, tmp_path
 def test_bridge_exec_reports_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config = make_sync_config(tmp_path)
 
-    monkeypatch.setattr(Config, "from_env_for_sync", classmethod(lambda cls: config))
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
 
     def fake_trigger(*args: Any, **kwargs: Any) -> None:
         return None
@@ -114,7 +126,11 @@ def test_bridge_exec_displays_output_log(monkeypatch: pytest.MonkeyPatch, tmp_pa
     """Test that command output is displayed to the user."""
     config = make_sync_config(tmp_path)
 
-    monkeypatch.setattr(Config, "from_env_for_sync", classmethod(lambda cls: config))
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
 
     def fake_trigger(*args: Any, **kwargs: Any) -> None:
         return None
@@ -143,7 +159,11 @@ def test_bridge_exec_json_includes_output(monkeypatch: pytest.MonkeyPatch, tmp_p
     """Test that JSON output includes the command output."""
     config = make_sync_config(tmp_path)
 
-    monkeypatch.setattr(Config, "from_env_for_sync", classmethod(lambda cls: config))
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
 
     def fake_trigger(*args: Any, **kwargs: Any) -> None:
         return None

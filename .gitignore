@@ -46,6 +46,7 @@ scripts/inspire-tunnel
 # Internal documentation and testing (not for public)
 internal/
 inspire/Inspire_OpenAPI_Reference.md
+config.toml.example
 
 # Development/exploration scripts (contain hardcoded IDs)
 scripts/

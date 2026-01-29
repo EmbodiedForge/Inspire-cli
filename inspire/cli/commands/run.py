@@ -24,7 +24,7 @@ from inspire.cli.context import (
     EXIT_AUTH_ERROR,
     EXIT_VALIDATION_ERROR,
 )
-from inspire.cli.utils.config import Config, ConfigError
+from inspire.cli.utils.config import Config, ConfigError, build_env_exports
 from inspire.cli.utils.auth import AuthManager, AuthenticationError
 from inspire.cli.utils.browser_api import find_best_compute_group_accurate
 from inspire.cli.formatters import json_formatter, human_formatter
@@ -196,7 +196,7 @@ def run(
         time.sleep(0.5)
 
     try:
-        config = Config.from_env(require_target_dir=True)
+        config, _ = Config.from_files_and_env(require_target_dir=True)
         api = AuthManager.get_api(config)
 
         # Step 2: Auto-select compute group
@@ -287,6 +287,9 @@ def run(
         # Wrap command in bash
         command = _wrap_in_bash(command)
 
+        # Prepend remote_env exports to command
+        env_exports = build_env_exports(config.remote_env)
+
         # Set up log path
         log_path = None
         if config.target_dir:
@@ -294,9 +297,9 @@ def run(
             log_dir = os.path.join(config.target_dir, ".inspire")
             log_filename = f"training_master_{ts}.log"
             log_path = os.path.join(log_dir, log_filename)
-            final_command = f'mkdir -p "{log_dir}" && ( {command} ) > "{log_path}" 2>&1'
+            final_command = f'{env_exports}mkdir -p "{log_dir}" && ( {command} ) > "{log_path}" 2>&1'
         else:
-            final_command = command
+            final_command = f"{env_exports}{command}" if env_exports else command
 
         # Convert hours to milliseconds
         max_time_ms = str(int(max_time * 3600 * 1000))

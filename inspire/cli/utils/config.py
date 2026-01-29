@@ -83,6 +83,22 @@ def _parse_denylist(value: Optional[str]) -> list[str]:
     return parts
 
 
+def build_env_exports(env_dict: dict[str, str]) -> str:
+    """Build shell export commands for remote environment variables.
+
+    Args:
+        env_dict: Dictionary of environment variable names to values
+
+    Returns:
+        Shell command string like 'export FOO="bar" && export BAZ="qux" && '
+        Returns empty string if env_dict is empty.
+    """
+    if not env_dict:
+        return ""
+    exports = " && ".join(f'export {k}="{v}"' for k, v in env_dict.items())
+    return exports + " && "
+
+
 @dataclass
 class Config:
     """Inspire CLI configuration.
@@ -202,6 +218,9 @@ class Config:
 
     # Compute groups (loaded from config.toml [[compute_groups]] sections)
     compute_groups: list[dict] = field(default_factory=list)
+
+    # Remote environment variables (injected into bridge exec, jobs, run commands)
+    remote_env: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_env(cls, require_target_dir: bool = False) -> "Config":
@@ -570,6 +589,8 @@ class Config:
             "shm_size": None,
             # Compute groups
             "compute_groups": [],
+            # Remote environment variables
+            "remote_env": {},
         }
 
         # Mark all as defaults initially
@@ -579,11 +600,16 @@ class Config:
         # 2. Merge global config.toml
         global_config_path: Path | None = None
         global_compute_groups: list[dict] = []
+        global_remote_env: dict[str, str] = {}
         if cls.GLOBAL_CONFIG_PATH.exists():
             global_config_path = cls.GLOBAL_CONFIG_PATH
             global_raw = cls._load_toml(cls.GLOBAL_CONFIG_PATH)
             # Extract compute_groups array before flattening
             global_compute_groups = global_raw.pop("compute_groups", [])
+            # Extract remote_env section before flattening
+            global_remote_env = {
+                str(k): str(v) for k, v in global_raw.pop("remote_env", {}).items()
+            }
             flat_global = cls._flatten_toml(global_raw)
             for toml_key, value in flat_global.items():
                 field_name = cls._toml_key_to_field(toml_key)
@@ -593,14 +619,22 @@ class Config:
             if global_compute_groups:
                 config_dict["compute_groups"] = global_compute_groups
                 sources["compute_groups"] = SOURCE_GLOBAL
+            if global_remote_env:
+                config_dict["remote_env"] = global_remote_env
+                sources["remote_env"] = SOURCE_GLOBAL
 
         # 3. Merge project config.toml (walk up from cwd to find .inspire/config.toml)
         project_config_path = cls._find_project_config()
         project_compute_groups: list[dict] = []
+        project_remote_env: dict[str, str] = {}
         if project_config_path:
             project_raw = cls._load_toml(project_config_path)
             # Extract compute_groups array before flattening
             project_compute_groups = project_raw.pop("compute_groups", [])
+            # Extract remote_env section before flattening
+            project_remote_env = {
+                str(k): str(v) for k, v in project_raw.pop("remote_env", {}).items()
+            }
             flat_project = cls._flatten_toml(project_raw)
             for toml_key, value in flat_project.items():
                 field_name = cls._toml_key_to_field(toml_key)
@@ -611,6 +645,12 @@ class Config:
             if project_compute_groups:
                 config_dict["compute_groups"] = project_compute_groups
                 sources["compute_groups"] = SOURCE_PROJECT
+            # Project remote_env merges with global (project values override)
+            if project_remote_env:
+                merged_remote_env = dict(config_dict.get("remote_env", {}))
+                merged_remote_env.update(project_remote_env)
+                config_dict["remote_env"] = merged_remote_env
+                sources["remote_env"] = SOURCE_PROJECT
 
         # 4. Override with env vars (highest priority)
         env_mapping = {

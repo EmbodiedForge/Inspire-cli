@@ -353,6 +353,72 @@ timeout = 45
         assert sources["username"] == SOURCE_ENV
         assert sources["timeout"] == SOURCE_ENV
 
+    def test_from_files_and_env_remote_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Test loading remote_env section from config files."""
+        # Create global config with remote_env
+        global_dir = tmp_path / "global"
+        global_dir.mkdir()
+        global_config = global_dir / "config.toml"
+        global_config.write_text('''
+[auth]
+username = "testuser"
+
+[remote_env]
+WANDB_API_KEY = "global-key"
+UV_PYTHON_INSTALL_DIR = "/path/to/uv"
+''')
+
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
+        monkeypatch.chdir(tmp_path)
+
+        cfg, sources = Config.from_files_and_env(require_credentials=False)
+
+        assert cfg.remote_env == {
+            "WANDB_API_KEY": "global-key",
+            "UV_PYTHON_INSTALL_DIR": "/path/to/uv",
+        }
+        assert sources["remote_env"] == SOURCE_GLOBAL
+
+    def test_from_files_and_env_remote_env_project_merges(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Test that project remote_env merges with global."""
+        # Create global config
+        global_dir = tmp_path / "global"
+        global_dir.mkdir()
+        global_config = global_dir / "config.toml"
+        global_config.write_text('''
+[remote_env]
+WANDB_API_KEY = "global-key"
+UV_PYTHON_INSTALL_DIR = "/path/to/uv"
+''')
+
+        # Create project config with different remote_env
+        project_dir = tmp_path / ".inspire"
+        project_dir.mkdir()
+        project_config = project_dir / "config.toml"
+        project_config.write_text('''
+[remote_env]
+WANDB_API_KEY = "project-key"
+HF_TOKEN = "hf-token"
+''')
+
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
+        monkeypatch.chdir(tmp_path)
+
+        cfg, sources = Config.from_files_and_env(require_credentials=False)
+
+        # Project should override WANDB_API_KEY and add HF_TOKEN
+        # UV_PYTHON_INSTALL_DIR from global should remain
+        assert cfg.remote_env == {
+            "WANDB_API_KEY": "project-key",
+            "UV_PYTHON_INSTALL_DIR": "/path/to/uv",
+            "HF_TOKEN": "hf-token",
+        }
+        assert sources["remote_env"] == SOURCE_PROJECT
+
     def test_find_project_config_walks_up(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

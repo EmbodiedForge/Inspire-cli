@@ -18,7 +18,7 @@ from inspire.cli.context import (
     EXIT_TIMEOUT,
     pass_context,
 )
-from inspire.cli.utils.config import Config, ConfigError
+from inspire.cli.utils.config import Config, ConfigError, build_env_exports
 from inspire.cli.utils.gitea import (
     GiteaError,
     GiteaAuthError,
@@ -104,7 +104,9 @@ def exec_command(
     """
 
     try:
-        config = Config.from_env_for_sync()
+        config, _ = Config.from_files_and_env(
+            require_target_dir=True, require_credentials=False
+        )
     except ConfigError as e:
         if ctx.json_output:
             click.echo(
@@ -126,8 +128,9 @@ def exec_command(
                     click.echo(f"Command: {command}")
                     click.echo(f"Working dir: {config.target_dir}")
 
-                # Build full command with cd to target dir
-                full_command = f'cd "{config.target_dir}" && {command}'
+                # Build full command with env exports and cd to target dir
+                env_exports = build_env_exports(config.remote_env)
+                full_command = f'{env_exports}cd "{config.target_dir}" && {command}'
 
                 # Execute via SSH
                 result = run_ssh_command(
@@ -188,6 +191,10 @@ def exec_command(
 
     # Gitea workflow path (original implementation)
 
+    # Prepend remote_env exports to command
+    env_exports = build_env_exports(config.remote_env)
+    workflow_command = f"{env_exports}{command}" if env_exports else command
+
     # Merge denylist from env + CLI
     merged_denylist: list[str] = []
     if config.bridge_action_denylist:
@@ -212,7 +219,7 @@ def exec_command(
     try:
         trigger_bridge_action_workflow(
             config=config,
-            raw_command=command,
+            raw_command=workflow_command,
             artifact_paths=artifact_paths_list,
             request_id=request_id,
             denylist=merged_denylist,
@@ -358,7 +365,9 @@ def bridge_ssh(ctx: Context) -> None:
         inspire bridge ssh
     """
     try:
-        config = Config.from_env_for_sync()
+        config, _ = Config.from_files_and_env(
+            require_target_dir=True, require_credentials=False
+        )
     except ConfigError as e:
         if ctx.json_output:
             click.echo(
@@ -387,10 +396,11 @@ def bridge_ssh(ctx: Context) -> None:
             click.echo("Hint: Run 'inspire tunnel start' first", err=True)
         sys.exit(EXIT_GENERAL_ERROR)
 
-    # Build interactive SSH command with cd to target dir
+    # Build interactive SSH command with env exports and cd to target dir
+    env_exports = build_env_exports(config.remote_env)
     ssh_args = get_ssh_command_args(
         config=tunnel_config,
-        remote_command=f'cd "{config.target_dir}" && exec $SHELL -l',
+        remote_command=f'{env_exports}cd "{config.target_dir}" && exec $SHELL -l',
     )
 
     if not ctx.json_output:

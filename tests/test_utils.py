@@ -9,7 +9,7 @@ from typing import Optional
 import pytest
 
 from inspire.cli.utils.job_cache import JobCache
-from inspire.cli.utils.config import Config, ConfigError, _parse_remote_timeout, _parse_denylist
+from inspire.cli.utils.config import Config, ConfigError, _parse_remote_timeout, _parse_denylist, build_env_exports
 from inspire.cli.utils.tunnel import (
     BridgeProfile,
     TunnelConfig,
@@ -352,6 +352,24 @@ class TestConfigHelpers:
         """Test parsing mixed separator denylist."""
         result = _parse_denylist("*.pyc, *.pyo\n__pycache__")
         assert result == ["*.pyc", "*.pyo", "__pycache__"]
+
+    def test_build_env_exports_empty(self) -> None:
+        """Test building env exports with empty dict."""
+        assert build_env_exports({}) == ""
+
+    def test_build_env_exports_single(self) -> None:
+        """Test building env exports with single var."""
+        result = build_env_exports({"FOO": "bar"})
+        assert result == 'export FOO="bar" && '
+
+    def test_build_env_exports_multiple(self) -> None:
+        """Test building env exports with multiple vars."""
+        result = build_env_exports({"FOO": "bar", "BAZ": "qux"})
+        # Order may vary due to dict iteration, so check both parts
+        assert 'export FOO="bar"' in result
+        assert 'export BAZ="qux"' in result
+        assert result.endswith(" && ")
+        assert " && " in result  # Separates the two exports
 
 
 # ===========================================================================

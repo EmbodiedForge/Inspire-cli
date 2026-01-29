@@ -273,11 +273,13 @@ def test_job_create_json_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 
 
 def test_job_create_requires_target_dir(monkeypatch: pytest.MonkeyPatch):
-    def fake_from_env(cls, require_target_dir: bool = False):  # type: ignore[override]
+    def fake_from_files_and_env(
+        cls, require_target_dir: bool = False, require_credentials: bool = True
+    ):
         assert require_target_dir is True
         raise ConfigError("Missing INSPIRE_TARGET_DIR")
 
-    monkeypatch.setattr(config_module.Config, "from_env", classmethod(fake_from_env))
+    monkeypatch.setattr(config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env))
 
     runner = CliRunner()
     result = runner.invoke(

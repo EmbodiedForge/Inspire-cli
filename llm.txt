@@ -138,6 +138,28 @@ priority = 6
 name = "H100 Cluster"
 id = "lcg-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 gpu_type = "H100"
+
+[remote_env]
+# Environment variables injected into remote commands
+UV_PYTHON_INSTALL_DIR = "/path/to/uv_python_global"
+WANDB_API_KEY = "your-key"
+```
+
+### Remote Environment Variables
+
+The `[remote_env]` section in config.toml defines environment variables that are automatically exported before commands run on remote machines. This affects:
+
+- `inspire bridge exec "cmd"` - env vars set before cmd runs
+- `inspire bridge ssh` - env vars set in SSH session
+- `inspire job create --command "cmd"` - env vars set in job environment
+- `inspire run "cmd"` - env vars set in job environment
+
+Example:
+```toml
+[remote_env]
+UV_PYTHON_INSTALL_DIR = "/inspire/hdd/global_user/.../uv_python_global"
+WANDB_API_KEY = "your-wandb-api-key"
+HF_TOKEN = "your-huggingface-token"
 ```
 
 ## Code Patterns
