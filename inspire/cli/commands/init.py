@@ -71,7 +71,8 @@ denylist = ["*.tmp", ".git/*"]
 [workspaces]
 # cpu = "ws-..."       # Default workspace (CPU jobs / notebooks)
 # gpu = "ws-..."       # GPU workspace (H100/H200 jobs)
-# internet = "ws-..."  # Internet-enabled workspace (e.g. RTX 4090)
+# internet = "ws-..."  # Internet-enabled GPU workspace (e.g. RTX 4090)
+# special = "ws-..."   # Custom alias (use with --workspace special)
 
 [job]
 # project_id = "project-..."

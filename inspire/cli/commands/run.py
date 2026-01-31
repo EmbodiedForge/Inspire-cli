@@ -122,6 +122,12 @@ def _exec_inspire_subcommand(args: list[str]) -> None:
     "--location",
     help="Preferred datacenter location (overrides auto-selection)",
 )
+@click.option("--workspace", help="Workspace name (from [workspaces])")
+@click.option(
+    "--workspace-id",
+    "workspace_id_override",
+    help="Workspace ID override (highest precedence)",
+)
 @click.option(
     "--max-time",
     type=float,
@@ -150,6 +156,8 @@ def run(
     watch: bool,
     priority: int,
     location: str,
+    workspace: str | None,
+    workspace_id_override: str | None,
     max_time: float,
     image: str,
     nodes: int,
@@ -200,8 +208,13 @@ def run(
         config, _ = Config.from_files_and_env(require_target_dir=True)
         api = AuthManager.get_api(config)
 
-        workspace_id = select_workspace_id(config, gpu_type=gpu_type)
-        if not workspace_id:
+        selected_workspace_id = select_workspace_id(
+            config,
+            gpu_type=gpu_type,
+            explicit_workspace_id=workspace_id_override,
+            explicit_workspace_name=workspace,
+        )
+        if not selected_workspace_id:
             _handle_error(
                 ctx,
                 "ConfigError",
@@ -323,7 +336,7 @@ def run(
             framework="pytorch",
             prefer_location=location,
             project_id=config.job_project_id,
-            workspace_id=workspace_id,
+            workspace_id=selected_workspace_id,
             image=image,
             task_priority=priority,
             instance_count=nodes,

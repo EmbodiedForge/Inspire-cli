@@ -97,6 +97,12 @@ username = "your_username"
 [api]
 base_url = "https://your-inspire-platform.com"
 
+[workspaces]
+# cpu = "ws-..."       # Default workspace (CPU jobs / notebooks)
+# gpu = "ws-..."       # GPU workspace (H100/H200 jobs)
+# internet = "ws-..."  # Internet-enabled GPU workspace (e.g. RTX 4090)
+# special = "ws-..."   # Custom alias (use with --workspace special)
+
 [[compute_groups]]
 name = "H100 Cluster"
 id = "lcg-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"

@@ -138,6 +138,8 @@ repo = "owner/repo"
 cpu = "ws-..."
 gpu = "ws-..."
 internet = "ws-..."
+# You can add custom aliases and select them with --workspace <name>
+# special = "ws-..."
 
 [job]
 priority = 6

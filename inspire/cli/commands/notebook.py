@@ -56,6 +56,10 @@ def notebook():
 
 @notebook.command("list")
 @click.option(
+    "--workspace",
+    help="Workspace name (from [workspaces])",
+)
+@click.option(
     "--workspace-id",
     help="Workspace ID (defaults to configured workspace)",
 )
@@ -74,6 +78,7 @@ def notebook():
 @pass_context
 def list_notebooks(
     ctx: Context,
+    workspace: Optional[str],
     workspace_id: Optional[str],
     show_all: bool,
     json_output: bool,
@@ -133,7 +138,10 @@ def list_notebooks(
     # Use workspace_id from session if not provided
     if not workspace_id:
         try:
-            workspace_id = select_workspace_id(config)
+            if workspace:
+                workspace_id = select_workspace_id(config, explicit_workspace_name=workspace)
+            else:
+                workspace_id = select_workspace_id(config)
         except ConfigError as e:
             if json_output:
                 click.echo(
@@ -541,6 +549,10 @@ def _load_ssh_public_key(pubkey_path: Optional[str] = None) -> str:
     help="Notebook name (auto-generated if omitted)",
 )
 @click.option(
+    "--workspace",
+    help="Workspace name (from [workspaces])",
+)
+@click.option(
     "--workspace-id",
     help="Workspace ID (overrides auto-selection)",
 )
@@ -583,6 +595,7 @@ def _load_ssh_public_key(pubkey_path: Optional[str] = None) -> str:
 def create_notebook_cmd(
     ctx: Context,
     name: Optional[str],
+    workspace: Optional[str],
     workspace_id: Optional[str],
     resource: str,
     project: Optional[str],
@@ -680,6 +693,7 @@ def create_notebook_cmd(
             gpu_type=gpu_pattern if gpu_count > 0 else None,
             cpu_only=(gpu_count == 0),
             explicit_workspace_id=workspace_id,
+            explicit_workspace_name=workspace,
         )
     except ConfigError as e:
         if json_output:

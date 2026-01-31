@@ -84,6 +84,12 @@ def _wrap_in_bash(command: str) -> str:
 @click.option("--priority", type=int, default=lambda: int(os.environ.get("INSP_PRIORITY", "6")), help="Task priority 1-10 (default: 6, env: INSP_PRIORITY)")
 @click.option("--max-time", type=float, default=100.0, help="Max runtime in hours (default: 100)")
 @click.option("--location", help="Preferred datacenter location")
+@click.option("--workspace", help="Workspace name (from [workspaces])")
+@click.option(
+    "--workspace-id",
+    "workspace_id_override",
+    help="Workspace ID override (highest precedence)",
+)
 @click.option(
     "--auto/--no-auto",
     default=True,
@@ -106,6 +112,8 @@ def create(
     priority: int,
     max_time: float,
     location: str,
+    workspace: Optional[str],
+    workspace_id_override: Optional[str],
     auto: bool,
     image: str,
     nodes: int,
@@ -147,8 +155,13 @@ def create(
             _handle_error(ctx, "ValidationError", f"Invalid resource spec: {e}", EXIT_VALIDATION_ERROR)
             return
 
-        workspace_id = select_workspace_id(config, gpu_type=requested_gpu_type.value)
-        if not workspace_id:
+        selected_workspace_id = select_workspace_id(
+            config,
+            gpu_type=requested_gpu_type.value,
+            explicit_workspace_id=workspace_id_override,
+            explicit_workspace_name=workspace,
+        )
+        if not selected_workspace_id:
             _handle_error(
                 ctx,
                 "ConfigError",
@@ -237,7 +250,7 @@ def create(
             framework=framework,
             prefer_location=location,
             project_id=config.job_project_id,
-            workspace_id=workspace_id,
+            workspace_id=selected_workspace_id,
             image=image,
             task_priority=priority,
             instance_count=nodes,

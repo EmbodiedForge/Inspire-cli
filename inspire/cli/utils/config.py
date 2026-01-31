@@ -238,6 +238,10 @@ class Config:
     workspace_gpu_id: Optional[str] = None
     workspace_internet_id: Optional[str] = None
 
+    # Full workspace map loaded from TOML [workspaces]
+    # (includes custom aliases like workspaces.special = "ws-...").
+    workspaces: dict[str, str] = field(default_factory=dict)
+
     # Notebook settings
     notebook_resource: str = "1xH200"
     notebook_image: Optional[str] = None
@@ -619,6 +623,7 @@ class Config:
             "workspace_cpu_id": None,
             "workspace_gpu_id": None,
             "workspace_internet_id": None,
+            "workspaces": {},
             # Notebook settings
             "notebook_resource": "1xH200",
             "notebook_image": None,
@@ -647,6 +652,7 @@ class Config:
         global_config_path: Path | None = None
         global_compute_groups: list[dict] = []
         global_remote_env: dict[str, str] = {}
+        global_workspaces: dict[str, str] = {}
         if cls.GLOBAL_CONFIG_PATH.exists():
             global_config_path = cls.GLOBAL_CONFIG_PATH
             global_raw = cls._load_toml(cls.GLOBAL_CONFIG_PATH)
@@ -656,6 +662,10 @@ class Config:
             global_remote_env = {
                 str(k): str(v) for k, v in global_raw.pop("remote_env", {}).items()
             }
+
+            raw_workspaces = global_raw.get("workspaces") or {}
+            if isinstance(raw_workspaces, dict):
+                global_workspaces = {str(k): str(v) for k, v in raw_workspaces.items()}
             flat_global = cls._flatten_toml(global_raw)
             for toml_key, value in flat_global.items():
                 field_name = cls._toml_key_to_field(toml_key)
@@ -668,11 +678,15 @@ class Config:
             if global_remote_env:
                 config_dict["remote_env"] = global_remote_env
                 sources["remote_env"] = SOURCE_GLOBAL
+            if global_workspaces:
+                config_dict["workspaces"] = global_workspaces
+                sources["workspaces"] = SOURCE_GLOBAL
 
         # 3. Merge project config.toml (walk up from cwd to find .inspire/config.toml)
         project_config_path = cls._find_project_config()
         project_compute_groups: list[dict] = []
         project_remote_env: dict[str, str] = {}
+        project_workspaces: dict[str, str] = {}
         if project_config_path:
             project_raw = cls._load_toml(project_config_path)
             # Extract compute_groups array before flattening
@@ -681,6 +695,10 @@ class Config:
             project_remote_env = {
                 str(k): str(v) for k, v in project_raw.pop("remote_env", {}).items()
             }
+
+            raw_workspaces = project_raw.get("workspaces") or {}
+            if isinstance(raw_workspaces, dict):
+                project_workspaces = {str(k): str(v) for k, v in raw_workspaces.items()}
             flat_project = cls._flatten_toml(project_raw)
             for toml_key, value in flat_project.items():
                 field_name = cls._toml_key_to_field(toml_key)
@@ -697,6 +715,11 @@ class Config:
                 merged_remote_env.update(project_remote_env)
                 config_dict["remote_env"] = merged_remote_env
                 sources["remote_env"] = SOURCE_PROJECT
+            if project_workspaces:
+                merged_workspaces = dict(config_dict.get("workspaces", {}))
+                merged_workspaces.update(project_workspaces)
+                config_dict["workspaces"] = merged_workspaces
+                sources["workspaces"] = SOURCE_PROJECT
 
         # 4. Override with env vars (highest priority)
         env_mapping = {
