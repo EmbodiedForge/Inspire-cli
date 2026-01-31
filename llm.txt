@@ -139,10 +139,16 @@ name = "H100 Cluster"
 id = "lcg-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 gpu_type = "H100"
 
-[remote_env]
-# Environment variables injected into remote commands
-UV_PYTHON_INSTALL_DIR = "/path/to/uv_python_global"
-WANDB_API_KEY = "your-key"
+	[remote_env]
+	# Environment variables injected into remote commands.
+	# Tip: use $VARNAME or ${VARNAME} to pull from your *local* env at runtime
+	# (avoids putting API keys directly in config.toml).
+	UV_PYTHON_INSTALL_DIR = "/path/to/uv_python_global"
+	TORCH_HOME = "/path/to/torch_cache"
+	HF_HOME = "$TORCH_HOME"
+	IMAGENET_PATH = "/path/to/imagenet"
+	WANDB_API_KEY = "$WANDB_API_KEY"
+	HF_TOKEN = "$HF_TOKEN"
 ```
 
 ### Remote Environment Variables
@@ -158,8 +164,8 @@ Example:
 ```toml
 [remote_env]
 UV_PYTHON_INSTALL_DIR = "/inspire/hdd/global_user/.../uv_python_global"
-WANDB_API_KEY = "your-wandb-api-key"
-HF_TOKEN = "your-huggingface-token"
+WANDB_API_KEY = "$WANDB_API_KEY"
+HF_TOKEN = "$HF_TOKEN"
 ```
 
 ## Code Patterns

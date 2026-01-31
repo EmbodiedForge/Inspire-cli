@@ -7,6 +7,8 @@ Config precedence (lowest to highest):
 """
 
 import os
+import re
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -95,8 +97,40 @@ def build_env_exports(env_dict: dict[str, str]) -> str:
     """
     if not env_dict:
         return ""
-    exports = " && ".join(f'export {k}="{v}"' for k, v in env_dict.items())
-    return exports + " && "
+
+    var_name_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+    env_ref_re = re.compile(
+        r"^\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<bare>[A-Za-z_][A-Za-z0-9_]*))$"
+    )
+
+    exports: list[str] = []
+    for key, raw_value in env_dict.items():
+        if not var_name_re.match(key):
+            raise ConfigError(
+                f"Invalid remote_env key: {key!r} (must match {var_name_re.pattern})"
+            )
+
+        value = raw_value
+        if value == "":
+            env_var = key
+            if env_var not in os.environ:
+                raise ConfigError(
+                    f"remote_env[{key}] is empty but {env_var} is not set in the local environment"
+                )
+            value = os.environ[env_var]
+        else:
+            match = env_ref_re.match(value)
+            if match is not None:
+                env_var = match.group("braced") or match.group("bare")
+                if env_var not in os.environ:
+                    raise ConfigError(
+                        f"remote_env[{key}] references {env_var} but it is not set in the local environment"
+                    )
+                value = os.environ[env_var]
+
+        exports.append(f"export {key}={shlex.quote(value)}")
+
+    return " && ".join(exports) + " && "
 
 
 @dataclass

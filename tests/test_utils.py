@@ -241,6 +241,7 @@ class TestConfig:
         """Test loading config from environment variables."""
         monkeypatch.setenv("INSPIRE_USERNAME", "testuser")
         monkeypatch.setenv("INSPIRE_PASSWORD", "testpass")
+        monkeypatch.delenv("INSPIRE_BASE_URL", raising=False)
 
         config = Config.from_env()
 
@@ -360,16 +361,50 @@ class TestConfigHelpers:
     def test_build_env_exports_single(self) -> None:
         """Test building env exports with single var."""
         result = build_env_exports({"FOO": "bar"})
-        assert result == 'export FOO="bar" && '
+        assert result == "export FOO=bar && "
 
     def test_build_env_exports_multiple(self) -> None:
         """Test building env exports with multiple vars."""
         result = build_env_exports({"FOO": "bar", "BAZ": "qux"})
         # Order may vary due to dict iteration, so check both parts
-        assert 'export FOO="bar"' in result
-        assert 'export BAZ="qux"' in result
+        assert "export FOO=bar" in result
+        assert "export BAZ=qux" in result
         assert result.endswith(" && ")
         assert " && " in result  # Separates the two exports
+
+    def test_build_env_exports_env_ref_bare(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """remote_env supports $VARNAME to pull from local environment."""
+        monkeypatch.setenv("TOKEN", "sekret")
+        result = build_env_exports({"WANDB_API_KEY": "$TOKEN"})
+        assert result == "export WANDB_API_KEY=sekret && "
+
+    def test_build_env_exports_env_ref_braced(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """remote_env supports ${VARNAME} to pull from local environment."""
+        monkeypatch.setenv("TOKEN", "sekret")
+        result = build_env_exports({"WANDB_API_KEY": "${TOKEN}"})
+        assert result == "export WANDB_API_KEY=sekret && "
+
+    def test_build_env_exports_empty_uses_same_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An empty remote_env value uses the local environment value for that key."""
+        monkeypatch.setenv("WANDB_API_KEY", "sekret")
+        result = build_env_exports({"WANDB_API_KEY": ""})
+        assert result == "export WANDB_API_KEY=sekret && "
+
+    def test_build_env_exports_quotes_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Values are safely shell-quoted."""
+        monkeypatch.setenv("TOKEN", "has spaces")
+        result = build_env_exports({"WANDB_API_KEY": "$TOKEN"})
+        assert result == "export WANDB_API_KEY='has spaces' && "
+
+    def test_build_env_exports_missing_env_var_raises(self) -> None:
+        """Missing env var references should fail early."""
+        with pytest.raises(ConfigError, match="not set in the local environment"):
+            build_env_exports({"WANDB_API_KEY": "$MISSING"})
+
+    def test_build_env_exports_invalid_key_raises(self) -> None:
+        """Invalid shell variable names should fail early."""
+        with pytest.raises(ConfigError, match="Invalid remote_env key"):
+            build_env_exports({"NOT-VALID": "x"})
 
 
 # ===========================================================================
