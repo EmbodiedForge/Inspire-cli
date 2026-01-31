@@ -117,6 +117,9 @@ inspire config show
 | `INSPIRE_BASE_URL` | API base URL |
 | `INSPIRE_TARGET_DIR` | Shared filesystem path |
 | `INSPIRE_WORKSPACE_ID` | Default workspace ID |
+| `INSPIRE_WORKSPACE_CPU_ID` | CPU workspace ID (default workspace) |
+| `INSPIRE_WORKSPACE_GPU_ID` | GPU workspace ID (H100/H200) |
+| `INSPIRE_WORKSPACE_INTERNET_ID` | Internet-enabled workspace ID (e.g. RTX 4090) |
 | `INSPIRE_PROJECT_ID` | Default project ID |
 | `INSP_IMAGE` | Default Docker image |
 | `INSP_PRIORITY` | Job priority (1-10) |

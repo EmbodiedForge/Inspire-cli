@@ -27,6 +27,8 @@ from inspire.cli.context import (
     EXIT_API_ERROR,
 )
 from inspire.cli.formatters import json_formatter
+from inspire.cli.utils.config import Config, ConfigError
+from inspire.cli.utils.workspace import select_workspace_id
 from inspire.cli.utils.web_session import get_web_session
 
 
@@ -112,9 +114,46 @@ def list_notebooks(
             )
         return sys.exit(EXIT_CONFIG_ERROR)
 
+    try:
+        config, _ = Config.from_files_and_env(require_credentials=False)
+    except ConfigError as e:
+        if json_output:
+            click.echo(
+                json_formatter.format_json_error(
+                    "ConfigError",
+                    str(e),
+                    EXIT_CONFIG_ERROR,
+                ),
+                err=True,
+            )
+        else:
+            click.echo(f"Error: {e}", err=True)
+        return sys.exit(EXIT_CONFIG_ERROR)
+
     # Use workspace_id from session if not provided
     if not workspace_id:
-        workspace_id = session.workspace_id
+        try:
+            workspace_id = select_workspace_id(config)
+        except ConfigError as e:
+            if json_output:
+                click.echo(
+                    json_formatter.format_json_error(
+                        "ConfigError",
+                        str(e),
+                        EXIT_CONFIG_ERROR,
+                    ),
+                    err=True,
+                )
+            else:
+                click.echo(f"Error: {e}", err=True)
+            return sys.exit(EXIT_CONFIG_ERROR)
+
+        if not workspace_id:
+            workspace_id = session.workspace_id
+
+        if workspace_id == "ws-00000000-0000-0000-0000-000000000000":
+            workspace_id = None
+
         if not workspace_id:
             if json_output:
                 click.echo(
@@ -122,14 +161,14 @@ def list_notebooks(
                         "ConfigError",
                         "No workspace_id configured or provided.",
                         EXIT_CONFIG_ERROR,
-                        hint="Use --workspace-id or set INSPIRE_WORKSPACE_ID environment variable.",
+                        hint="Use --workspace-id, set [workspaces].cpu in config.toml, or set INSPIRE_WORKSPACE_ID.",
                     ),
                     err=True,
                 )
             else:
                 click.echo(
                     "Error: No workspace_id configured or provided. "
-                    "Use --workspace-id or set INSPIRE_WORKSPACE_ID environment variable.",
+                    "Use --workspace-id, set [workspaces].cpu in config.toml, or set INSPIRE_WORKSPACE_ID.",
                     err=True,
                 )
             return sys.exit(EXIT_CONFIG_ERROR)
@@ -502,6 +541,10 @@ def _load_ssh_public_key(pubkey_path: Optional[str] = None) -> str:
     help="Notebook name (auto-generated if omitted)",
 )
 @click.option(
+    "--workspace-id",
+    help="Workspace ID (overrides auto-selection)",
+)
+@click.option(
     "--resource", "-r",
     default=lambda: os.environ.get("INSPIRE_NOTEBOOK_RESOURCE", "1xH200"),
     help="Resource spec (e.g., 1xH200, 4xH100, 4CPU)",
@@ -540,6 +583,7 @@ def _load_ssh_public_key(pubkey_path: Optional[str] = None) -> str:
 def create_notebook_cmd(
     ctx: Context,
     name: Optional[str],
+    workspace_id: Optional[str],
     resource: str,
     project: Optional[str],
     image: Optional[str],
@@ -592,24 +636,20 @@ def create_notebook_cmd(
         sys.exit(EXIT_CONFIG_ERROR)
         return
 
-    workspace_id = session.workspace_id
-    if not workspace_id:
+    try:
+        config, _ = Config.from_files_and_env(require_credentials=False)
+    except ConfigError as e:
         if json_output:
             click.echo(
                 json_formatter.format_json_error(
                     "ConfigError",
-                    "No workspace_id configured.",
+                    str(e),
                     EXIT_CONFIG_ERROR,
-                    hint="Set INSPIRE_WORKSPACE_ID environment variable.",
                 ),
                 err=True,
             )
         else:
-            click.echo(
-                "Error: No workspace_id configured. "
-                "Set INSPIRE_WORKSPACE_ID environment variable.",
-                err=True,
-            )
+            click.echo(f"Error: {e}", err=True)
         sys.exit(EXIT_CONFIG_ERROR)
         return
 
@@ -633,6 +673,57 @@ def create_notebook_cmd(
 
     requested_cpu_count = cpu_count
     resource_display = _format_resource_display(gpu_count, gpu_pattern, requested_cpu_count)
+
+    try:
+        auto_workspace_id = select_workspace_id(
+            config,
+            gpu_type=gpu_pattern if gpu_count > 0 else None,
+            cpu_only=(gpu_count == 0),
+            explicit_workspace_id=workspace_id,
+        )
+    except ConfigError as e:
+        if json_output:
+            click.echo(
+                json_formatter.format_json_error(
+                    "ConfigError",
+                    str(e),
+                    EXIT_CONFIG_ERROR,
+                ),
+                err=True,
+            )
+        else:
+            click.echo(f"Error: {e}", err=True)
+        sys.exit(EXIT_CONFIG_ERROR)
+        return
+
+    if not auto_workspace_id:
+        auto_workspace_id = session.workspace_id
+
+    if auto_workspace_id == "ws-00000000-0000-0000-0000-000000000000":
+        auto_workspace_id = None
+
+    if not auto_workspace_id:
+        hint = (
+            "Use --workspace-id, set [workspaces].cpu in config.toml, or set INSPIRE_WORKSPACE_ID."
+            if gpu_count == 0
+            else "Use --workspace-id, set [workspaces].gpu in config.toml, or set INSPIRE_WORKSPACE_ID."
+        )
+        if json_output:
+            click.echo(
+                json_formatter.format_json_error(
+                    "ConfigError",
+                    "No workspace_id configured.",
+                    EXIT_CONFIG_ERROR,
+                    hint=hint,
+                ),
+                err=True,
+            )
+        else:
+            click.echo(f"Error: No workspace_id configured. {hint}", err=True)
+        sys.exit(EXIT_CONFIG_ERROR)
+        return
+
+    workspace_id = auto_workspace_id
 
     if not json_output:
         click.echo(f"Creating notebook with {resource_display}...")

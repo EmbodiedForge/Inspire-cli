@@ -27,6 +27,7 @@ from inspire.cli.context import (
 from inspire.cli.utils.config import Config, ConfigError, build_env_exports
 from inspire.cli.utils.auth import AuthManager, AuthenticationError
 from inspire.cli.utils.browser_api import find_best_compute_group_accurate
+from inspire.cli.utils.workspace import select_workspace_id
 from inspire.cli.formatters import json_formatter, human_formatter
 
 
@@ -199,6 +200,16 @@ def run(
         config, _ = Config.from_files_and_env(require_target_dir=True)
         api = AuthManager.get_api(config)
 
+        workspace_id = select_workspace_id(config, gpu_type=gpu_type)
+        if not workspace_id:
+            _handle_error(
+                ctx,
+                "ConfigError",
+                "No workspace_id configured for GPU workloads. Set [workspaces].gpu or INSPIRE_WORKSPACE_ID.",
+                EXIT_CONFIG_ERROR,
+            )
+            return
+
         # Step 2: Auto-select compute group
         if location:
             # Use user-specified location
@@ -311,6 +322,8 @@ def run(
             resource=resource_str,
             framework="pytorch",
             prefer_location=location,
+            project_id=config.job_project_id,
+            workspace_id=workspace_id,
             image=image,
             task_priority=priority,
             instance_count=nodes,

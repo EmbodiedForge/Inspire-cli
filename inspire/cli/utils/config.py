@@ -232,6 +232,12 @@ class Config:
     job_project_id: Optional[str] = None
     job_workspace_id: Optional[str] = None
 
+    # Workspace routing (optional)
+    # When set, commands can auto-select the correct workspace based on resource type.
+    workspace_cpu_id: Optional[str] = None
+    workspace_gpu_id: Optional[str] = None
+    workspace_internet_id: Optional[str] = None
+
     # Notebook settings
     notebook_resource: str = "1xH200"
     notebook_image: Optional[str] = None
@@ -527,6 +533,9 @@ class Config:
             "job.project_id": "job_project_id",
             "job.workspace_id": "job_workspace_id",
             "job.shm_size": "shm_size",
+            "workspaces.cpu": "workspace_cpu_id",
+            "workspaces.gpu": "workspace_gpu_id",
+            "workspaces.internet": "workspace_internet_id",
             "notebook.resource": "notebook_resource",
             "notebook.image": "notebook_image",
             "ssh.rtunnel_bin": "rtunnel_bin",
@@ -607,6 +616,9 @@ class Config:
             "job_image": None,
             "job_project_id": None,
             "job_workspace_id": None,
+            "workspace_cpu_id": None,
+            "workspace_gpu_id": None,
+            "workspace_internet_id": None,
             # Notebook settings
             "notebook_resource": "1xH200",
             "notebook_image": None,
@@ -728,6 +740,9 @@ class Config:
             "INSP_IMAGE": "job_image",
             "INSPIRE_PROJECT_ID": "job_project_id",
             "INSPIRE_WORKSPACE_ID": "job_workspace_id",
+            "INSPIRE_WORKSPACE_CPU_ID": "workspace_cpu_id",
+            "INSPIRE_WORKSPACE_GPU_ID": "workspace_gpu_id",
+            "INSPIRE_WORKSPACE_INTERNET_ID": "workspace_internet_id",
             # Notebook settings
             "INSPIRE_NOTEBOOK_RESOURCE": "notebook_resource",
             "INSPIRE_NOTEBOOK_IMAGE": "notebook_image",

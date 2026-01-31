@@ -68,6 +68,11 @@ default_remote = "origin"
 action_timeout = 300
 denylist = ["*.tmp", ".git/*"]
 
+[workspaces]
+# cpu = "ws-..."       # Default workspace (CPU jobs / notebooks)
+# gpu = "ws-..."       # GPU workspace (H100/H200 jobs)
+# internet = "ws-..."  # Internet-enabled workspace (e.g. RTX 4090)
+
 [job]
 # project_id = "project-..."
 # workspace_id = "ws-..."
@@ -77,6 +82,12 @@ denylist = ["*.tmp", ".git/*"]
 [notebook]
 resource = "1xH200"
 # image = "pytorch:latest"
+
+[remote_env]
+# Environment variables exported before remote commands run.
+# Tip: use "$VARNAME" or "${{VARNAME}}" to pull from your *local* env at runtime.
+# WANDB_API_KEY = "$WANDB_API_KEY"
+# HF_TOKEN = "$HF_TOKEN"
 """
 
 
@@ -192,7 +203,20 @@ def _generate_toml_content(
         by_section[section].append((option, value))
 
     # Define section order based on TOML key prefixes
-    section_order = ["auth", "api", "paths", "gitea", "sync", "bridge", "job", "notebook", "ssh", "mirrors", "other"]
+    section_order = [
+        "auth",
+        "api",
+        "paths",
+        "gitea",
+        "sync",
+        "bridge",
+        "workspaces",
+        "job",
+        "notebook",
+        "ssh",
+        "mirrors",
+        "other",
+    ]
 
     for section in section_order:
         if section not in by_section:

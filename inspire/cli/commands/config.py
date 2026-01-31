@@ -158,6 +158,9 @@ def _get_field_value(cfg: Config, option: ConfigOption) -> tuple[str | None, boo
         "job.project_id": "job_project_id",
         "job.workspace_id": "job_workspace_id",
         "job.shm_size": "shm_size",
+        "workspaces.cpu": "workspace_cpu_id",
+        "workspaces.gpu": "workspace_gpu_id",
+        "workspaces.internet": "workspace_internet_id",
         "notebook.resource": "notebook_resource",
         "notebook.image": "notebook_image",
         "ssh.rtunnel_bin": "rtunnel_bin",
@@ -222,6 +225,9 @@ def _get_source_for_option(sources: dict[str, str], option: ConfigOption) -> str
         "job.project_id": "job_project_id",
         "job.workspace_id": "job_workspace_id",
         "job.shm_size": "shm_size",
+        "workspaces.cpu": "workspace_cpu_id",
+        "workspaces.gpu": "workspace_gpu_id",
+        "workspaces.internet": "workspace_internet_id",
         "notebook.resource": "notebook_resource",
         "notebook.image": "notebook_image",
         "ssh.rtunnel_bin": "rtunnel_bin",
@@ -552,4 +558,3 @@ def _handle_error(ctx: Context, error_type: str, message: str, exit_code: int) -
     else:
         click.echo(human_formatter.format_error(message), err=True)
     sys.exit(exit_code)
-

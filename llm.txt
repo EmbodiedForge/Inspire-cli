@@ -109,6 +109,9 @@ Defaults < Global config.toml < Project config.toml < Environment variables
 | INSPIRE_BASE_URL | API base URL |
 | INSPIRE_TARGET_DIR | Shared filesystem path |
 | INSPIRE_WORKSPACE_ID | Default workspace ID |
+| INSPIRE_WORKSPACE_CPU_ID | CPU workspace ID (default workspace) |
+| INSPIRE_WORKSPACE_GPU_ID | GPU workspace ID (H100/H200) |
+| INSPIRE_WORKSPACE_INTERNET_ID | Internet-enabled workspace ID (e.g. RTX 4090) |
 | INSPIRE_PROJECT_ID | Default project ID |
 | INSP_IMAGE | Default Docker image (for jobs) |
 | INSPIRE_NOTEBOOK_IMAGE | Default notebook image (falls back to INSP_IMAGE) |
@@ -131,6 +134,11 @@ server = "https://codeberg.org"
 repo = "owner/repo"
 # token - use INSP_GITEA_TOKEN env var
 
+[workspaces]
+cpu = "ws-..."
+gpu = "ws-..."
+internet = "ws-..."
+
 [job]
 priority = 6
 
@@ -139,16 +147,16 @@ name = "H100 Cluster"
 id = "lcg-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 gpu_type = "H100"
 
-	[remote_env]
-	# Environment variables injected into remote commands.
-	# Tip: use $VARNAME or ${VARNAME} to pull from your *local* env at runtime
-	# (avoids putting API keys directly in config.toml).
-	UV_PYTHON_INSTALL_DIR = "/path/to/uv_python_global"
-	TORCH_HOME = "/path/to/torch_cache"
-	HF_HOME = "$TORCH_HOME"
-	IMAGENET_PATH = "/path/to/imagenet"
-	WANDB_API_KEY = "$WANDB_API_KEY"
-	HF_TOKEN = "$HF_TOKEN"
+[remote_env]
+# Environment variables injected into remote commands.
+# Tip: use $VARNAME or ${VARNAME} to pull from your *local* env at runtime
+# (avoids putting API keys directly in config.toml).
+UV_PYTHON_INSTALL_DIR = "/path/to/uv_python_global"
+TORCH_HOME = "/path/to/torch_cache"
+HF_HOME = "$TORCH_HOME"
+IMAGENET_PATH = "/path/to/imagenet"
+WANDB_API_KEY = "$WANDB_API_KEY"
+HF_TOKEN = "$HF_TOKEN"
 ```
 
 ### Remote Environment Variables

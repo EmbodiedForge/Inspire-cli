@@ -48,6 +48,7 @@ from inspire.cli.utils.tunnel import (
     TunnelNotAvailableError,
 )
 from inspire.cli.utils.browser_api import find_best_compute_group_accurate
+from inspire.cli.utils.workspace import select_workspace_id
 from inspire.cli.formatters import json_formatter, human_formatter
 
 
@@ -139,14 +140,25 @@ def create(
         config, _ = Config.from_files_and_env(require_target_dir=True)
         api = AuthManager.get_api(config)
 
+        # Parse resource early for workspace routing + optional auto-selection.
+        try:
+            requested_gpu_type, requested_gpu_count = api.resource_manager.parse_resource_request(resource)
+        except Exception as e:
+            _handle_error(ctx, "ValidationError", f"Invalid resource spec: {e}", EXIT_VALIDATION_ERROR)
+            return
+
+        workspace_id = select_workspace_id(config, gpu_type=requested_gpu_type.value)
+        if not workspace_id:
+            _handle_error(
+                ctx,
+                "ConfigError",
+                "No workspace_id configured for GPU workloads. Set [workspaces].gpu or INSPIRE_WORKSPACE_ID.",
+                EXIT_CONFIG_ERROR,
+            )
+            return
+
         # Auto-select location based on GPU availability (if requested)
         if auto and not location:
-            try:
-                requested_gpu_type, requested_gpu_count = api.resource_manager.parse_resource_request(resource)
-            except Exception as e:
-                _handle_error(ctx, "ValidationError", f"Invalid resource spec: {e}", EXIT_VALIDATION_ERROR)
-                return
-
             # Use accurate browser API for resource selection
             best = find_best_compute_group_accurate(
                 gpu_type=requested_gpu_type.value,
@@ -224,6 +236,8 @@ def create(
             resource=resource,
             framework=framework,
             prefer_location=location,
+            project_id=config.job_project_id,
+            workspace_id=workspace_id,
             image=image,
             task_priority=priority,
             instance_count=nodes,
