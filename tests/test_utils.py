@@ -17,6 +17,7 @@ from inspire.cli.utils.tunnel import (
     save_tunnel_config,
     _get_proxy_command,
     get_ssh_command_args,
+    has_internet_for_gpu_type,
     TunnelNotAvailableError,
     BridgeNotFoundError,
 )
@@ -410,6 +411,40 @@ class TestConfigHelpers:
 # ===========================================================================
 # Tunnel tests
 # ===========================================================================
+
+
+class TestHasInternetForGpuType:
+    """Tests for has_internet_for_gpu_type helper function."""
+
+    def test_empty_gpu_type_returns_true(self) -> None:
+        """Empty GPU type defaults to having internet (CPU)."""
+        assert has_internet_for_gpu_type("") is True
+
+    def test_none_returns_true(self) -> None:
+        """None GPU type defaults to having internet."""
+        # Type hint says str, but handle None gracefully
+        assert has_internet_for_gpu_type(None) is True  # type: ignore[arg-type]
+
+    def test_h200_returns_false(self) -> None:
+        """H200 GPUs don't have internet."""
+        assert has_internet_for_gpu_type("H200") is False
+        assert has_internet_for_gpu_type("h200") is False
+        assert has_internet_for_gpu_type("H200-SXM") is False
+
+    def test_h100_returns_false(self) -> None:
+        """H100 GPUs don't have internet."""
+        assert has_internet_for_gpu_type("H100") is False
+        assert has_internet_for_gpu_type("h100") is False
+        assert has_internet_for_gpu_type("H100-SXM") is False
+
+    def test_4090_returns_true(self) -> None:
+        """4090 GPUs have internet."""
+        assert has_internet_for_gpu_type("4090") is True
+        assert has_internet_for_gpu_type("RTX 4090") is True
+
+    def test_cpu_returns_true(self) -> None:
+        """CPU (no GPU) has internet."""
+        assert has_internet_for_gpu_type("CPU") is True
 
 
 class TestBridgeProfile:

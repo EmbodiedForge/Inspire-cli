@@ -1389,6 +1389,7 @@ def ssh_notebook_cmd(
         BridgeProfile,
         TunnelConfig,
         get_ssh_command_args,
+        has_internet_for_gpu_type,
         load_tunnel_config,
         save_tunnel_config,
     )
@@ -1405,12 +1406,13 @@ def ssh_notebook_cmd(
         sys.exit(EXIT_CONFIG_ERROR)
         return
 
-    # Wait for running (optional)
+    # Wait for running (optional) and get notebook detail for GPU info
+    notebook_detail = None
     try:
         if wait:
-            wait_for_notebook_running(notebook_id=notebook_id, session=session)
+            notebook_detail = wait_for_notebook_running(notebook_id=notebook_id, session=session)
         else:
-            get_notebook_detail(notebook_id=notebook_id, session=session)
+            notebook_detail = get_notebook_detail(notebook_id=notebook_id, session=session)
     except TimeoutError as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(EXIT_API_ERROR)
@@ -1419,6 +1421,11 @@ def ssh_notebook_cmd(
         click.echo(f"Error: {e}", err=True)
         sys.exit(EXIT_API_ERROR)
         return
+
+    # Extract GPU type from notebook detail for internet capability detection
+    gpu_info = (notebook_detail.get("resource_spec_price") or {}).get("gpu_info") or {}
+    gpu_type = gpu_info.get("gpu_product_simple", "")
+    has_internet = has_internet_for_gpu_type(gpu_type)
 
     # Fast-path: Check if we have a cached profile for this notebook and test connectivity
     profile_name = save_as or f"notebook-{notebook_id[:8]}"
@@ -1486,14 +1493,18 @@ def ssh_notebook_cmd(
         proxy_url=proxy_url,
         ssh_user="root",
         ssh_port=ssh_port,
+        has_internet=has_internet,
     )
 
     # Always save the profile for future fast-path use
     config = load_tunnel_config()
     config.add_bridge(bridge)
     save_tunnel_config(config)
-    if save_as:
-        click.echo(f"Saved notebook tunnel as profile: {profile_name}", err=True)
+
+    # Show profile info with internet status
+    internet_status = "yes" if has_internet else "no"
+    gpu_label = gpu_type if gpu_type else "CPU"
+    click.echo(f"Added bridge '{profile_name}' (internet: {internet_status}, GPU: {gpu_label})", err=True)
 
     args = get_ssh_command_args(
         bridge_name=profile_name,

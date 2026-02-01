@@ -865,8 +865,7 @@ class InspireAPI:
             "enable_notification": enable_notification,
             "enable_troubleshoot": enable_troubleshoot,
             "max_running_time_ms": max_running_time_ms,
-            "reserve_on_fail_ms": reserve_on_fail_ms,
-            "reserve_on_success_ms": reserve_on_success_ms,
+            # Note: reserve_on_fail_ms and reserve_on_success_ms removed - API now requires positive values or omission
             "tb_summary_path": tb_summary_path,
             "framework_config": [{
                 "image": image,
@@ -880,7 +879,7 @@ class InspireAPI:
         }
         
         logger.debug("Creating training job with payload structure defined")
-        
+
         try:
             result = self._make_request('POST', self.endpoints.TRAIN_JOB_CREATE, payload)
             

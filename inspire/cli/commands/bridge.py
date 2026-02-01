@@ -8,6 +8,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import subprocess
+
 import click
 
 from inspire.cli.context import (
@@ -30,6 +32,7 @@ from inspire.cli.utils.gitea import (
 from inspire.cli.utils.tunnel import (
     is_tunnel_available,
     run_ssh_command,
+    run_ssh_command_streaming,
     get_ssh_command_args,
     load_tunnel_config,
     TunnelNotAvailableError,
@@ -123,36 +126,19 @@ def exec_command(
     if not no_tunnel and not artifact_path and not download:
         try:
             if is_tunnel_available():
-                if not ctx.json_output:
-                    click.echo("Using SSH tunnel (fast path)")
-                    click.echo(f"Command: {command}")
-                    click.echo(f"Working dir: {config.target_dir}")
-
                 # Build full command with env exports and cd to target dir
                 env_exports = build_env_exports(config.remote_env)
                 full_command = f'{env_exports}cd "{config.target_dir}" && {command}'
 
-                # Execute via SSH
-                result = run_ssh_command(
-                    command=full_command,
-                    timeout=action_timeout,
-                    capture_output=True,
-                )
+                if ctx.json_output:
+                    # JSON mode: use buffered output for valid JSON response
+                    result = run_ssh_command(
+                        command=full_command,
+                        timeout=action_timeout,
+                        capture_output=True,
+                    )
 
-                # Display output
-                if not ctx.json_output:
-                    click.echo("")
-                    click.echo("--- Command Output ---")
-                    if result.stdout:
-                        click.echo(result.stdout, nl=False)
-                    if result.stderr:
-                        click.echo(result.stderr, nl=False)
-                    click.echo("")
-                    click.echo("--- End Output ---")
-                    click.echo("")
-
-                if result.returncode != 0:
-                    if ctx.json_output:
+                    if result.returncode != 0:
                         click.echo(
                             json_formatter.format_json_error(
                                 "CommandFailed",
@@ -161,11 +147,8 @@ def exec_command(
                             ),
                             err=True,
                         )
-                    else:
-                        click.echo(f"Command failed with exit code {result.returncode}", err=True)
-                    sys.exit(EXIT_GENERAL_ERROR)
+                        sys.exit(EXIT_GENERAL_ERROR)
 
-                if ctx.json_output:
                     click.echo(
                         json_formatter.format_json(
                             {
@@ -176,14 +159,46 @@ def exec_command(
                             }
                         )
                     )
+                    sys.exit(EXIT_SUCCESS)
                 else:
-                    click.echo("OK Command completed successfully (via SSH)")
+                    # Human output: use streaming for real-time display
+                    click.echo("Using SSH tunnel (fast path)")
+                    click.echo(f"Command: {command}")
+                    click.echo(f"Working dir: {config.target_dir}")
+                    click.echo("")
+                    click.echo("--- Command Output ---")
 
-                sys.exit(EXIT_SUCCESS)
+                    exit_code = run_ssh_command_streaming(
+                        command=full_command,
+                        timeout=action_timeout,
+                    )
+
+                    click.echo("--- End Output ---")
+                    click.echo("")
+
+                    if exit_code != 0:
+                        click.echo(f"Command failed with exit code {exit_code}", err=True)
+                        sys.exit(EXIT_GENERAL_ERROR)
+
+                    click.echo("OK Command completed successfully (via SSH)")
+                    sys.exit(EXIT_SUCCESS)
 
         except TunnelNotAvailableError:
             if not ctx.json_output:
                 click.echo("Tunnel not available, using Gitea workflow...", err=True)
+        except subprocess.TimeoutExpired:
+            if ctx.json_output:
+                click.echo(
+                    json_formatter.format_json_error(
+                        "Timeout",
+                        f"Command timed out after {action_timeout}s",
+                        EXIT_TIMEOUT,
+                    ),
+                    err=True,
+                )
+            else:
+                click.echo(f"Command timed out after {action_timeout}s", err=True)
+            sys.exit(EXIT_TIMEOUT)
         except Exception as e:
             if not ctx.json_output:
                 click.echo(f"SSH execution failed: {e}", err=True)

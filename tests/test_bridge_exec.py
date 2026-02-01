@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import importlib
@@ -7,7 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from inspire.cli.main import main as cli_main
-from inspire.cli.context import EXIT_GENERAL_ERROR, EXIT_SUCCESS
+from inspire.cli.context import EXIT_GENERAL_ERROR, EXIT_SUCCESS, EXIT_TIMEOUT
 from inspire.cli.utils.config import Config
 
 # Import the module itself, not the click group
@@ -186,3 +187,148 @@ def test_bridge_exec_json_includes_output(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert payload["success"] is True
     assert payload["data"]["status"] == "success"
     assert payload["data"]["output"] == "Test output"
+
+
+# Tests for SSH tunnel streaming functionality
+
+
+def test_bridge_exec_ssh_streaming_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Test that SSH tunnel uses streaming for human output."""
+    config = make_sync_config(tmp_path)
+    streamed_lines: List[str] = []
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+
+    def fake_is_tunnel_available(*args: Any, **kwargs: Any) -> bool:
+        return True
+
+    def fake_run_ssh_command_streaming(
+        command: str,
+        bridge_name: Any = None,
+        config: Any = None,
+        timeout: Any = None,
+        output_callback: Any = None,
+    ) -> int:
+        # Simulate streaming output
+        lines = ["Line 1\n", "Line 2\n", "Line 3\n"]
+        for line in lines:
+            streamed_lines.append(line)
+            if output_callback:
+                output_callback(line)
+        return 0
+
+    monkeypatch.setattr(bridge_module, "is_tunnel_available", fake_is_tunnel_available)
+    monkeypatch.setattr(bridge_module, "run_ssh_command_streaming", fake_run_ssh_command_streaming)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["bridge", "exec", "echo test"])
+
+    assert result.exit_code == EXIT_SUCCESS
+    assert "Using SSH tunnel (fast path)" in result.output
+    assert "--- Command Output ---" in result.output
+    assert "--- End Output ---" in result.output
+    assert "OK Command completed successfully (via SSH)" in result.output
+    # Verify streaming function was called (output was streamed)
+    assert len(streamed_lines) == 3
+
+
+def test_bridge_exec_ssh_json_uses_buffered(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Test that JSON mode uses buffered output, not streaming."""
+    config = make_sync_config(tmp_path)
+    streaming_called = {"value": False}
+    buffered_called = {"value": False}
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+
+    def fake_is_tunnel_available(*args: Any, **kwargs: Any) -> bool:
+        return True
+
+    def fake_run_ssh_command_streaming(*args: Any, **kwargs: Any) -> int:
+        streaming_called["value"] = True
+        return 0
+
+    class FakeCompletedProcess:
+        returncode = 0
+        stdout = "buffered output"
+        stderr = ""
+
+    def fake_run_ssh_command(*args: Any, **kwargs: Any) -> FakeCompletedProcess:
+        buffered_called["value"] = True
+        return FakeCompletedProcess()
+
+    monkeypatch.setattr(bridge_module, "is_tunnel_available", fake_is_tunnel_available)
+    monkeypatch.setattr(bridge_module, "run_ssh_command_streaming", fake_run_ssh_command_streaming)
+    monkeypatch.setattr(bridge_module, "run_ssh_command", fake_run_ssh_command)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["--json", "bridge", "exec", "echo test"])
+
+    assert result.exit_code == EXIT_SUCCESS
+    # Buffered should be used, not streaming
+    assert buffered_called["value"] is True
+    assert streaming_called["value"] is False
+    # Verify JSON output
+    payload = json.loads(result.output)
+    assert payload["success"] is True
+    assert payload["data"]["method"] == "ssh_tunnel"
+    assert payload["data"]["output"] == "buffered output"
+
+
+def test_bridge_exec_ssh_streaming_timeout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Test that streaming mode handles timeout correctly."""
+    config = make_sync_config(tmp_path)
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+
+    def fake_is_tunnel_available(*args: Any, **kwargs: Any) -> bool:
+        return True
+
+    def fake_run_ssh_command_streaming(*args: Any, **kwargs: Any) -> int:
+        raise subprocess.TimeoutExpired(cmd="ssh", timeout=5)
+
+    monkeypatch.setattr(bridge_module, "is_tunnel_available", fake_is_tunnel_available)
+    monkeypatch.setattr(bridge_module, "run_ssh_command_streaming", fake_run_ssh_command_streaming)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["bridge", "exec", "sleep 100", "--timeout", "5"])
+
+    assert result.exit_code == EXIT_TIMEOUT
+    assert "timed out" in result.output.lower()
+
+
+def test_bridge_exec_ssh_streaming_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Test that streaming mode handles command failure correctly."""
+    config = make_sync_config(tmp_path)
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+
+    def fake_is_tunnel_available(*args: Any, **kwargs: Any) -> bool:
+        return True
+
+    def fake_run_ssh_command_streaming(*args: Any, **kwargs: Any) -> int:
+        return 1  # Non-zero exit code
+
+    monkeypatch.setattr(bridge_module, "is_tunnel_available", fake_is_tunnel_available)
+    monkeypatch.setattr(bridge_module, "run_ssh_command_streaming", fake_run_ssh_command_streaming)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["bridge", "exec", "false"])
+
+    assert result.exit_code == EXIT_GENERAL_ERROR
+    assert "Command failed with exit code 1" in result.output
