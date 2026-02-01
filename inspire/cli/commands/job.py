@@ -227,9 +227,10 @@ def create(
         # Prepend remote_env exports to command
         env_exports = build_env_exports(config.remote_env)
 
-        # If INSPIRE_TARGET_DIR is configured, wrap the command so
-        # stdout/stderr land in a single master log file under
-        # ${INSPIRE_TARGET_DIR}/.inspire/.
+        # If INSPIRE_TARGET_DIR is configured, wrap the command so:
+        # 1. We cd to the target directory first (where the code lives)
+        # 2. stdout/stderr land in a single master log file under
+        #    ${INSPIRE_TARGET_DIR}/.inspire/.
         final_command = f"{env_exports}{command}" if env_exports else command
         log_path = None
         if config.target_dir:
@@ -237,7 +238,7 @@ def create(
             log_dir = os.path.join(config.target_dir, ".inspire")
             log_filename = f"training_master_{timestamp}.log"
             log_path = os.path.join(log_dir, log_filename)
-            final_command = f'{env_exports}mkdir -p "{log_dir}" && ( {command} ) > "{log_path}" 2>&1'
+            final_command = f'{env_exports}mkdir -p "{log_dir}" && ( cd "{config.target_dir}" && {command} ) > "{log_path}" 2>&1'
 
         # Convert hours to milliseconds
         max_time_ms = str(int(max_time * 3600 * 1000))
