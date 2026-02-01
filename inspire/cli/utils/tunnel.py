@@ -69,6 +69,7 @@ class BridgeProfile:
     proxy_url: str
     ssh_user: str = DEFAULT_SSH_USER
     ssh_port: int = DEFAULT_SSH_PORT
+    has_internet: bool = True  # Whether this bridge has internet access
 
     def to_dict(self) -> dict:
         return {
@@ -76,6 +77,7 @@ class BridgeProfile:
             "proxy_url": self.proxy_url,
             "ssh_user": self.ssh_user,
             "ssh_port": self.ssh_port,
+            "has_internet": self.has_internet,
         }
 
     @classmethod
@@ -85,6 +87,7 @@ class BridgeProfile:
             proxy_url=data["proxy_url"],
             ssh_user=data.get("ssh_user", DEFAULT_SSH_USER),
             ssh_port=data.get("ssh_port", DEFAULT_SSH_PORT),
+            has_internet=data.get("has_internet", True),  # Default True for backward compat
         )
 
 
@@ -137,6 +140,26 @@ class TunnelConfig:
     def list_bridges(self) -> list[BridgeProfile]:
         """List all bridge profiles."""
         return list(self.bridges.values())
+
+    def get_bridge_with_internet(self) -> Optional[BridgeProfile]:
+        """Get a bridge with internet access.
+
+        Prefers the default bridge if it has internet access.
+        Otherwise returns the first bridge with internet access.
+
+        Returns:
+            BridgeProfile with internet, or None if no such bridge exists
+        """
+        # Prefer default bridge if it has internet
+        if self.default_bridge:
+            default = self.bridges.get(self.default_bridge)
+            if default and default.has_internet:
+                return default
+        # Otherwise, find any bridge with internet
+        for bridge in self.bridges.values():
+            if bridge.has_internet:
+                return bridge
+        return None
 
 
 def load_tunnel_config(config_dir: Optional[Path] = None) -> TunnelConfig:

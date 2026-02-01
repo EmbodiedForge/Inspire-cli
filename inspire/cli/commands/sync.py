@@ -33,6 +33,7 @@ from inspire.cli.utils.gitea import (
 from inspire.cli.utils.tunnel import (
     is_tunnel_available,
     sync_via_ssh,
+    load_tunnel_config,
     TunnelNotAvailableError,
 )
 from inspire.cli.formatters import json_formatter
@@ -234,9 +235,17 @@ def sync(
             raise
 
     # Try SSH tunnel first (much faster), fall back to Gitea Actions
-    if is_tunnel_available():
-        _sync_via_tunnel(ctx, config, branch, commit_sha, commit_msg, remote, force, timeout)
+    # For sync, we need a bridge with internet access (for git fetch)
+    tunnel_config = load_tunnel_config()
+    internet_bridge = tunnel_config.get_bridge_with_internet()
+
+    if internet_bridge and is_tunnel_available(bridge_name=internet_bridge.name, config=tunnel_config):
+        _sync_via_tunnel(ctx, config, branch, commit_sha, commit_msg, remote, force, timeout, internet_bridge.name, tunnel_config)
     else:
+        # Fall back to Gitea Actions
+        if not ctx.json_output and tunnel_config.bridges and not internet_bridge:
+            click.echo("Warning: No bridge with internet access configured.", err=True)
+            click.echo("Falling back to Gitea Actions for sync.", err=True)
         _sync_via_gitea(ctx, config, branch, commit_sha, commit_msg, remote, force, wait, timeout)
 
     sys.exit(EXIT_SUCCESS)
@@ -251,10 +260,16 @@ def _sync_via_tunnel(
     remote: str,
     force: bool,
     timeout: int,
+    bridge_name: str = None,
+    tunnel_config = None,
 ) -> None:
     """Sync code via SSH tunnel (fast path)."""
+    from inspire.cli.utils.tunnel import TunnelConfig
     if not ctx.json_output:
-        click.echo("Syncing via SSH tunnel...")
+        if bridge_name:
+            click.echo(f"Syncing via SSH tunnel (bridge: {bridge_name})...")
+        else:
+            click.echo("Syncing via SSH tunnel...")
 
     try:
         result = sync_via_ssh(
@@ -262,6 +277,8 @@ def _sync_via_tunnel(
             branch=branch,
             commit_sha=commit_sha,
             force=force,
+            bridge_name=bridge_name,
+            config=tunnel_config,
             timeout=timeout,
         )
 

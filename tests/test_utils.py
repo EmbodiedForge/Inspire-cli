@@ -459,6 +459,41 @@ class TestBridgeProfile:
         assert profile.name == "test-bridge"
         assert profile.ssh_user == "root"  # default
         assert profile.ssh_port == 22222   # default
+        assert profile.has_internet is True  # default
+
+    def test_has_internet_field(self) -> None:
+        """Test has_internet field in BridgeProfile."""
+        profile_with_internet = BridgeProfile(
+            name="bridge1",
+            proxy_url="https://proxy.example.com",
+            has_internet=True,
+        )
+        profile_without_internet = BridgeProfile(
+            name="bridge2",
+            proxy_url="https://proxy.example.com",
+            has_internet=False,
+        )
+
+        # Test to_dict includes has_internet
+        assert profile_with_internet.to_dict()["has_internet"] is True
+        assert profile_without_internet.to_dict()["has_internet"] is False
+
+        # Test from_dict with has_internet
+        d = {
+            "name": "test",
+            "proxy_url": "https://proxy.example.com",
+            "has_internet": False,
+        }
+        profile = BridgeProfile.from_dict(d)
+        assert profile.has_internet is False
+
+        # Test backward compatibility - missing has_internet defaults to True
+        d_legacy = {
+            "name": "legacy",
+            "proxy_url": "https://proxy.example.com",
+        }
+        profile_legacy = BridgeProfile.from_dict(d_legacy)
+        assert profile_legacy.has_internet is True
 
 
 class TestTunnelConfig:
@@ -533,6 +568,49 @@ class TestTunnelConfig:
         assert len(bridges) == 2
         names = {b.name for b in bridges}
         assert names == {"bridge1", "bridge2"}
+
+    def test_get_bridge_with_internet_prefers_default(self) -> None:
+        """Test get_bridge_with_internet prefers the default bridge."""
+        config = TunnelConfig()
+        # Add bridge1 as default (first added)
+        config.add_bridge(BridgeProfile(name="bridge1", proxy_url="https://p1.example.com", has_internet=True))
+        config.add_bridge(BridgeProfile(name="bridge2", proxy_url="https://p2.example.com", has_internet=True))
+
+        result = config.get_bridge_with_internet()
+
+        assert result is not None
+        assert result.name == "bridge1"  # Default bridge
+
+    def test_get_bridge_with_internet_skips_no_internet_default(self) -> None:
+        """Test get_bridge_with_internet skips default if it has no internet."""
+        config = TunnelConfig()
+        config.add_bridge(BridgeProfile(name="gpu-bridge", proxy_url="https://gpu.example.com", has_internet=False))
+        config.add_bridge(BridgeProfile(name="cpu-bridge", proxy_url="https://cpu.example.com", has_internet=True))
+        # gpu-bridge is default (first added)
+        assert config.default_bridge == "gpu-bridge"
+
+        result = config.get_bridge_with_internet()
+
+        assert result is not None
+        assert result.name == "cpu-bridge"  # Falls back to bridge with internet
+
+    def test_get_bridge_with_internet_returns_none_when_all_no_internet(self) -> None:
+        """Test get_bridge_with_internet returns None when no bridge has internet."""
+        config = TunnelConfig()
+        config.add_bridge(BridgeProfile(name="bridge1", proxy_url="https://p1.example.com", has_internet=False))
+        config.add_bridge(BridgeProfile(name="bridge2", proxy_url="https://p2.example.com", has_internet=False))
+
+        result = config.get_bridge_with_internet()
+
+        assert result is None
+
+    def test_get_bridge_with_internet_empty_config(self) -> None:
+        """Test get_bridge_with_internet returns None for empty config."""
+        config = TunnelConfig()
+
+        result = config.get_bridge_with_internet()
+
+        assert result is None
 
 
 class TestTunnelConfigPersistence:
