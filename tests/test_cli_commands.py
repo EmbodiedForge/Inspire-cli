@@ -17,15 +17,11 @@ from inspire.cli.context import (
     EXIT_JOB_NOT_FOUND,
     EXIT_VALIDATION_ERROR,
 )
-import sys
 
 from inspire.cli.utils import config as config_module
 from inspire.cli.utils import auth as auth_module
 from inspire.cli.utils import browser_api as browser_api_module
 from inspire.cli.utils import web_session as web_session_module
-# Import the module (not the click Group)
-import inspire.cli.commands.job
-job_cmd_module = sys.modules['inspire.cli.commands.job']
 from inspire.cli.utils.auth import AuthenticationError
 from inspire.cli.utils.config import ConfigError
 from inspire.cli.utils.job_cache import JobCache
@@ -166,12 +162,6 @@ def patch_config_and_auth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, inclu
         "get_web_session",
         lambda: FakeWebSession(),
     )
-    # Also patch in the job module where it's imported directly
-    monkeypatch.setattr(
-        job_cmd_module,
-        "get_web_session",
-        lambda: FakeWebSession(),
-    )
 
     test_project = browser_api_module.ProjectInfo(
         project_id="project-test-123",
@@ -186,21 +176,9 @@ def patch_config_and_auth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, inclu
         "list_projects",
         lambda workspace_id=None, session=None: [test_project],
     )
-    # Also patch in the job module
-    monkeypatch.setattr(
-        job_cmd_module,
-        "list_projects",
-        lambda workspace_id=None, session=None: [test_project],
-    )
 
     monkeypatch.setattr(
         browser_api_module,
-        "select_project",
-        lambda projects, requested=None: (test_project, None),
-    )
-    # Also patch in the job module
-    monkeypatch.setattr(
-        job_cmd_module,
         "select_project",
         lambda projects, requested=None: (test_project, None),
     )
@@ -359,27 +337,27 @@ def test_job_create_requires_target_dir(monkeypatch: pytest.MonkeyPatch):
 
 def test_wrap_in_bash():
     """Test the bash wrapper helper function."""
-    from inspire.cli.commands.job import _wrap_in_bash
+    from inspire.cli.utils.job_submit import wrap_in_bash
 
     # Basic wrapping
-    assert _wrap_in_bash("python train.py") == "bash -c 'python train.py'"
+    assert wrap_in_bash("python train.py") == "bash -c 'python train.py'"
 
     # Source command (the main use case)
-    result = _wrap_in_bash("source .env && python train.py")
+    result = wrap_in_bash("source .env && python train.py")
     assert result == "bash -c 'source .env && python train.py'"
 
     # Escape single quotes
-    result = _wrap_in_bash("echo 'hello'")
+    result = wrap_in_bash("echo 'hello'")
     assert result == "bash -c 'echo '\\''hello'\\'''"
 
     # Skip if already wrapped
-    assert _wrap_in_bash("bash -c 'foo'") == "bash -c 'foo'"
-    assert _wrap_in_bash("sh -c 'foo'") == "sh -c 'foo'"
-    assert _wrap_in_bash("/bin/bash -c 'foo'") == "/bin/bash -c 'foo'"
-    assert _wrap_in_bash("/bin/sh -c 'foo'") == "/bin/sh -c 'foo'"
+    assert wrap_in_bash("bash -c 'foo'") == "bash -c 'foo'"
+    assert wrap_in_bash("sh -c 'foo'") == "sh -c 'foo'"
+    assert wrap_in_bash("/bin/bash -c 'foo'") == "/bin/bash -c 'foo'"
+    assert wrap_in_bash("/bin/sh -c 'foo'") == "/bin/sh -c 'foo'"
 
     # Whitespace handling
-    assert _wrap_in_bash("  bash -c 'foo'  ") == "  bash -c 'foo'  "
+    assert wrap_in_bash("  bash -c 'foo'  ") == "  bash -c 'foo'  "
 
 
 def test_job_status_updates_cache_and_formats(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):

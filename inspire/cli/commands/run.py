@@ -24,8 +24,9 @@ from inspire.cli.context import (
     EXIT_AUTH_ERROR,
     EXIT_VALIDATION_ERROR,
 )
-from inspire.cli.utils.config import Config, ConfigError, build_env_exports
+from inspire.cli.utils.config import Config, ConfigError
 from inspire.cli.utils.auth import AuthManager, AuthenticationError
+from inspire.cli.utils import job_submit
 from inspire.cli.utils.browser_api import find_best_compute_group_accurate
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.workspace import select_workspace_id
@@ -305,26 +306,28 @@ def run(
         # Brief delay before job creation to avoid API rate limits
         time.sleep(0.5)
 
-        # Import job creation logic
-        from inspire.cli.commands.job import _wrap_in_bash
-        from inspire.cli.utils.job_cache import JobCache
+        try:
+            selected_project, fallback_msg = job_submit.select_project_for_workspace(
+                config,
+                workspace_id=selected_workspace_id,
+                requested=None,
+            )
+        except ValueError as e:
+            error_type = "QuotaExceeded" if "over quota" in str(e) else "ValidationError"
+            _handle_error(ctx, error_type, str(e), EXIT_CONFIG_ERROR)
+            return
+        project_id = selected_project.project_id
 
-        # Wrap command in bash
-        command = _wrap_in_bash(command)
+        if not ctx.json_output:
+            if fallback_msg:
+                click.echo(fallback_msg)
+            click.echo(
+                f"Using project: {selected_project.name}{selected_project.get_quota_status()}"
+            )
 
-        # Prepend remote_env exports to command
-        env_exports = build_env_exports(config.remote_env)
-
-        # Set up log path
-        log_path = None
-        if config.target_dir:
-            ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-            log_dir = os.path.join(config.target_dir, ".inspire")
-            log_filename = f"training_master_{ts}.log"
-            log_path = os.path.join(log_dir, log_filename)
-            final_command = f'{env_exports}mkdir -p "{log_dir}" && ( {command} ) > "{log_path}" 2>&1'
-        else:
-            final_command = f"{env_exports}{command}" if env_exports else command
+        # Wrap command in bash and apply optional remote logging.
+        command = job_submit.wrap_in_bash(command)
+        final_command, log_path = job_submit.build_remote_logged_command(config, command=command)
 
         # Convert hours to milliseconds
         max_time_ms = str(int(max_time * 3600 * 1000))
@@ -336,7 +339,7 @@ def run(
             resource=resource_str,
             framework="pytorch",
             prefer_location=location,
-            project_id=config.job_project_id,
+            project_id=project_id,
             workspace_id=selected_workspace_id,
             image=image,
             task_priority=priority,
@@ -363,13 +366,12 @@ def run(
             sys.exit(EXIT_SUCCESS)
 
         # Save to cache
-        cache = JobCache(config.get_expanded_cache_path())
-        cache.add_job(
+        job_submit.cache_created_job(
+            config,
             job_id=job_id,
             name=name,
             resource=resource_str,
             command=command,
-            status="PENDING",
             log_path=log_path,
         )
 

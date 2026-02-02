@@ -33,8 +33,9 @@ from inspire.cli.context import (
     EXIT_JOB_NOT_FOUND,
 )
 from inspire.api import _validate_job_id_format
-from inspire.cli.utils.config import Config, ConfigError, build_env_exports
+from inspire.cli.utils.config import Config, ConfigError
 from inspire.cli.utils.auth import AuthManager, AuthenticationError
+from inspire.cli.utils import job_submit
 from inspire.cli.utils.job_cache import JobCache
 from inspire.cli.utils.gitea import (
     GiteaAuthError,
@@ -47,8 +48,7 @@ from inspire.cli.utils.tunnel import (
     run_ssh_command,
     TunnelNotAvailableError,
 )
-from inspire.cli.utils.browser_api import find_best_compute_group_accurate, list_projects, select_project
-from inspire.cli.utils.web_session import get_web_session
+from inspire.cli.utils.browser_api import find_best_compute_group_accurate
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.workspace import select_workspace_id
 from inspire.cli.formatters import json_formatter, human_formatter
@@ -58,24 +58,6 @@ from inspire.cli.formatters import json_formatter, human_formatter
 def job():
     """Manage training jobs on the Inspire platform."""
     pass
-
-
-def _wrap_in_bash(command: str) -> str:
-    """Wrap command in bash -c if not already wrapped.
-
-    The Inspire platform's remote shell is sh (dash), which doesn't support
-    bash features like 'source'. This wraps all commands in bash to ensure
-    consistent behavior.
-    """
-    stripped = command.strip()
-
-    # Skip if already wrapped
-    if stripped.startswith(("bash -c ", "sh -c ", "/bin/bash -c ", "/bin/sh -c ")):
-        return command
-
-    # Escape single quotes: ' -> '\''
-    escaped = command.replace("'", "'\\''")
-    return f"bash -c '{escaped}'"
 
 
 @job.command("create")
@@ -229,53 +211,28 @@ def create(
                         f"Auto-selected: {selected_group_name}, {best.available_gpus} GPUs available{preempt_note}"
                     )
 
-        # Get web session for browser API calls (project listing)
+        # Select project (with quota-aware fallback)
         try:
-            session = get_web_session()
-        except ValueError as e:
-            _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
-            return
-
-        # Select project
-        try:
-            projects = list_projects(workspace_id=selected_workspace_id, session=session)
-            if not projects:
-                _handle_error(ctx, "ConfigError", "No projects available", EXIT_CONFIG_ERROR)
-                return
-
-            selected, fallback_msg = select_project(projects, project)
-            selected_project_id = selected.project_id
-
-            if not ctx.json_output:
-                if fallback_msg:
-                    click.echo(fallback_msg)
-                click.echo(f"Using project: {selected.name}{selected.get_quota_status()}")
+            selected, fallback_msg = job_submit.select_project_for_workspace(
+                config,
+                workspace_id=selected_workspace_id,
+                requested=project,
+            )
         except ValueError as e:
             error_type = "QuotaExceeded" if "over quota" in str(e) else "ValidationError"
             _handle_error(ctx, error_type, str(e), EXIT_CONFIG_ERROR)
             return
-        except Exception as e:
-            _handle_error(ctx, "APIError", f"Error fetching projects: {e}", EXIT_API_ERROR)
-            return
 
-        # Wrap in bash for consistent shell behavior
-        command = _wrap_in_bash(command)
+        selected_project_id = selected.project_id
 
-        # Prepend remote_env exports to command
-        env_exports = build_env_exports(config.remote_env)
+        if not ctx.json_output:
+            if fallback_msg:
+                click.echo(fallback_msg)
+            click.echo(f"Using project: {selected.name}{selected.get_quota_status()}")
 
-        # If INSPIRE_TARGET_DIR is configured, wrap the command so:
-        # 1. We cd to the target directory first (where the code lives)
-        # 2. stdout/stderr land in a single master log file under
-        #    ${INSPIRE_TARGET_DIR}/.inspire/.
-        final_command = f"{env_exports}{command}" if env_exports else command
-        log_path = None
-        if config.target_dir:
-            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-            log_dir = os.path.join(config.target_dir, ".inspire")
-            log_filename = f"training_master_{timestamp}.log"
-            log_path = os.path.join(log_dir, log_filename)
-            final_command = f'{env_exports}mkdir -p "{log_dir}" && ( cd "{config.target_dir}" && {command} ) > "{log_path}" 2>&1'
+        # Wrap in bash for consistent shell behavior and apply optional remote logging.
+        command = job_submit.wrap_in_bash(command)
+        final_command, log_path = job_submit.build_remote_logged_command(config, command=command)
 
         # Convert hours to milliseconds
         max_time_ms = str(int(max_time * 3600 * 1000))
@@ -300,14 +257,12 @@ def create(
         job_id = data.get("job_id")
 
         if job_id:
-            # Save to local cache
-            cache = JobCache(config.get_expanded_cache_path())
-            cache.add_job(
+            job_submit.cache_created_job(
+                config,
                 job_id=job_id,
                 name=name,
                 resource=resource,
                 command=command,
-                status="PENDING",
                 log_path=log_path,
             )
 
