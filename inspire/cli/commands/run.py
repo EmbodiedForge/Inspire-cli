@@ -27,7 +27,7 @@ from inspire.cli.context import (
 from inspire.cli.utils.config import Config, ConfigError
 from inspire.cli.utils.auth import AuthManager, AuthenticationError
 from inspire.cli.utils import job_submit
-from inspire.cli.utils.browser_api import find_best_compute_group_accurate
+from inspire.cli.utils import browser_api as browser_api_module
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.workspace import select_workspace_id
 from inspire.cli.formatters import json_formatter, human_formatter
@@ -234,7 +234,7 @@ def run(
             if not ctx.json_output:
                 click.echo("Checking GPU availability...")
 
-            best = find_best_compute_group_accurate(
+            best = browser_api_module.find_best_compute_group_accurate(
                 gpu_type=gpu_type,
                 min_gpus=gpus,
                 include_preemptible=True,  # Count low-priority GPUs as available

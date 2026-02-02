@@ -25,6 +25,7 @@ from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.formatters import json_formatter, human_formatter
 from inspire.compute_groups import load_compute_groups_from_config, compute_group_name_map
 from inspire.cli.utils.config import Config
+from inspire.cli.utils import browser_api as browser_api_module
 
 
 @click.group()
@@ -133,16 +134,11 @@ def list_nodes(ctx: Context, group: str):
         inspire resources nodes --group H200
     """
     try:
-        from inspire.cli.utils.browser_api import (
-            get_full_free_node_counts,
-            get_accurate_gpu_availability,
-        )
-
         group_ids = list(KNOWN_COMPUTE_GROUPS.keys())
-        counts = get_full_free_node_counts(group_ids, gpu_per_node=8)
+        counts = browser_api_module.get_full_free_node_counts(group_ids, gpu_per_node=8)
 
         # Get accurate GPU availability for matching free GPU counts
-        accurate_availability = get_accurate_gpu_availability()
+        accurate_availability = browser_api_module.get_accurate_gpu_availability()
         accurate_map = {a.group_id: a.available_gpus for a in accurate_availability}
 
         # Fill missing names from KNOWN_COMPUTE_GROUPS and apply filter
@@ -223,8 +219,6 @@ def _list_accurate_resources(ctx: Context, show_all: bool) -> None:
     GPU usage statistics including used GPUs, available GPUs, and low-priority usage.
     """
     try:
-        from inspire.cli.utils.browser_api import get_accurate_gpu_availability
-
         # Load known compute groups from config
         known_groups = KNOWN_COMPUTE_GROUPS
         if not show_all:
@@ -237,7 +231,7 @@ def _list_accurate_resources(ctx: Context, show_all: bool) -> None:
                 pass  # Fall back to global KNOWN_COMPUTE_GROUPS
 
         # Get accurate GPU stats
-        availability = get_accurate_gpu_availability()
+        availability = browser_api_module.get_accurate_gpu_availability()
 
         if not show_all:
             availability = [a for a in availability if a.group_id in known_groups]
@@ -517,9 +511,7 @@ def _watch_resources(
                         progress_callback=on_progress,
                     )
                 else:
-                    from inspire.cli.utils.browser_api import get_accurate_gpu_availability
-
-                    availability = get_accurate_gpu_availability()
+                    availability = browser_api_module.get_accurate_gpu_availability()
                     # Load known compute groups from config
                     known_groups = KNOWN_COMPUTE_GROUPS
                     if not show_all:

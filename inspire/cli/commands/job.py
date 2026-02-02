@@ -48,7 +48,7 @@ from inspire.cli.utils.tunnel import (
     run_ssh_command,
     TunnelNotAvailableError,
 )
-from inspire.cli.utils.browser_api import find_best_compute_group_accurate
+from inspire.cli.utils import browser_api as browser_api_module
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.workspace import select_workspace_id
 from inspire.cli.formatters import json_formatter, human_formatter
@@ -163,7 +163,7 @@ def create(
         # Auto-select location based on GPU availability (if requested)
         if auto and not location:
             # Use accurate browser API for resource selection
-            best = find_best_compute_group_accurate(
+            best = browser_api_module.find_best_compute_group_accurate(
                 gpu_type=requested_gpu_type.value,
                 min_gpus=requested_gpu_count,
                 include_preemptible=True,  # Count low-priority GPUs as available

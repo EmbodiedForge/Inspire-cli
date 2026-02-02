@@ -28,8 +28,9 @@ from inspire.cli.context import (
 )
 from inspire.cli.formatters import json_formatter
 from inspire.cli.utils.config import Config, ConfigError
+from inspire.cli.utils import browser_api as browser_api_module
 from inspire.cli.utils.workspace import select_workspace_id
-from inspire.cli.utils.web_session import get_web_session
+from inspire.cli.utils import web_session as web_session_module
 
 
 def _get_base_url() -> str:
@@ -92,13 +93,11 @@ def list_notebooks(
         inspire notebook list --workspace-id ws-xxx
         inspire notebook list --json
     """
-    from inspire.cli.utils.web_session import get_web_session, request_json
-
     json_output = _resolve_json_output(ctx, json_output)
 
     # Get web session for authentication
     try:
-        session = get_web_session()
+        session = web_session_module.get_web_session()
     except ValueError as e:
         if json_output:
             click.echo(
@@ -187,7 +186,7 @@ def list_notebooks(
     user_ids: list[str] = []
     if not show_all:
         try:
-            user_data = request_json(
+            user_data = web_session_module.request_json(
                 session,
                 "GET",
                 f"{base_url}/api/v1/user/detail",
@@ -215,7 +214,7 @@ def list_notebooks(
     }
 
     try:
-        data = request_json(
+        data = web_session_module.request_json(
             session,
             "POST",
             f"{base_url}/api/v1/notebook/list",
@@ -318,12 +317,10 @@ def notebook_status(
     Examples:
         inspire notebook status notebook-abc-123
     """
-    from inspire.cli.utils.web_session import get_web_session, request_json
-
     json_output = _resolve_json_output(ctx, json_output)
 
     try:
-        session = get_web_session()
+        session = web_session_module.get_web_session()
     except ValueError as e:
         if json_output:
             click.echo(
@@ -342,7 +339,7 @@ def notebook_status(
     base_url = _get_base_url()
 
     try:
-        data = request_json(
+        data = web_session_module.request_json(
             session,
             "GET",
             f"{base_url}/api/v1/notebook/{instance_id}",
@@ -652,25 +649,13 @@ def create_notebook_cmd(
         inspire notebook create --no-keepalive      # Disable GPU keepalive script
         inspire notebook create --no-keepalive --no-wait  # Old behavior (return immediately)
     """
-    from inspire.cli.utils.web_session import get_web_session
-    from inspire.cli.utils.browser_api import (
-        find_best_compute_group_accurate,
-        list_projects,
-        select_project,
-        list_images,
-        list_notebook_compute_groups,
-        get_notebook_schedule,
-        create_notebook,
-        wait_for_notebook_running,
-        run_command_in_notebook,
-    )
     from inspire.cli.utils.keepalive import get_keepalive_command
 
     json_output = _resolve_json_output(ctx, json_output)
 
     # Get web session for authentication
     try:
-        session = get_web_session()
+        session = web_session_module.get_web_session()
     except ValueError as e:
         if json_output:
             click.echo(
@@ -791,7 +776,7 @@ def create_notebook_cmd(
         filter_gpu_type = None if gpu_pattern == "GPU" else gpu_pattern
 
         try:
-            best = find_best_compute_group_accurate(
+            best = browser_api_module.find_best_compute_group_accurate(
                 gpu_type=filter_gpu_type,
                 min_gpus=gpu_count,
                 include_preemptible=True,
@@ -849,7 +834,7 @@ def create_notebook_cmd(
 
     # 1. Get compute groups and find matching one
     try:
-        compute_groups = list_notebook_compute_groups(
+        compute_groups = browser_api_module.list_notebook_compute_groups(
             workspace_id=workspace_id,
             session=session,
         )
@@ -951,7 +936,7 @@ def create_notebook_cmd(
 
     # 2. Get notebook schedule to find quota matching GPU type and count
     try:
-        schedule = get_notebook_schedule(workspace_id=workspace_id, session=session)
+        schedule = browser_api_module.get_notebook_schedule(workspace_id=workspace_id, session=session)
     except Exception as e:
         if json_output:
             click.echo(
@@ -1049,7 +1034,7 @@ def create_notebook_cmd(
 
     # 3. Get projects
     try:
-        projects = list_projects(workspace_id=workspace_id, session=session)
+        projects = browser_api_module.list_projects(workspace_id=workspace_id, session=session)
     except Exception as e:
         if json_output:
             click.echo(
@@ -1082,7 +1067,7 @@ def create_notebook_cmd(
 
     # Select project
     try:
-        selected_project, fallback_msg = select_project(projects, project)
+        selected_project, fallback_msg = browser_api_module.select_project(projects, project)
 
         if not json_output:
             if fallback_msg:
@@ -1124,7 +1109,7 @@ def create_notebook_cmd(
 
     # 4. Get images
     try:
-        images = list_images(workspace_id=workspace_id, session=session)
+        images = browser_api_module.list_images(workspace_id=workspace_id, session=session)
     except Exception as e:
         if json_output:
             click.echo(
@@ -1232,7 +1217,7 @@ def create_notebook_cmd(
 
     # 6. Create the notebook
     try:
-        result = create_notebook(
+        result = browser_api_module.create_notebook(
             name=name,
             project_id=selected_project.project_id,
             project_name=selected_project.name,
@@ -1275,7 +1260,9 @@ def create_notebook_cmd(
             if not json_output:
                 click.echo("Waiting for notebook to reach RUNNING status...")
             try:
-                wait_for_notebook_running(notebook_id=notebook_id, session=session, timeout=600)
+                browser_api_module.wait_for_notebook_running(
+                    notebook_id=notebook_id, session=session, timeout=600
+                )
                 if not json_output:
                     click.echo("Notebook is now RUNNING.")
             except TimeoutError as e:
@@ -1291,7 +1278,7 @@ def create_notebook_cmd(
             if not json_output:
                 click.echo("Starting GPU keepalive script...")
             try:
-                run_command_in_notebook(
+                browser_api_module.run_command_in_notebook(
                     notebook_id=notebook_id,
                     command=get_keepalive_command(),
                     session=session,
@@ -1338,13 +1325,10 @@ def stop_notebook_cmd(
     Examples:
         inspire notebook stop abc123-def456
     """
-    from inspire.cli.utils.web_session import get_web_session
-    from inspire.cli.utils.browser_api import stop_notebook
-
     json_output = _resolve_json_output(ctx, json_output)
 
     try:
-        session = get_web_session()
+        session = web_session_module.get_web_session()
     except ValueError as e:
         if json_output:
             click.echo(
@@ -1362,7 +1346,7 @@ def stop_notebook_cmd(
         return
 
     try:
-        result = stop_notebook(notebook_id=notebook_id, session=session)
+        result = browser_api_module.stop_notebook(notebook_id=notebook_id, session=session)
 
         if json_output:
             click.echo(
@@ -1417,13 +1401,10 @@ def start_notebook_cmd(
         inspire notebook start abc123-def456
         inspire notebook start abc123-def456 --wait
     """
-    from inspire.cli.utils.web_session import get_web_session
-    from inspire.cli.utils.browser_api import start_notebook, wait_for_notebook_running
-
     json_output = _resolve_json_output(ctx, json_output)
 
     try:
-        session = get_web_session()
+        session = web_session_module.get_web_session()
     except ValueError as e:
         if json_output:
             click.echo(
@@ -1441,7 +1422,7 @@ def start_notebook_cmd(
         return
 
     try:
-        result = start_notebook(notebook_id=notebook_id, session=session)
+        result = browser_api_module.start_notebook(notebook_id=notebook_id, session=session)
 
         if not json_output:
             click.echo(f"Notebook '{notebook_id}' is being started.")
@@ -1450,7 +1431,7 @@ def start_notebook_cmd(
             if not json_output:
                 click.echo("Waiting for notebook to reach RUNNING status...")
             try:
-                wait_for_notebook_running(notebook_id=notebook_id, session=session)
+                browser_api_module.wait_for_notebook_running(notebook_id=notebook_id, session=session)
                 if not json_output:
                     click.echo("Notebook is now RUNNING.")
             except TimeoutError as e:
@@ -1552,13 +1533,6 @@ def ssh_notebook_cmd(
     setup_timeout: int,
 ) -> None:
     """SSH into a running notebook instance via rtunnel ProxyCommand."""
-
-    from inspire.cli.utils.web_session import get_web_session
-    from inspire.cli.utils.browser_api import (
-        get_notebook_detail,
-        wait_for_notebook_running,
-        setup_notebook_rtunnel,
-    )
     from inspire.cli.utils.tunnel import (
         BridgeProfile,
         TunnelConfig,
@@ -1569,7 +1543,7 @@ def ssh_notebook_cmd(
     )
 
     try:
-        session = get_web_session()
+        session = web_session_module.get_web_session()
     except ValueError as e:
         click.echo(f"Error: {e}", err=True)
         click.echo(
@@ -1584,9 +1558,13 @@ def ssh_notebook_cmd(
     notebook_detail = None
     try:
         if wait:
-            notebook_detail = wait_for_notebook_running(notebook_id=notebook_id, session=session)
+            notebook_detail = browser_api_module.wait_for_notebook_running(
+                notebook_id=notebook_id, session=session
+            )
         else:
-            notebook_detail = get_notebook_detail(notebook_id=notebook_id, session=session)
+            notebook_detail = browser_api_module.get_notebook_detail(
+                notebook_id=notebook_id, session=session
+            )
     except TimeoutError as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(EXIT_API_ERROR)
@@ -1646,7 +1624,7 @@ def ssh_notebook_cmd(
     if rtunnel_bin:
         os.environ["INSPIRE_RTUNNEL_BIN"] = rtunnel_bin
     try:
-        proxy_url = setup_notebook_rtunnel(
+        proxy_url = browser_api_module.setup_notebook_rtunnel(
             notebook_id=notebook_id,
             port=port,
             ssh_port=ssh_port,
