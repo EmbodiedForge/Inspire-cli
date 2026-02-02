@@ -29,6 +29,7 @@ from .web_session import (
     SessionExpiredError,
     clear_session_cache,
     request_json,
+    build_requests_session,
 )
 
 
@@ -683,10 +684,40 @@ def get_full_free_node_counts(
 
 @dataclass
 class ProjectInfo:
-    """Project information."""
+    """Project information with quota details."""
     project_id: str
     name: str
     workspace_id: str
+    # Quota fields
+    budget: float = 0.0  # Total budget allocated
+    remain_budget: float = 0.0  # Remaining budget
+    member_remain_budget: float = 0.0  # Remaining budget for current user
+    member_remain_gpu_hours: float = 0.0  # Remaining GPU hours (negative = over quota)
+    gpu_limit: bool = False  # Whether GPU limits are enforced
+    member_gpu_limit: bool = False  # Whether member GPU limits are enforced
+    priority_level: str = ""  # Priority level (HIGH, NORMAL, etc.)
+    priority_name: str = ""  # Priority name (numeric string like "10", "4")
+
+    def has_quota(self) -> bool:
+        """Check if the project has available quota.
+
+        Returns True if:
+        - GPU limits are not enforced, OR
+        - Member has positive remaining GPU hours
+        """
+        # If limits aren't enforced, quota is available
+        if not self.gpu_limit and not self.member_gpu_limit:
+            return True
+        # Check if member has positive GPU hours remaining
+        return self.member_remain_gpu_hours >= 0
+
+    def get_quota_status(self) -> str:
+        """Get formatted quota status string for display."""
+        if not self.has_quota():
+            return " (over quota)"
+        if self.member_gpu_limit:
+            return f" ({self.member_remain_gpu_hours:.0f} GPU-hours remaining)"
+        return ""
 
 
 @dataclass
@@ -740,14 +771,88 @@ def list_projects(
         raise ValueError(f"API error: {data.get('message')}")
 
     items = data.get("data", {}).get("items", [])
+
+    def _parse_float(value) -> float:
+        """Parse a numeric value that may be string or number."""
+        if value is None or value == "":
+            return 0.0
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return 0.0
+
     return [
         ProjectInfo(
             project_id=item.get("id", ""),
             name=item.get("name", ""),
             workspace_id=item.get("workspace_id", workspace_id),
+            budget=_parse_float(item.get("budget")),
+            remain_budget=_parse_float(item.get("remain_budget")),
+            member_remain_budget=_parse_float(item.get("member_remain_budget")),
+            member_remain_gpu_hours=_parse_float(item.get("member_remain_gpu_hours")),
+            gpu_limit=bool(item.get("gpu_limit", False)),
+            member_gpu_limit=bool(item.get("member_gpu_limit", False)),
+            priority_level=item.get("priority_level", ""),
+            priority_name=item.get("priority_name", ""),
         )
         for item in items
     ]
+
+
+def select_project(
+    projects: list[ProjectInfo],
+    requested: Optional[str] = None,
+) -> tuple[ProjectInfo, Optional[str]]:
+    """Select a project, with auto-fallback if over quota.
+
+    Args:
+        projects: List of available projects.
+        requested: Optional project name or ID to use.
+
+    Returns:
+        Tuple of (selected_project, fallback_message).
+        fallback_message is None if no fallback was needed, or a string
+        like "Project 'X' is over quota, selecting alternative..." if fallback occurred.
+
+    Raises:
+        ValueError: If requested project not found.
+        ValueError: If all projects are over quota.
+    """
+    def sort_key(p: ProjectInfo) -> tuple:
+        has_quota = p.has_quota()
+        try:
+            priority = int(p.priority_name) if p.priority_name else 0
+        except ValueError:
+            priority = 0
+        return (not has_quota, -priority, p.name)
+
+    if requested:
+        # Find by name or ID
+        target = None
+        for p in projects:
+            if p.name.lower() == requested.lower() or p.project_id == requested:
+                target = p
+                break
+
+        if not target:
+            raise ValueError(f"Project '{requested}' not found")
+
+        if target.has_quota():
+            return (target, None)
+
+        # Fallback needed
+        fallback_msg = f"Project '{target.name}' is over quota, selecting alternative..."
+        sorted_projects = sorted(projects, key=sort_key)
+        fallback = sorted_projects[0]
+
+        if not fallback.has_quota():
+            raise ValueError("All projects are over quota")
+
+        return (fallback, fallback_msg)
+
+    # Auto-select best project
+    sorted_projects = sorted(projects, key=sort_key)
+    return (sorted_projects[0], None)
 
 
 def list_images(
@@ -1571,6 +1676,227 @@ def _setup_notebook_rtunnel_sync(
                 f"  6. Screenshot saved to /tmp/notebook_terminal_debug.png"
             )
             raise ValueError(error_msg)
+
+        finally:
+            try:
+                context.close()
+            finally:
+                browser.close()
+
+
+def run_command_in_notebook(
+    notebook_id: str,
+    command: str,
+    session: Optional[WebSession] = None,
+    headless: bool = True,
+    timeout: int = 60,
+) -> None:
+    """Run a command in a notebook's Jupyter terminal.
+
+    This uses browser automation to open JupyterLab, open a terminal,
+    and type the command.
+
+    Args:
+        notebook_id: Notebook instance ID (UUID).
+        command: Shell command to run in the terminal.
+        session: Optional pre-existing web session.
+        headless: Run browser headlessly (default: True).
+        timeout: Timeout in seconds for the operation.
+
+    Raises:
+        ValueError: If terminal cannot be opened or command fails.
+    """
+    if _in_asyncio_loop():
+        return _run_in_thread(
+            _run_command_in_notebook_sync,
+            notebook_id=notebook_id,
+            command=command,
+            session=session,
+            headless=headless,
+            timeout=timeout,
+        )
+    return _run_command_in_notebook_sync(
+        notebook_id=notebook_id,
+        command=command,
+        session=session,
+        headless=headless,
+        timeout=timeout,
+    )
+
+
+def _run_command_in_notebook_sync(
+    notebook_id: str,
+    command: str,
+    session: Optional[WebSession] = None,
+    headless: bool = True,
+    timeout: int = 60,
+) -> None:
+    """Sync implementation for run_command_in_notebook."""
+    from playwright.sync_api import sync_playwright
+    import sys as _sys
+
+    if session is None:
+        session = get_web_session()
+
+    _sys.stderr.write(f"Running command in notebook terminal...\n")
+    _sys.stderr.flush()
+
+    with sync_playwright() as p:
+        browser = _launch_browser(p, headless=headless)
+        context = _new_context(browser, storage_state=session.storage_state)
+        page = context.new_page()
+
+        try:
+            page.goto(
+                f"{BASE_URL}/ide?notebook_id={notebook_id}",
+                timeout=60000,
+                wait_until="domcontentloaded",
+            )
+
+            # Find the embedded JupyterLab frame
+            start = time.time()
+            lab_frame = None
+            notebook_lab_pattern = _browser_api_path("/notebook/lab/")
+            while time.time() - start < 60:
+                for fr in page.frames:
+                    url = fr.url or ""
+                    if "notebook-inspire" in url and url.rstrip("/").endswith("/lab"):
+                        lab_frame = fr
+                        break
+                    if notebook_lab_pattern.lstrip("/") in url:
+                        lab_frame = fr
+                        break
+                if lab_frame:
+                    break
+                page.wait_for_timeout(500)
+
+            if lab_frame is None:
+                notebook_lab_prefix = _browser_api_path("/notebook/lab").rstrip("/")
+                direct_lab_url = f"{BASE_URL}{notebook_lab_prefix}/{notebook_id}/"
+                page.goto(
+                    direct_lab_url,
+                    timeout=60000,
+                    wait_until="domcontentloaded",
+                )
+                lab_frame = page
+
+            # Wait for JupyterLab UI to be ready
+            try:
+                lab_frame.locator("text=加载中").first.wait_for(state="hidden", timeout=180000)
+            except Exception:
+                pass
+
+            # Wait for launcher or menu
+            try:
+                lab_frame.locator("div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')").first.wait_for(
+                    state="visible",
+                    timeout=180000,
+                )
+            except Exception:
+                try:
+                    lab_frame.get_by_role("menuitem", name="File").first.wait_for(
+                        state="visible",
+                        timeout=180000,
+                    )
+                except Exception:
+                    lab_frame.get_by_role("menuitem", name="文件").first.wait_for(
+                        state="visible",
+                        timeout=180000,
+                    )
+
+            # Dismiss Jupyter news prompt if present
+            for label in ("No", "Yes", "否", "不接收", "取消"):
+                try:
+                    btn = lab_frame.get_by_role("button", name=label)
+                    if btn.count() > 0:
+                        btn.first.click(timeout=1000)
+                        break
+                except Exception:
+                    pass
+
+            # Open a terminal
+            terminal_opened = False
+
+            # Path A: Launcher card
+            terminal_card = lab_frame.locator("div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')")
+            try:
+                terminal_card.first.wait_for(state="visible", timeout=20000)
+                terminal_card.first.click(timeout=8000)
+                terminal_opened = True
+            except Exception:
+                terminal_opened = False
+
+            # Path B: Open Launcher then click Terminal
+            if not terminal_opened:
+                try:
+                    launcher_btn = lab_frame.locator(
+                        "button[title*='Launcher'], button[aria-label*='Launcher']"
+                    ).first
+                    if launcher_btn.count() > 0:
+                        launcher_btn.click(timeout=2000)
+                        page.wait_for_timeout(500)
+                    terminal_card = lab_frame.locator("div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')")
+                    terminal_card.first.wait_for(state="visible", timeout=20000)
+                    terminal_card.first.click(timeout=8000)
+                    terminal_opened = True
+                except Exception:
+                    terminal_opened = False
+
+            # Path C: File -> New -> Terminal
+            if not terminal_opened:
+                try:
+                    try:
+                        lab_frame.get_by_role("menuitem", name="File").first.click(timeout=3000)
+                        lab_frame.get_by_role("menuitem", name="New").first.hover(timeout=3000)
+                        lab_frame.get_by_role("menuitem", name="Terminal").first.click(timeout=5000)
+                    except Exception:
+                        lab_frame.get_by_role("menuitem", name="文件").first.click(timeout=3000)
+                        lab_frame.get_by_role("menuitem", name="新建").first.hover(timeout=3000)
+                        lab_frame.get_by_role("menuitem", name="终端").first.click(timeout=5000)
+                    terminal_opened = True
+                except Exception:
+                    terminal_opened = False
+
+            if not terminal_opened:
+                raise ValueError("Failed to open Jupyter terminal")
+
+            # Ensure terminal tab is active
+            try:
+                term_tab = lab_frame.locator("li.lm-TabBar-tab:has-text('Terminal'), li.lm-TabBar-tab:has-text('终端')").first
+                if term_tab.count() > 0:
+                    term_tab.click(timeout=2000)
+                    page.wait_for_timeout(250)
+            except Exception:
+                pass
+
+            # Focus terminal input
+            try:
+                term_focus = lab_frame.locator(
+                    "textarea.xterm-helper-textarea, .xterm, .jp-Terminal"
+                ).first
+                if term_focus.count() > 0:
+                    term_focus.click(timeout=2000)
+                    page.wait_for_timeout(250)
+            except Exception:
+                pass
+
+            # Make sure we are at a clean prompt
+            try:
+                page.keyboard.press("Control+C")
+                page.keyboard.press("Enter")
+                page.wait_for_timeout(100)
+            except Exception:
+                pass
+
+            # Type and execute the command
+            _sys.stderr.write(f"  Executing command...\n")
+            _sys.stderr.flush()
+            page.keyboard.type(command, delay=2)
+            page.keyboard.press("Enter")
+            page.wait_for_timeout(2000)
+
+            _sys.stderr.write(f"  Command sent successfully.\n")
+            _sys.stderr.flush()
 
         finally:
             try:

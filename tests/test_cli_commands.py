@@ -17,8 +17,15 @@ from inspire.cli.context import (
     EXIT_JOB_NOT_FOUND,
     EXIT_VALIDATION_ERROR,
 )
+import sys
+
 from inspire.cli.utils import config as config_module
 from inspire.cli.utils import auth as auth_module
+from inspire.cli.utils import browser_api as browser_api_module
+from inspire.cli.utils import web_session as web_session_module
+# Import the module (not the click Group)
+import inspire.cli.commands.job
+job_cmd_module = sys.modules['inspire.cli.commands.job']
 from inspire.cli.utils.auth import AuthenticationError
 from inspire.cli.utils.config import ConfigError
 from inspire.cli.utils.job_cache import JobCache
@@ -148,6 +155,55 @@ def patch_config_and_auth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, inclu
 
     monkeypatch.setattr(auth_module.AuthManager, "get_api", fake_get_api)
     auth_module.AuthManager.clear_cache()
+
+    # Mock browser API calls for project selection
+    class FakeWebSession:
+        workspace_id = "ws-test-workspace"
+        storage_state = {}
+
+    monkeypatch.setattr(
+        web_session_module,
+        "get_web_session",
+        lambda: FakeWebSession(),
+    )
+    # Also patch in the job module where it's imported directly
+    monkeypatch.setattr(
+        job_cmd_module,
+        "get_web_session",
+        lambda: FakeWebSession(),
+    )
+
+    test_project = browser_api_module.ProjectInfo(
+        project_id="project-test-123",
+        name="Test Project",
+        workspace_id="ws-test-workspace",
+        member_gpu_limit=True,
+        member_remain_gpu_hours=100.0,
+    )
+
+    monkeypatch.setattr(
+        browser_api_module,
+        "list_projects",
+        lambda workspace_id=None, session=None: [test_project],
+    )
+    # Also patch in the job module
+    monkeypatch.setattr(
+        job_cmd_module,
+        "list_projects",
+        lambda workspace_id=None, session=None: [test_project],
+    )
+
+    monkeypatch.setattr(
+        browser_api_module,
+        "select_project",
+        lambda projects, requested=None: (test_project, None),
+    )
+    # Also patch in the job module
+    monkeypatch.setattr(
+        job_cmd_module,
+        "select_project",
+        lambda projects, requested=None: (test_project, None),
+    )
 
     return api
 

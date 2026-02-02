@@ -445,14 +445,29 @@ def _parse_resource_string(resource: str) -> tuple[int, str, Optional[int]]:
     - "1 H200", "4 H100"
     - "4CPU", "4xCPU", "4 CPU" (CPU-only)
     - "CPU" (CPU-only, count resolved from quota)
+    - "4x", "4X", "8x" (GPU count only, type auto-selected)
+    - "4" (GPU count only, type auto-selected)
 
     Returns:
         Tuple of (gpu_count, gpu_type_pattern, cpu_count). cpu_count is None
-        when the CPU count is unspecified (e.g., "CPU").
+        when the CPU count is unspecified (e.g., "CPU"). gpu_type_pattern is
+        "GPU" when the type should be auto-selected.
     """
     resource = resource.strip().upper()
 
     cpu_aliases = {"CPU", "CPUONLY", "CPU_ONLY", "CPU-ONLY"}
+
+    # Pattern: Nx or NX only (e.g., "4x", "8X") - auto-select GPU type
+    match = re.match(r"^(\d+)\s*[xX]$", resource)
+    if match:
+        count = int(match.group(1))
+        return count, "GPU", None  # "GPU" signals auto-select
+
+    # Pattern: N only (e.g., "4", "8") - auto-select GPU type
+    match = re.match(r"^(\d+)$", resource)
+    if match:
+        count = int(match.group(1))
+        return count, "GPU", None  # "GPU" signals auto-select
 
     # Pattern: NxGPU (e.g., "1xH200", "4xH100")
     match = re.match(r"^(\d+)\s*[xX]\s*(\w+)$", resource)
@@ -586,6 +601,21 @@ def _load_ssh_public_key(pubkey_path: Optional[str] = None) -> str:
     help="Auto-stop when idle",
 )
 @click.option(
+    "--auto/--no-auto",
+    default=True,
+    help="Auto-select best available compute group based on availability (default: auto)",
+)
+@click.option(
+    "--wait/--no-wait",
+    default=True,
+    help="Wait for notebook to reach RUNNING status (default: enabled)",
+)
+@click.option(
+    "--keepalive/--no-keepalive",
+    default=True,
+    help="Run a GPU keepalive script to maintain utilization above 40% (default: enabled)",
+)
+@click.option(
     "--json",
     "json_output",
     is_flag=True,
@@ -602,26 +632,39 @@ def create_notebook_cmd(
     image: Optional[str],
     shm_size: int,
     auto_stop: bool,
+    auto: bool,
+    wait: bool,
+    keepalive: bool,
     json_output: bool,
 ) -> None:
     """Create a new interactive notebook instance.
 
     \b
     Examples:
-        inspire notebook create                     # Interactive mode
+        inspire notebook create                     # Interactive mode, auto-select GPU
         inspire notebook create -r 1xH200           # 1 GPU H200
         inspire notebook create -r 4xH100 -n mytest # 4 GPUs H100
+        inspire notebook create -r 4x               # 4 GPUs, auto-select type
+        inspire notebook create -r 8x               # 8 GPUs (full node), auto-select type
         inspire notebook create -r 4CPU             # 4 CPUs
         inspire notebook create -r 1xH100 --shm-size 64  # With 64GB shared memory
+        inspire notebook create --no-auto -r 1xH200 # Disable auto-select
+        inspire notebook create --no-keepalive      # Disable GPU keepalive script
+        inspire notebook create --no-keepalive --no-wait  # Old behavior (return immediately)
     """
     from inspire.cli.utils.web_session import get_web_session
     from inspire.cli.utils.browser_api import (
+        find_best_compute_group_accurate,
         list_projects,
+        select_project,
         list_images,
         list_notebook_compute_groups,
         get_notebook_schedule,
         create_notebook,
+        wait_for_notebook_running,
+        run_command_in_notebook,
     )
+    from inspire.cli.utils.keepalive import get_keepalive_command
 
     json_output = _resolve_json_output(ctx, json_output)
 
@@ -739,6 +782,68 @@ def create_notebook_cmd(
 
     workspace_id = auto_workspace_id
 
+    # Auto-select best compute group based on availability
+    auto_selected_group = None
+    auto_selected_gpu_type = ""
+    if auto and gpu_count > 0:
+        # Use auto-select to find the best available compute group
+        # gpu_pattern == "GPU" means no specific type was requested
+        filter_gpu_type = None if gpu_pattern == "GPU" else gpu_pattern
+
+        try:
+            best = find_best_compute_group_accurate(
+                gpu_type=filter_gpu_type,
+                min_gpus=gpu_count,
+                include_preemptible=True,
+                prefer_full_nodes=True,  # Check free nodes for 4x/8x requests
+            )
+
+            if best:
+                auto_selected_group = best
+                # Update gpu_pattern if we auto-selected the GPU type
+                if gpu_pattern == "GPU":
+                    gpu_pattern = best.gpu_type or "GPU"
+                auto_selected_gpu_type = best.gpu_type or ""
+
+                # Show appropriate message based on selection source
+                if not json_output:
+                    if best.selection_source == "nodes" and best.free_nodes:
+                        click.echo(
+                            f"Auto-selected: {best.group_name}, "
+                            f"{best.free_nodes} full node(s) free ({best.available_gpus} GPUs)"
+                        )
+                    else:
+                        click.echo(
+                            f"Auto-selected: {best.group_name}, "
+                            f"{best.available_gpus} GPUs available"
+                        )
+            elif gpu_pattern == "GPU":
+                # No availability found and we need to auto-select type
+                if json_output:
+                    click.echo(
+                        json_formatter.format_json_error(
+                            "AvailabilityError",
+                            f"No compute group has {gpu_count} GPUs available",
+                            EXIT_CONFIG_ERROR,
+                        ),
+                        err=True,
+                    )
+                else:
+                    click.echo(
+                        f"Error: No compute group has {gpu_count} GPUs available",
+                        err=True,
+                    )
+                sys.exit(EXIT_CONFIG_ERROR)
+                return
+        except Exception as e:
+            # Auto-select failed, fall back to manual selection
+            if not json_output:
+                click.echo(f"Warning: Auto-select failed ({e}), using manual selection", err=True)
+            auto_selected_group = None
+
+    # Update resource display after potential auto-selection
+    resource_display = _format_resource_display(gpu_count, gpu_pattern, requested_cpu_count)
+
     if not json_output:
         click.echo(f"Creating notebook with {resource_display}...")
 
@@ -764,19 +869,44 @@ def create_notebook_cmd(
         return
 
     # Find compute group with matching resource type
+    # If auto-select found a group, use its group_id to find the matching group in notebook compute groups
     selected_group = None
     selected_gpu_type = ""
-    for group in compute_groups:
-        gpu_stats_list = group.get("gpu_type_stats", [])
-        for gpu_stats in gpu_stats_list:
-            gpu_info = gpu_stats.get("gpu_info", {})
-            gpu_type_display = gpu_info.get("gpu_type_display", "")
-            if _match_gpu_type(gpu_pattern, gpu_type_display):
+
+    if auto_selected_group:
+        # Find the notebook compute group that matches the auto-selected group
+        for group in compute_groups:
+            if group.get("logic_compute_group_id") == auto_selected_group.group_id:
                 selected_group = group
-                selected_gpu_type = gpu_info.get("gpu_type", "")
+                selected_gpu_type = auto_selected_gpu_type
                 break
-        if selected_group:
-            break
+        # If not found by ID, try matching by GPU type
+        if not selected_group:
+            for group in compute_groups:
+                gpu_stats_list = group.get("gpu_type_stats", [])
+                for gpu_stats in gpu_stats_list:
+                    gpu_info = gpu_stats.get("gpu_info", {})
+                    gpu_type_display = gpu_info.get("gpu_type_display", "")
+                    if _match_gpu_type(auto_selected_group.gpu_type, gpu_type_display):
+                        selected_group = group
+                        selected_gpu_type = gpu_info.get("gpu_type", "")
+                        break
+                if selected_group:
+                    break
+
+    # Fall back to manual selection if auto-select didn't work or wasn't used
+    if not selected_group:
+        for group in compute_groups:
+            gpu_stats_list = group.get("gpu_type_stats", [])
+            for gpu_stats in gpu_stats_list:
+                gpu_info = gpu_stats.get("gpu_info", {})
+                gpu_type_display = gpu_info.get("gpu_type_display", "")
+                if _match_gpu_type(gpu_pattern, gpu_type_display):
+                    selected_group = group
+                    selected_gpu_type = gpu_info.get("gpu_type", "")
+                    break
+            if selected_group:
+                break
 
     if not selected_group and gpu_count == 0:
         for group in compute_groups:
@@ -951,37 +1081,46 @@ def create_notebook_cmd(
         return
 
     # Select project
-    selected_project = None
-    if project:
-        # Match by name or ID
-        for p in projects:
-            if p.name.lower() == project.lower() or p.project_id == project:
-                selected_project = p
-                break
-        if not selected_project:
+    try:
+        selected_project, fallback_msg = select_project(projects, project)
+
+        if not json_output:
+            if fallback_msg:
+                click.echo(fallback_msg)
+            click.echo(f"Using project: {selected_project.name}{selected_project.get_quota_status()}")
+    except ValueError as e:
+        error_msg = str(e)
+        if "not found" in error_msg:
             if json_output:
                 click.echo(
                     json_formatter.format_json_error(
                         "ValidationError",
-                        f"Project '{project}' not found",
+                        error_msg,
                         EXIT_CONFIG_ERROR,
                     ),
                     err=True,
                 )
-                sys.exit(EXIT_CONFIG_ERROR)
-                return
-
-            click.echo(f"Error: Project '{project}' not found", err=True)
-            click.echo("\nAvailable projects:", err=True)
-            for p in projects:
-                click.echo(f"  - {p.name}", err=True)
+            else:
+                click.echo(f"Error: {error_msg}", err=True)
+                click.echo("\nAvailable projects:", err=True)
+                for p in projects:
+                    click.echo(f"  - {p.name}", err=True)
             sys.exit(EXIT_CONFIG_ERROR)
             return
-    else:
-        # Use first project as default
-        selected_project = projects[0]
-        if not json_output:
-            click.echo(f"Using project: {selected_project.name}")
+        else:  # All projects over quota
+            if json_output:
+                click.echo(
+                    json_formatter.format_json_error(
+                        "QuotaExceeded",
+                        error_msg,
+                        EXIT_CONFIG_ERROR,
+                    ),
+                    err=True,
+                )
+            else:
+                click.echo(f"Error: {error_msg}", err=True)
+            sys.exit(EXIT_CONFIG_ERROR)
+            return
 
     # 4. Get images
     try:
@@ -1130,6 +1269,41 @@ def create_notebook_cmd(
             click.echo(f"  ID: {notebook_id}")
             click.echo(f"  Name: {name}")
             click.echo(f"  Resource: {resource_display}")
+
+        # Wait for notebook to be running if requested (or if keepalive is enabled)
+        if wait or keepalive:
+            if not json_output:
+                click.echo("Waiting for notebook to reach RUNNING status...")
+            try:
+                wait_for_notebook_running(notebook_id=notebook_id, session=session, timeout=600)
+                if not json_output:
+                    click.echo("Notebook is now RUNNING.")
+            except TimeoutError as e:
+                if json_output:
+                    click.echo(json_formatter.format_json_error("Timeout", str(e), EXIT_API_ERROR), err=True)
+                else:
+                    click.echo(f"Timeout: {e}", err=True)
+                sys.exit(EXIT_API_ERROR)
+                return
+
+        # Run keepalive script if requested (GPU notebooks only)
+        if keepalive and gpu_count > 0:
+            if not json_output:
+                click.echo("Starting GPU keepalive script...")
+            try:
+                run_command_in_notebook(
+                    notebook_id=notebook_id,
+                    command=get_keepalive_command(),
+                    session=session,
+                )
+                if not json_output:
+                    click.echo("GPU keepalive script started (log: /tmp/keepalive.log)")
+            except Exception as e:
+                if not json_output:
+                    click.echo(f"Warning: Failed to start keepalive script: {e}", err=True)
+                # Don't exit on keepalive failure - the notebook is still usable
+
+        if not json_output:
             click.echo(f"\nUse 'inspire notebook status {notebook_id}' to check status.")
 
     except Exception as e:

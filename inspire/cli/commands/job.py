@@ -47,7 +47,8 @@ from inspire.cli.utils.tunnel import (
     run_ssh_command,
     TunnelNotAvailableError,
 )
-from inspire.cli.utils.browser_api import find_best_compute_group_accurate
+from inspire.cli.utils.browser_api import find_best_compute_group_accurate, list_projects, select_project
+from inspire.cli.utils.web_session import get_web_session
 from inspire.cli.utils.workspace import select_workspace_id
 from inspire.cli.formatters import json_formatter, human_formatter
 
@@ -97,6 +98,11 @@ def _wrap_in_bash(command: str) -> str:
 )
 @click.option("--image", default=lambda: os.environ.get("INSP_IMAGE"), help="Custom Docker image")
 @click.option(
+    "--project", "-p",
+    default=lambda: os.environ.get("INSPIRE_PROJECT_ID"),
+    help="Project name or ID (auto-selects first if not specified)",
+)
+@click.option(
     "--nodes",
     type=int,
     default=1,
@@ -116,6 +122,7 @@ def create(
     workspace_id_override: Optional[str],
     auto: bool,
     image: str,
+    project: Optional[str],
     nodes: int,
 ):
     """Create a new training job.
@@ -221,6 +228,35 @@ def create(
                         f"Auto-selected: {selected_group_name}, {best.available_gpus} GPUs available{preempt_note}"
                     )
 
+        # Get web session for browser API calls (project listing)
+        try:
+            session = get_web_session()
+        except ValueError as e:
+            _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
+            return
+
+        # Select project
+        try:
+            projects = list_projects(workspace_id=selected_workspace_id, session=session)
+            if not projects:
+                _handle_error(ctx, "ConfigError", "No projects available", EXIT_CONFIG_ERROR)
+                return
+
+            selected, fallback_msg = select_project(projects, project)
+            selected_project_id = selected.project_id
+
+            if not ctx.json_output:
+                if fallback_msg:
+                    click.echo(fallback_msg)
+                click.echo(f"Using project: {selected.name}{selected.get_quota_status()}")
+        except ValueError as e:
+            error_type = "QuotaExceeded" if "over quota" in str(e) else "ValidationError"
+            _handle_error(ctx, error_type, str(e), EXIT_CONFIG_ERROR)
+            return
+        except Exception as e:
+            _handle_error(ctx, "APIError", f"Error fetching projects: {e}", EXIT_API_ERROR)
+            return
+
         # Wrap in bash for consistent shell behavior
         command = _wrap_in_bash(command)
 
@@ -250,7 +286,7 @@ def create(
             resource=resource,
             framework=framework,
             prefer_location=location,
-            project_id=config.job_project_id,
+            project_id=selected_project_id,
             workspace_id=selected_workspace_id,
             image=image,
             task_priority=priority,
