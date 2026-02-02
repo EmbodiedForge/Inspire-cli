@@ -49,6 +49,7 @@ from inspire.cli.utils.tunnel import (
 )
 from inspire.cli.utils.browser_api import find_best_compute_group_accurate, list_projects, select_project
 from inspire.cli.utils.web_session import get_web_session
+from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.workspace import select_workspace_id
 from inspire.cli.formatters import json_formatter, human_formatter
 
@@ -1824,12 +1825,3 @@ def _follow_logs_via_ssh(
         api_logger.setLevel(original_level)
 
     return final_status
-
-
-def _handle_error(ctx: Context, error_type: str, message: str, exit_code: int):
-    """Handle and format errors consistently."""
-    if ctx.json_output:
-        click.echo(json_formatter.format_json_error(error_type, message, exit_code), err=True)
-    else:
-        click.echo(human_formatter.format_error(message), err=True)
-    sys.exit(exit_code)

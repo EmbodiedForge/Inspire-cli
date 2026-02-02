@@ -21,6 +21,7 @@ from inspire.cli.utils.resources import (
     KNOWN_COMPUTE_GROUPS,
 )
 from inspire.cli.utils.web_session import SessionExpiredError, get_web_session
+from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.formatters import json_formatter, human_formatter
 from inspire.compute_groups import load_compute_groups_from_config, compute_group_name_map
 from inspire.cli.utils.config import Config
@@ -676,12 +677,3 @@ def _format_accurate_availability_table(availability) -> None:
     lines.append("")
 
     click.echo("\n".join(lines))
-
-
-def _handle_error(ctx: Context, error_type: str, message: str, exit_code: int):
-    """Handle and format errors consistently."""
-    if ctx.json_output:
-        click.echo(json_formatter.format_json_error(error_type, message, exit_code), err=True)
-    else:
-        click.echo(human_formatter.format_error(message), err=True)
-    sys.exit(exit_code)

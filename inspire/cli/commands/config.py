@@ -38,6 +38,7 @@ from inspire.cli.utils.config_schema import (
     CATEGORY_ORDER,
 )
 from inspire.cli.utils.auth import AuthManager, AuthenticationError
+from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.formatters import json_formatter, human_formatter
 
 
@@ -546,15 +547,3 @@ def check_config(ctx: Context) -> None:
         _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
     except Exception as e:
         _handle_error(ctx, "Error", str(e), EXIT_GENERAL_ERROR)
-
-
-def _handle_error(ctx: Context, error_type: str, message: str, exit_code: int) -> None:
-    """Handle and format errors consistently."""
-    if ctx.json_output:
-        click.echo(
-            json_formatter.format_json_error(error_type, message, exit_code),
-            err=True,
-        )
-    else:
-        click.echo(human_formatter.format_error(message), err=True)
-    sys.exit(exit_code)
