@@ -126,54 +126,7 @@ def _get_field_value(cfg: Config, option: ConfigOption) -> tuple[str | None, boo
     Returns:
         Tuple of (value_string, is_set) where is_set indicates if value differs from default
     """
-    # Map TOML key to Config field name
-    field_mapping = {
-        "auth.username": "username",
-        "auth.password": "password",
-        "api.base_url": "base_url",
-        "api.timeout": "timeout",
-        "api.max_retries": "max_retries",
-        "api.retry_delay": "retry_delay",
-        "api.skip_ssl_verify": "skip_ssl_verify",
-        "api.force_proxy": "force_proxy",
-        "api.openapi_prefix": "openapi_prefix",
-        "api.browser_api_prefix": "browser_api_prefix",
-        "api.auth_endpoint": "auth_endpoint",
-        "api.docker_registry": "docker_registry",
-        "paths.target_dir": "target_dir",
-        "paths.log_pattern": "log_pattern",
-        "paths.job_cache": "job_cache_path",
-        "paths.log_cache_dir": "log_cache_dir",
-        "gitea.server": "gitea_server",
-        "gitea.repo": "gitea_repo",
-        "gitea.token": "gitea_token",
-        "gitea.log_workflow": "gitea_log_workflow",
-        "gitea.sync_workflow": "gitea_sync_workflow",
-        "gitea.bridge_workflow": "gitea_bridge_workflow",
-        "gitea.remote_timeout": "remote_timeout",
-        "sync.default_remote": "default_remote",
-        "bridge.action_timeout": "bridge_action_timeout",
-        "bridge.denylist": "bridge_action_denylist",
-        "job.priority": "job_priority",
-        "job.image": "job_image",
-        "job.project_id": "job_project_id",
-        "job.workspace_id": "job_workspace_id",
-        "job.shm_size": "shm_size",
-        "workspaces.cpu": "workspace_cpu_id",
-        "workspaces.gpu": "workspace_gpu_id",
-        "workspaces.internet": "workspace_internet_id",
-        "notebook.resource": "notebook_resource",
-        "notebook.image": "notebook_image",
-        "ssh.rtunnel_bin": "rtunnel_bin",
-        "ssh.sshd_deb_dir": "sshd_deb_dir",
-        "ssh.dropbear_deb_dir": "dropbear_deb_dir",
-        "ssh.rtunnel_download_url": "rtunnel_download_url",
-        "mirrors.apt_mirror_url": "apt_mirror_url",
-        "mirrors.pip_index_url": "pip_index_url",
-        "mirrors.pip_trusted_host": "pip_trusted_host",
-    }
-
-    field_name = field_mapping.get(option.toml_key)
+    field_name = option.field_name
     if not field_name or not hasattr(cfg, field_name):
         return None, False
 
@@ -194,53 +147,7 @@ def _get_field_value(cfg: Config, option: ConfigOption) -> tuple[str | None, boo
 
 def _get_source_for_option(sources: dict[str, str], option: ConfigOption) -> str:
     """Get source label for a config option."""
-    field_mapping = {
-        "auth.username": "username",
-        "auth.password": "password",
-        "api.base_url": "base_url",
-        "api.timeout": "timeout",
-        "api.max_retries": "max_retries",
-        "api.retry_delay": "retry_delay",
-        "api.skip_ssl_verify": "skip_ssl_verify",
-        "api.force_proxy": "force_proxy",
-        "api.openapi_prefix": "openapi_prefix",
-        "api.browser_api_prefix": "browser_api_prefix",
-        "api.auth_endpoint": "auth_endpoint",
-        "api.docker_registry": "docker_registry",
-        "paths.target_dir": "target_dir",
-        "paths.log_pattern": "log_pattern",
-        "paths.job_cache": "job_cache_path",
-        "paths.log_cache_dir": "log_cache_dir",
-        "gitea.server": "gitea_server",
-        "gitea.repo": "gitea_repo",
-        "gitea.token": "gitea_token",
-        "gitea.log_workflow": "gitea_log_workflow",
-        "gitea.sync_workflow": "gitea_sync_workflow",
-        "gitea.bridge_workflow": "gitea_bridge_workflow",
-        "gitea.remote_timeout": "remote_timeout",
-        "sync.default_remote": "default_remote",
-        "bridge.action_timeout": "bridge_action_timeout",
-        "bridge.denylist": "bridge_action_denylist",
-        "job.priority": "job_priority",
-        "job.image": "job_image",
-        "job.project_id": "job_project_id",
-        "job.workspace_id": "job_workspace_id",
-        "job.shm_size": "shm_size",
-        "workspaces.cpu": "workspace_cpu_id",
-        "workspaces.gpu": "workspace_gpu_id",
-        "workspaces.internet": "workspace_internet_id",
-        "notebook.resource": "notebook_resource",
-        "notebook.image": "notebook_image",
-        "ssh.rtunnel_bin": "rtunnel_bin",
-        "ssh.sshd_deb_dir": "sshd_deb_dir",
-        "ssh.dropbear_deb_dir": "dropbear_deb_dir",
-        "ssh.rtunnel_download_url": "rtunnel_download_url",
-        "mirrors.apt_mirror_url": "apt_mirror_url",
-        "mirrors.pip_index_url": "pip_index_url",
-        "mirrors.pip_trusted_host": "pip_trusted_host",
-    }
-
-    field_name = field_mapping.get(option.toml_key)
+    field_name = option.field_name
     return sources.get(field_name, SOURCE_DEFAULT) if field_name else SOURCE_DEFAULT
 
 

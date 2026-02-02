@@ -48,6 +48,7 @@ class TestConfigSchema:
         for opt in CONFIG_OPTIONS:
             assert opt.env_var, f"Option missing env_var: {opt}"
             assert opt.toml_key, f"Option missing toml_key: {opt}"
+            assert opt.field_name, f"Option missing field_name: {opt}"
             assert opt.description, f"Option missing description: {opt}"
             assert opt.category, f"Option missing category: {opt}"
 

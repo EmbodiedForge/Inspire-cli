@@ -21,12 +21,7 @@ except ImportError:
 
 from inspire.cli.utils.config_schema import (
     CONFIG_OPTIONS,
-    ConfigOption,
     get_option_by_toml,
-    parse_value as parse_schema_value,
-    get_categories,
-    CATEGORY_ORDER,
-    _parse_bool,
 )
 
 # Config file paths
@@ -250,6 +245,7 @@ class Config:
     rtunnel_bin: Optional[str] = None
     sshd_deb_dir: Optional[str] = None
     dropbear_deb_dir: Optional[str] = None
+    setup_script: Optional[str] = None
     rtunnel_download_url: str = "https://github.com/Sarfflow/rtunnel/releases/download/nightly/rtunnel-linux-amd64.tar.gz"
 
     # Mirror settings
@@ -372,7 +368,8 @@ class Config:
             github_log_workflow=os.getenv("INSP_GITHUB_LOG_WORKFLOW", "retrieve_job_log.yml"),
             github_sync_workflow=os.getenv("INSP_GITHUB_SYNC_WORKFLOW", "sync_code.yml"),
             github_bridge_workflow=os.getenv("INSP_GITHUB_BRIDGE_WORKFLOW", "run_bridge_action.yml"),
-            log_cache_dir=os.getenv("INSP_LOG_CACHE_DIR", "~/.inspire/logs"),
+            log_cache_dir=os.getenv("INSP_LOG_CACHE_DIR")
+            or os.getenv("INSPIRE_LOG_CACHE_DIR", "~/.inspire/logs"),
             remote_timeout=_parse_remote_timeout(os.getenv("INSP_REMOTE_TIMEOUT", "90")),
             default_remote=os.getenv("INSPIRE_DEFAULT_REMOTE", "origin"),
             bridge_action_timeout=bridge_action_timeout,
@@ -502,61 +499,8 @@ class Config:
     @classmethod
     def _toml_key_to_field(cls, toml_key: str) -> str | None:
         """Map TOML key to Config field name."""
-        mapping = {
-            "auth.username": "username",
-            "auth.password": "password",
-            "api.base_url": "base_url",
-            "api.timeout": "timeout",
-            "api.max_retries": "max_retries",
-            "api.retry_delay": "retry_delay",
-            "api.skip_ssl_verify": "skip_ssl_verify",
-            "api.force_proxy": "force_proxy",
-            "api.openapi_prefix": "openapi_prefix",
-            "api.browser_api_prefix": "browser_api_prefix",
-            "api.auth_endpoint": "auth_endpoint",
-            "api.docker_registry": "docker_registry",
-            "paths.target_dir": "target_dir",
-            "paths.log_pattern": "log_pattern",
-            "paths.job_cache": "job_cache_path",
-            "paths.log_cache_dir": "log_cache_dir",
-            "git.platform": "git_platform",
-            "gitea.server": "gitea_server",
-            "gitea.repo": "gitea_repo",
-            "gitea.token": "gitea_token",
-            "gitea.log_workflow": "gitea_log_workflow",
-            "gitea.sync_workflow": "gitea_sync_workflow",
-            "gitea.bridge_workflow": "gitea_bridge_workflow",
-            "gitea.remote_timeout": "remote_timeout",
-            "github.server": "github_server",
-            "github.repo": "github_repo",
-            "github.token": "github_token",
-            "github.log_workflow": "github_log_workflow",
-            "github.sync_workflow": "github_sync_workflow",
-            "github.bridge_workflow": "github_bridge_workflow",
-            "sync.default_remote": "default_remote",
-            "bridge.action_timeout": "bridge_action_timeout",
-            "bridge.denylist": "bridge_action_denylist",
-            "job.priority": "job_priority",
-            "job.image": "job_image",
-            "job.project_id": "job_project_id",
-            "job.workspace_id": "job_workspace_id",
-            "job.shm_size": "shm_size",
-            "workspaces.cpu": "workspace_cpu_id",
-            "workspaces.gpu": "workspace_gpu_id",
-            "workspaces.internet": "workspace_internet_id",
-            "notebook.resource": "notebook_resource",
-            "notebook.image": "notebook_image",
-            "ssh.rtunnel_bin": "rtunnel_bin",
-            "ssh.sshd_deb_dir": "sshd_deb_dir",
-            "ssh.dropbear_deb_dir": "dropbear_deb_dir",
-            "ssh.rtunnel_download_url": "rtunnel_download_url",
-            "mirrors.apt_mirror_url": "apt_mirror_url",
-            "mirrors.pip_index_url": "pip_index_url",
-            "mirrors.pip_trusted_host": "pip_trusted_host",
-            "tunnel.retries": "tunnel_retries",
-            "tunnel.retry_pause": "tunnel_retry_pause",
-        }
-        return mapping.get(toml_key)
+        option = get_option_by_toml(toml_key)
+        return option.field_name if option else None
 
     @classmethod
     def from_files_and_env(
@@ -637,6 +581,7 @@ class Config:
             "rtunnel_bin": None,
             "sshd_deb_dir": None,
             "dropbear_deb_dir": None,
+            "setup_script": None,
             "rtunnel_download_url": "https://github.com/Sarfflow/rtunnel/releases/download/nightly/rtunnel-linux-amd64.tar.gz",
             # Mirror settings
             "apt_mirror_url": None,
@@ -731,86 +676,28 @@ class Config:
                 sources["workspaces"] = SOURCE_PROJECT
 
         # 4. Override with env vars (highest priority)
-        env_mapping = {
-            "INSPIRE_USERNAME": "username",
-            "INSPIRE_PASSWORD": "password",
-            "INSPIRE_BASE_URL": "base_url",
-            "INSPIRE_TARGET_DIR": "target_dir",
-            "INSPIRE_LOG_PATTERN": "log_pattern",
-            "INSPIRE_JOB_CACHE": "job_cache_path",
-            "INSPIRE_TIMEOUT": ("timeout", int),
-            "INSPIRE_MAX_RETRIES": ("max_retries", int),
-            "INSPIRE_RETRY_DELAY": ("retry_delay", float),
-            "INSP_GIT_PLATFORM": "git_platform",
-            "INSP_GITEA_REPO": "gitea_repo",
-            "INSP_GITEA_TOKEN": "gitea_token",
-            "INSP_GITEA_SERVER": "gitea_server",
-            "INSP_GITEA_LOG_WORKFLOW": "gitea_log_workflow",
-            "INSP_GITEA_SYNC_WORKFLOW": "gitea_sync_workflow",
-            "INSP_GITEA_BRIDGE_WORKFLOW": "gitea_bridge_workflow",
-            "INSP_GITHUB_REPO": "github_repo",
-            "INSP_GITHUB_TOKEN": "github_token",
-            "INSP_GITHUB_SERVER": "github_server",
-            "INSP_GITHUB_LOG_WORKFLOW": "github_log_workflow",
-            "INSP_GITHUB_SYNC_WORKFLOW": "github_sync_workflow",
-            "INSP_GITHUB_BRIDGE_WORKFLOW": "github_bridge_workflow",
-            "INSP_LOG_CACHE_DIR": "log_cache_dir",
-            "INSP_REMOTE_TIMEOUT": ("remote_timeout", int),
-            "INSPIRE_DEFAULT_REMOTE": "default_remote",
-            "INSPIRE_BRIDGE_ACTION_TIMEOUT": ("bridge_action_timeout", int),
-            "INSPIRE_BRIDGE_DENYLIST": ("bridge_action_denylist", _parse_denylist),
-            # API settings (additional)
-            "INSPIRE_SKIP_SSL_VERIFY": ("skip_ssl_verify", _parse_bool),
-            "INSPIRE_FORCE_PROXY": ("force_proxy", _parse_bool),
-            # API path prefixes
-            "INSPIRE_OPENAPI_PREFIX": "openapi_prefix",
-            "INSPIRE_BROWSER_API_PREFIX": "browser_api_prefix",
-            "INSPIRE_AUTH_ENDPOINT": "auth_endpoint",
-            "INSPIRE_DOCKER_REGISTRY": "docker_registry",
-            # Job settings
-            "INSP_PRIORITY": ("job_priority", int),
-            "INSP_IMAGE": "job_image",
-            "INSPIRE_PROJECT_ID": "job_project_id",
-            "INSPIRE_WORKSPACE_ID": "job_workspace_id",
-            "INSPIRE_WORKSPACE_CPU_ID": "workspace_cpu_id",
-            "INSPIRE_WORKSPACE_GPU_ID": "workspace_gpu_id",
-            "INSPIRE_WORKSPACE_INTERNET_ID": "workspace_internet_id",
-            # Notebook settings
-            "INSPIRE_NOTEBOOK_RESOURCE": "notebook_resource",
-            "INSPIRE_NOTEBOOK_IMAGE": "notebook_image",
-            # SSH settings
-            "INSPIRE_RTUNNEL_BIN": "rtunnel_bin",
-            "INSPIRE_SSHD_DEB_DIR": "sshd_deb_dir",
-            "INSPIRE_DROPBEAR_DEB_DIR": "dropbear_deb_dir",
-            "INSPIRE_RTUNNEL_DOWNLOAD_URL": "rtunnel_download_url",
-            # Mirror settings
-            "INSPIRE_APT_MIRROR_URL": "apt_mirror_url",
-            "INSPIRE_PIP_INDEX_URL": "pip_index_url",
-            "INSPIRE_PIP_TRUSTED_HOST": "pip_trusted_host",
-            # Tunnel retry settings
-            "INSPIRE_TUNNEL_RETRIES": ("tunnel_retries", int),
-            "INSPIRE_TUNNEL_RETRY_PAUSE": ("tunnel_retry_pause", float),
-            # Job settings
-            "INSPIRE_SHM_SIZE": ("shm_size", int),
-        }
+        for option in CONFIG_OPTIONS:
+            value = os.getenv(option.env_var)
+            # Backward compatibility: old env name for log cache directory.
+            if value is None and option.env_var == "INSP_LOG_CACHE_DIR":
+                value = os.getenv("INSPIRE_LOG_CACHE_DIR")
+            if value is None:
+                continue
 
-        for env_var, mapping in env_mapping.items():
-            value = os.getenv(env_var)
-            if value is not None:
-                if isinstance(mapping, tuple):
-                    field_name, parser = mapping
-                    try:
-                        if parser == _parse_denylist:
-                            parsed_value = parser(value)
-                        else:
-                            parsed_value = parser(value)
-                    except (ValueError, TypeError):
-                        raise ConfigError(f"Invalid {env_var} value: {value}")
-                    config_dict[field_name] = parsed_value
-                else:
-                    field_name = mapping
-                    config_dict[field_name] = value
-                sources[field_name] = SOURCE_ENV
+            field_name = option.field_name
+            if field_name not in config_dict:
+                continue
+
+            if option.parser:
+                try:
+                    parsed_value = option.parser(value)
+                except (ValueError, TypeError):
+                    raise ConfigError(f"Invalid {option.env_var} value: {value}")
+                config_dict[field_name] = parsed_value
+            else:
+                config_dict[field_name] = value
+
+            sources[field_name] = SOURCE_ENV
 
         # Fallback: use GITHUB_TOKEN if INSP_GITHUB_TOKEN is not set
         if not config_dict.get("github_token"):
