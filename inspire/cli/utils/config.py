@@ -257,6 +257,10 @@ class Config:
     pip_index_url: Optional[str] = None
     pip_trusted_host: Optional[str] = None
 
+    # Tunnel retry settings
+    tunnel_retries: int = 3
+    tunnel_retry_pause: float = 2.0
+
     # Other
     shm_size: Optional[int] = None
 
@@ -549,6 +553,8 @@ class Config:
             "mirrors.apt_mirror_url": "apt_mirror_url",
             "mirrors.pip_index_url": "pip_index_url",
             "mirrors.pip_trusted_host": "pip_trusted_host",
+            "tunnel.retries": "tunnel_retries",
+            "tunnel.retry_pause": "tunnel_retry_pause",
         }
         return mapping.get(toml_key)
 
@@ -636,6 +642,9 @@ class Config:
             "apt_mirror_url": None,
             "pip_index_url": None,
             "pip_trusted_host": None,
+            # Tunnel retry settings
+            "tunnel_retries": 3,
+            "tunnel_retry_pause": 2.0,
             # Other
             "shm_size": None,
             # Compute groups
@@ -778,6 +787,9 @@ class Config:
             "INSPIRE_APT_MIRROR_URL": "apt_mirror_url",
             "INSPIRE_PIP_INDEX_URL": "pip_index_url",
             "INSPIRE_PIP_TRUSTED_HOST": "pip_trusted_host",
+            # Tunnel retry settings
+            "INSPIRE_TUNNEL_RETRIES": ("tunnel_retries", int),
+            "INSPIRE_TUNNEL_RETRY_PAUSE": ("tunnel_retry_pause", float),
             # Job settings
             "INSPIRE_SHM_SIZE": ("shm_size", int),
         }

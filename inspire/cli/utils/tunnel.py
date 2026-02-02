@@ -338,14 +338,18 @@ def _test_ssh_connection(
 def is_tunnel_available(
     bridge_name: Optional[str] = None,
     config: Optional[TunnelConfig] = None,
-    retries: int = 1,
+    retries: int = 3,
+    retry_pause: float = 2.0,
+    progressive: bool = True,
 ) -> bool:
     """Check if SSH via ProxyCommand is available and responsive.
 
     Args:
         bridge_name: Name of bridge to check (uses default if None)
         config: Tunnel configuration (loads default if None)
-        retries: Number of retries if SSH test fails (default: 1)
+        retries: Number of retries if SSH test fails (default: 3)
+        retry_pause: Base pause between retries in seconds (default: 2.0)
+        progressive: If True, increase pause with each retry (default: True)
 
     Returns:
         True if SSH via ProxyCommand works, False otherwise
@@ -362,7 +366,9 @@ def is_tunnel_available(
         if _test_ssh_connection(bridge, config):
             return True
         if attempt < retries:
-            time.sleep(1)  # Brief pause before retry
+            # Progressive: 2s, 3s, 4s for attempts 0, 1, 2
+            pause = retry_pause + (attempt * 1.0) if progressive else retry_pause
+            time.sleep(pause)
     return False
 
 

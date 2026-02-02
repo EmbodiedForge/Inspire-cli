@@ -125,7 +125,10 @@ def exec_command(
     # Try SSH tunnel first (unless --no-tunnel or artifacts requested)
     if not no_tunnel and not artifact_path and not download:
         try:
-            if is_tunnel_available():
+            if is_tunnel_available(
+                retries=config.tunnel_retries,
+                retry_pause=config.tunnel_retry_pause,
+            ):
                 # Build full command with env exports and cd to target dir
                 env_exports = build_env_exports(config.remote_env)
                 full_command = f'{env_exports}cd "{config.target_dir}" && {command}'
@@ -395,7 +398,7 @@ def bridge_ssh(ctx: Context) -> None:
 
     tunnel_config = load_tunnel_config()
 
-    if not is_tunnel_available(tunnel_config):
+    if not is_tunnel_available(config=tunnel_config):
         if ctx.json_output:
             click.echo(
                 json_formatter.format_json_error(
