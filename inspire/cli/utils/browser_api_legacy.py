@@ -6,141 +6,34 @@ New code should import via `inspire.cli.utils.browser_api` (façade) or the doma
 
 from __future__ import annotations
 
-import asyncio
 import math
 import os
-import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from inspire.cli.utils.browser_api_core import (
+    BASE_URL,
+    _browser_api_path,
+    _in_asyncio_loop,
+    _launch_browser,
+    _new_context,
+    _request_json,
+    _run_in_thread,
+)
+from inspire.cli.utils.browser_api_projects import (
+    ProjectInfo,
+    list_projects,
+    select_project,
+)  # noqa: F401
 from .web_session import (
     get_web_session,
     WebSession,
     DEFAULT_WORKSPACE_ID,
-    get_playwright_proxy,
     SessionExpiredError,
     clear_session_cache,
-    request_json,
     build_requests_session,
 )
-
-BASE_URL = os.environ.get("INSPIRE_BASE_URL", "https://api.example.com")
-
-# Default browser API prefix (fallback if not configured)
-DEFAULT_BROWSER_API_PREFIX = "/api/v1"
-
-# Cached browser API prefix (loaded once at module import)
-_cached_browser_api_prefix: str | None = None
-
-
-def _get_browser_api_prefix() -> str:
-    """Get the browser API prefix from config or environment.
-
-    Returns:
-        Browser API prefix (e.g., "/api/v1" or custom)
-    """
-    global _cached_browser_api_prefix
-
-    if _cached_browser_api_prefix is not None:
-        return _cached_browser_api_prefix
-
-    # Check environment variable first (highest priority)
-    env_prefix = os.environ.get("INSPIRE_BROWSER_API_PREFIX")
-    if env_prefix:
-        _cached_browser_api_prefix = env_prefix
-        return _cached_browser_api_prefix
-
-    # Try to load from config files
-    try:
-        from .config import Config
-
-        config, _ = Config.from_files_and_env(require_credentials=False, require_target_dir=False)
-        if config.browser_api_prefix:
-            _cached_browser_api_prefix = config.browser_api_prefix
-            return _cached_browser_api_prefix
-    except Exception:
-        pass
-
-    # Use default
-    _cached_browser_api_prefix = DEFAULT_BROWSER_API_PREFIX
-    return _cached_browser_api_prefix
-
-
-def _in_asyncio_loop() -> bool:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return False
-    return True
-
-
-def _run_in_thread(func, *args, **kwargs):
-    result: dict[str, Any] = {}
-    error: dict[str, BaseException] = {}
-
-    def runner() -> None:
-        try:
-            result["value"] = func(*args, **kwargs)
-        except BaseException as exc:  # pragma: no cover - re-raised in main thread
-            error["exc"] = exc
-
-    thread = threading.Thread(target=runner, daemon=True)
-    thread.start()
-    thread.join()
-    if error:
-        raise error["exc"]
-    return result.get("value")
-
-
-def _request_json(
-    session: WebSession,
-    method: str,
-    path: str,
-    *,
-    referer: str,
-    body: Optional[dict] = None,
-    timeout: int = 30,
-) -> dict:
-    url = f"{BASE_URL}{path}"
-    headers = {"Referer": referer}
-    return request_json(
-        session,
-        method,
-        url,
-        headers=headers,
-        body=body,
-        timeout=timeout,
-    )
-
-
-def _browser_api_path(endpoint_path: str) -> str:
-    """Build a browser API path with configurable prefix.
-
-    Args:
-        endpoint_path: The endpoint path (e.g., "/train_job/list")
-
-    Returns:
-        Full path with prefix (e.g., "/api/v1/train_job/list")
-    """
-    # Strip leading slash from endpoint_path if present
-    endpoint = endpoint_path.lstrip("/")
-    prefix = _get_browser_api_prefix().rstrip("/")
-    return f"{prefix}/{endpoint}"
-
-
-def _launch_browser(p, headless: bool = True):
-    proxy = get_playwright_proxy()
-    return p.chromium.launch(headless=headless, proxy=proxy)
-
-
-def _new_context(browser, *, storage_state=None):
-    proxy = get_playwright_proxy()
-    if storage_state is not None:
-        return browser.new_context(
-            storage_state=storage_state, proxy=proxy, ignore_https_errors=True
-        )
-    return browser.new_context(proxy=proxy, ignore_https_errors=True)
 
 
 @dataclass
@@ -674,45 +567,6 @@ def get_full_free_node_counts(
 
 
 @dataclass
-class ProjectInfo:
-    """Project information with quota details."""
-
-    project_id: str
-    name: str
-    workspace_id: str
-    # Quota fields
-    budget: float = 0.0  # Total budget allocated
-    remain_budget: float = 0.0  # Remaining budget
-    member_remain_budget: float = 0.0  # Remaining budget for current user
-    member_remain_gpu_hours: float = 0.0  # Remaining GPU hours (negative = over quota)
-    gpu_limit: bool = False  # Whether GPU limits are enforced
-    member_gpu_limit: bool = False  # Whether member GPU limits are enforced
-    priority_level: str = ""  # Priority level (HIGH, NORMAL, etc.)
-    priority_name: str = ""  # Priority name (numeric string like "10", "4")
-
-    def has_quota(self) -> bool:
-        """Check if the project has available quota.
-
-        Returns True if:
-        - GPU limits are not enforced, OR
-        - Member has positive remaining GPU hours
-        """
-        # If limits aren't enforced, quota is available
-        if not self.gpu_limit and not self.member_gpu_limit:
-            return True
-        # Check if member has positive GPU hours remaining
-        return self.member_remain_gpu_hours >= 0
-
-    def get_quota_status(self) -> str:
-        """Get formatted quota status string for display."""
-        if not self.has_quota():
-            return " (over quota)"
-        if self.member_gpu_limit:
-            return f" ({self.member_remain_gpu_hours:.0f} GPU-hours remaining)"
-        return ""
-
-
-@dataclass
 class ImageInfo:
     """Docker image information."""
 
@@ -721,132 +575,6 @@ class ImageInfo:
     name: str
     framework: str
     version: str
-
-
-def list_projects(
-    workspace_id: Optional[str] = None,
-    session: Optional[WebSession] = None,
-) -> list[ProjectInfo]:
-    """List available projects.
-
-    Args:
-        workspace_id: Workspace to list projects from.
-        session: Optional pre-existing web session.
-
-    Returns:
-        List of ProjectInfo objects.
-    """
-    if session is None:
-        session = get_web_session()
-
-    if workspace_id is None:
-        workspace_id = session.workspace_id or DEFAULT_WORKSPACE_ID
-
-    body = {
-        "page": 1,
-        "page_size": -1,
-        "filter": {
-            "workspace_id": workspace_id,
-            "check_admin": True,
-        },
-    }
-
-    data = _request_json(
-        session,
-        "POST",
-        _browser_api_path("/project/list"),
-        referer=f"{BASE_URL}/jobs/interactiveModeling",
-        body=body,
-        timeout=30,
-    )
-
-    if data.get("code") != 0:
-        raise ValueError(f"API error: {data.get('message')}")
-
-    items = data.get("data", {}).get("items", [])
-
-    def _parse_float(value) -> float:
-        """Parse a numeric value that may be string or number."""
-        if value is None or value == "":
-            return 0.0
-        try:
-            return float(value)
-        except (ValueError, TypeError):
-            return 0.0
-
-    return [
-        ProjectInfo(
-            project_id=item.get("id", ""),
-            name=item.get("name", ""),
-            workspace_id=item.get("workspace_id", workspace_id),
-            budget=_parse_float(item.get("budget")),
-            remain_budget=_parse_float(item.get("remain_budget")),
-            member_remain_budget=_parse_float(item.get("member_remain_budget")),
-            member_remain_gpu_hours=_parse_float(item.get("member_remain_gpu_hours")),
-            gpu_limit=bool(item.get("gpu_limit", False)),
-            member_gpu_limit=bool(item.get("member_gpu_limit", False)),
-            priority_level=item.get("priority_level", ""),
-            priority_name=item.get("priority_name", ""),
-        )
-        for item in items
-    ]
-
-
-def select_project(
-    projects: list[ProjectInfo],
-    requested: Optional[str] = None,
-) -> tuple[ProjectInfo, Optional[str]]:
-    """Select a project, with auto-fallback if over quota.
-
-    Args:
-        projects: List of available projects.
-        requested: Optional project name or ID to use.
-
-    Returns:
-        Tuple of (selected_project, fallback_message).
-        fallback_message is None if no fallback was needed, or a string
-        like "Project 'X' is over quota, selecting alternative..." if fallback occurred.
-
-    Raises:
-        ValueError: If requested project not found.
-        ValueError: If all projects are over quota.
-    """
-
-    def sort_key(p: ProjectInfo) -> tuple:
-        has_quota = p.has_quota()
-        try:
-            priority = int(p.priority_name) if p.priority_name else 0
-        except ValueError:
-            priority = 0
-        return (not has_quota, -priority, p.name)
-
-    if requested:
-        # Find by name or ID
-        target = None
-        for p in projects:
-            if p.name.lower() == requested.lower() or p.project_id == requested:
-                target = p
-                break
-
-        if not target:
-            raise ValueError(f"Project '{requested}' not found")
-
-        if target.has_quota():
-            return (target, None)
-
-        # Fallback needed
-        fallback_msg = f"Project '{target.name}' is over quota, selecting alternative..."
-        sorted_projects = sorted(projects, key=sort_key)
-        fallback = sorted_projects[0]
-
-        if not fallback.has_quota():
-            raise ValueError("All projects are over quota")
-
-        return (fallback, fallback_msg)
-
-    # Auto-select best project
-    sorted_projects = sorted(projects, key=sort_key)
-    return (sorted_projects[0], None)
 
 
 def list_images(
