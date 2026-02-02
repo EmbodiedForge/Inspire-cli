@@ -32,7 +32,7 @@ from inspire.cli.context import (
     EXIT_LOG_NOT_FOUND,
     EXIT_JOB_NOT_FOUND,
 )
-from inspire.inspire_api_control import _validate_job_id_format
+from inspire.api import _validate_job_id_format
 from inspire.cli.utils.config import Config, ConfigError, build_env_exports
 from inspire.cli.utils.auth import AuthManager, AuthenticationError
 from inspire.cli.utils.job_cache import JobCache
