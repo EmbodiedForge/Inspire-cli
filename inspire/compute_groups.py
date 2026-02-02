@@ -44,7 +44,7 @@ def load_compute_groups_from_config(raw_list: list[dict]) -> tuple[ComputeGroupD
                     location=item.get("location", ""),
                 )
             )
-        except (KeyError, TypeError) as e:
+        except (KeyError, TypeError):
             # Skip invalid entries
             continue
     return tuple(groups)

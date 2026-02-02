@@ -6,7 +6,6 @@ import os
 import re
 from typing import Optional
 
-
 PROFILE_ENV_MAP = {
     "WORKSPACE_ID": "INSPIRE_WORKSPACE_ID",
     "PROJECT_ID": "INSPIRE_PROJECT_ID",

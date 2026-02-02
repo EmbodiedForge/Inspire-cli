@@ -35,4 +35,3 @@ def exit_with_error(
     else:
         click.echo(human_formatter.format_error(message, hint=hint), err=True)
     sys.exit(exit_code)
-

@@ -37,4 +37,3 @@ __all__ = [
     "_translate_api_error",
     "_validate_job_id_format",
 ]
-

@@ -20,7 +20,6 @@ from inspire.cli.utils.config import (
 )
 from inspire.cli.utils.config_schema import (
     CONFIG_OPTIONS,
-    ConfigOption,
     get_categories,
     get_options_by_category,
     get_options_by_scope,
@@ -29,7 +28,6 @@ from inspire.cli.utils.config_schema import (
 )
 from inspire.cli.commands.init import init, _detect_env_vars, _generate_toml_content
 from inspire.cli.commands.config import config as config_command
-
 
 # ===========================================================================
 # Config Schema tests
@@ -87,7 +85,10 @@ class TestConfigSchema:
         """Test that ConfigOption has scope field with valid values."""
         for opt in CONFIG_OPTIONS:
             assert hasattr(opt, "scope"), f"Option {opt.env_var} missing scope field"
-            assert opt.scope in ("global", "project"), f"Option {opt.env_var} has invalid scope: {opt.scope}"
+            assert opt.scope in (
+                "global",
+                "project",
+            ), f"Option {opt.env_var} has invalid scope: {opt.scope}"
 
     def test_global_scope_options(self) -> None:
         """Test that expected options have global scope."""
@@ -212,8 +213,12 @@ class TestLayeredConfig:
     def clean_env(self, monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
         """Clear relevant env vars for testing."""
         env_vars = [
-            "INSPIRE_USERNAME", "INSPIRE_PASSWORD", "INSPIRE_BASE_URL",
-            "INSPIRE_TIMEOUT", "INSPIRE_TARGET_DIR", "INSP_GITEA_SERVER",
+            "INSPIRE_USERNAME",
+            "INSPIRE_PASSWORD",
+            "INSPIRE_BASE_URL",
+            "INSPIRE_TIMEOUT",
+            "INSPIRE_TARGET_DIR",
+            "INSP_GITEA_SERVER",
         ]
         for var in env_vars:
             monkeypatch.delenv(var, raising=False)
@@ -365,14 +370,14 @@ timeout = 45
         global_dir = tmp_path / "global"
         global_dir.mkdir()
         global_config = global_dir / "config.toml"
-        global_config.write_text('''
+        global_config.write_text("""
 [auth]
 username = "testuser"
 
 [remote_env]
 WANDB_API_KEY = "global-key"
 UV_PYTHON_INSTALL_DIR = "/path/to/uv"
-''')
+""")
 
         monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
         monkeypatch.chdir(tmp_path)
@@ -393,21 +398,21 @@ UV_PYTHON_INSTALL_DIR = "/path/to/uv"
         global_dir = tmp_path / "global"
         global_dir.mkdir()
         global_config = global_dir / "config.toml"
-        global_config.write_text('''
+        global_config.write_text("""
 [remote_env]
 WANDB_API_KEY = "global-key"
 UV_PYTHON_INSTALL_DIR = "/path/to/uv"
-''')
+""")
 
         # Create project config with different remote_env
         project_dir = tmp_path / ".inspire"
         project_dir.mkdir()
         project_config = project_dir / "config.toml"
-        project_config.write_text('''
+        project_config.write_text("""
 [remote_env]
 WANDB_API_KEY = "project-key"
 HF_TOKEN = "hf-token"
-''')
+""")
 
         monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
         monkeypatch.chdir(tmp_path)
@@ -452,9 +457,7 @@ HF_TOKEN = "hf-token"
         with pytest.raises(ConfigError, match="Missing username"):
             Config.from_files_and_env(require_credentials=True)
 
-    def test_get_config_paths(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_get_config_paths(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test get_config_paths returns correct paths."""
         # Create global config
         global_dir = tmp_path / "global"
@@ -878,9 +881,7 @@ class TestInitHelpers:
 class TestConfigShowCommand:
     """Tests for inspire config show command."""
 
-    def test_config_show_table(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_config_show_table(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test config show table output."""
         monkeypatch.setenv("INSPIRE_USERNAME", "testuser")
         monkeypatch.setenv("INSPIRE_PASSWORD", "testpass")
@@ -896,9 +897,7 @@ class TestConfigShowCommand:
         assert "testuser" in result.output
         assert "[env]" in result.output
 
-    def test_config_show_json(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_config_show_json(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test config show JSON output."""
         monkeypatch.setenv("INSPIRE_USERNAME", "testuser")
         monkeypatch.setenv("INSPIRE_PASSWORD", "testpass")
@@ -914,9 +913,7 @@ class TestConfigShowCommand:
         assert "values" in data
         assert "INSPIRE_USERNAME" in data["values"]
 
-    def test_config_show_filter(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_config_show_filter(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test config show with category filter."""
         monkeypatch.setenv("INSPIRE_USERNAME", "testuser")
         monkeypatch.setenv("INSPIRE_PASSWORD", "testpass")

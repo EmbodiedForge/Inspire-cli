@@ -9,7 +9,6 @@ import pytest
 from inspire.cli.utils.config import Config, ConfigError
 from inspire.cli.utils.workspace import select_workspace_id
 
-
 WS_CPU = "ws-6e6ba362-e98e-45b2-9c5a-311998e93d65"
 WS_GPU = "ws-9dcc0e1f-80a4-4af2-bc2f-0e352e7b17e6"
 WS_INET = "ws-6040202d-b785-4b37-98b0-c68d65dd52ce"
@@ -62,7 +61,9 @@ def test_placeholder_workspace_id_is_rejected() -> None:
         select_workspace_id(cfg)
 
 
-def test_config_loads_workspaces_from_project_toml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_config_loads_workspaces_from_project_toml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     project_root = tmp_path / "proj"
     project_root.mkdir()
     (project_root / ".inspire").mkdir()

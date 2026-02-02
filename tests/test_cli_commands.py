@@ -8,14 +8,11 @@ from click.testing import CliRunner
 from inspire.cli.main import main as cli_main
 from inspire.cli.context import (
     EXIT_SUCCESS,
-    EXIT_GENERAL_ERROR,
     EXIT_CONFIG_ERROR,
     EXIT_AUTH_ERROR,
-    EXIT_API_ERROR,
     EXIT_TIMEOUT,
     EXIT_LOG_NOT_FOUND,
     EXIT_JOB_NOT_FOUND,
-    EXIT_VALIDATION_ERROR,
 )
 
 from inspire.cli.utils import config as config_module
@@ -117,7 +114,9 @@ class DummyAPI:
         }
 
 
-def patch_config_and_auth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, include_compute_groups: bool = False) -> DummyAPI:
+def patch_config_and_auth(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, include_compute_groups: bool = False
+) -> DummyAPI:
     """Patch Config.from_env and AuthManager.get_api to use local stubs.
 
     Args:
@@ -140,7 +139,9 @@ def patch_config_and_auth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, inclu
         return config, {}
 
     monkeypatch.setattr(config_module.Config, "from_env", classmethod(fake_from_env))
-    monkeypatch.setattr(config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env))
+    monkeypatch.setattr(
+        config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env)
+    )
 
     api = DummyAPI()
 
@@ -314,7 +315,9 @@ def test_job_create_requires_target_dir(monkeypatch: pytest.MonkeyPatch):
         assert require_target_dir is True
         raise ConfigError("Missing INSPIRE_TARGET_DIR")
 
-    monkeypatch.setattr(config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env))
+    monkeypatch.setattr(
+        config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env)
+    )
 
     runner = CliRunner()
     result = runner.invoke(
@@ -519,7 +522,12 @@ def test_job_list_uses_local_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
         def __init__(self, path: str) -> None:  # noqa: ARG002
             pass
 
-        def list_jobs(self, limit: int = 10, status: Optional[str] = None, exclude_statuses: Optional[set] = None) -> List[Dict[str, Any]]:
+        def list_jobs(
+            self,
+            limit: int = 10,
+            status: Optional[str] = None,
+            exclude_statuses: Optional[set] = None,
+        ) -> List[Dict[str, Any]]:
             return [
                 {
                     "job_id": TEST_JOB_ID,
@@ -791,7 +799,9 @@ def test_config_check_auth_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
         return config, {}
 
     monkeypatch.setattr(config_module.Config, "from_env", classmethod(fake_from_env))
-    monkeypatch.setattr(config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env))
+    monkeypatch.setattr(
+        config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env)
+    )
 
     def fake_get_api(self_or_cls, cfg: Optional[config_module.Config] = None):  # type: ignore[override]
         from inspire.cli.utils.auth import AuthenticationError

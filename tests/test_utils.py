@@ -1,27 +1,25 @@
 """Tests for utility modules: job_cache, config, tunnel."""
 
-import json
-import os
-from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 import pytest
 
 from inspire.cli.utils.job_cache import JobCache
-from inspire.cli.utils.config import Config, ConfigError, _parse_remote_timeout, _parse_denylist, build_env_exports
+from inspire.cli.utils.config import (
+    Config,
+    ConfigError,
+    _parse_remote_timeout,
+    _parse_denylist,
+    build_env_exports,
+)
 from inspire.cli.utils.tunnel import (
     BridgeProfile,
     TunnelConfig,
     load_tunnel_config,
     save_tunnel_config,
     _get_proxy_command,
-    get_ssh_command_args,
     has_internet_for_gpu_type,
-    TunnelNotAvailableError,
-    BridgeNotFoundError,
 )
-
 
 # ===========================================================================
 # JobCache tests
@@ -493,7 +491,7 @@ class TestBridgeProfile:
 
         assert profile.name == "test-bridge"
         assert profile.ssh_user == "root"  # default
-        assert profile.ssh_port == 22222   # default
+        assert profile.ssh_port == 22222  # default
         assert profile.has_internet is True  # default
 
     def test_has_internet_field(self) -> None:
@@ -608,8 +606,12 @@ class TestTunnelConfig:
         """Test get_bridge_with_internet prefers the default bridge."""
         config = TunnelConfig()
         # Add bridge1 as default (first added)
-        config.add_bridge(BridgeProfile(name="bridge1", proxy_url="https://p1.example.com", has_internet=True))
-        config.add_bridge(BridgeProfile(name="bridge2", proxy_url="https://p2.example.com", has_internet=True))
+        config.add_bridge(
+            BridgeProfile(name="bridge1", proxy_url="https://p1.example.com", has_internet=True)
+        )
+        config.add_bridge(
+            BridgeProfile(name="bridge2", proxy_url="https://p2.example.com", has_internet=True)
+        )
 
         result = config.get_bridge_with_internet()
 
@@ -619,8 +621,14 @@ class TestTunnelConfig:
     def test_get_bridge_with_internet_skips_no_internet_default(self) -> None:
         """Test get_bridge_with_internet skips default if it has no internet."""
         config = TunnelConfig()
-        config.add_bridge(BridgeProfile(name="gpu-bridge", proxy_url="https://gpu.example.com", has_internet=False))
-        config.add_bridge(BridgeProfile(name="cpu-bridge", proxy_url="https://cpu.example.com", has_internet=True))
+        config.add_bridge(
+            BridgeProfile(
+                name="gpu-bridge", proxy_url="https://gpu.example.com", has_internet=False
+            )
+        )
+        config.add_bridge(
+            BridgeProfile(name="cpu-bridge", proxy_url="https://cpu.example.com", has_internet=True)
+        )
         # gpu-bridge is default (first added)
         assert config.default_bridge == "gpu-bridge"
 
@@ -632,8 +640,12 @@ class TestTunnelConfig:
     def test_get_bridge_with_internet_returns_none_when_all_no_internet(self) -> None:
         """Test get_bridge_with_internet returns None when no bridge has internet."""
         config = TunnelConfig()
-        config.add_bridge(BridgeProfile(name="bridge1", proxy_url="https://p1.example.com", has_internet=False))
-        config.add_bridge(BridgeProfile(name="bridge2", proxy_url="https://p2.example.com", has_internet=False))
+        config.add_bridge(
+            BridgeProfile(name="bridge1", proxy_url="https://p1.example.com", has_internet=False)
+        )
+        config.add_bridge(
+            BridgeProfile(name="bridge2", proxy_url="https://p2.example.com", has_internet=False)
+        )
 
         result = config.get_bridge_with_internet()
 

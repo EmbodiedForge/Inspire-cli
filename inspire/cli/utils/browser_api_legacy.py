@@ -25,7 +25,6 @@ from .web_session import (
     build_requests_session,
 )
 
-
 BASE_URL = os.environ.get("INSPIRE_BASE_URL", "https://api.example.com")
 
 # Default browser API prefix (fallback if not configured)
@@ -56,9 +55,7 @@ def _get_browser_api_prefix() -> str:
     try:
         from .config import Config
 
-        config, _ = Config.from_files_and_env(
-            require_credentials=False, require_target_dir=False
-        )
+        config, _ = Config.from_files_and_env(require_credentials=False, require_target_dir=False)
         if config.browser_api_prefix:
             _cached_browser_api_prefix = config.browser_api_prefix
             return _cached_browser_api_prefix
@@ -140,13 +137,16 @@ def _launch_browser(p, headless: bool = True):
 def _new_context(browser, *, storage_state=None):
     proxy = get_playwright_proxy()
     if storage_state is not None:
-        return browser.new_context(storage_state=storage_state, proxy=proxy, ignore_https_errors=True)
+        return browser.new_context(
+            storage_state=storage_state, proxy=proxy, ignore_https_errors=True
+        )
     return browser.new_context(proxy=proxy, ignore_https_errors=True)
 
 
 @dataclass
 class JobInfo:
     """Training job information."""
+
     job_id: str
     name: str
     status: str
@@ -191,6 +191,7 @@ class JobInfo:
 @dataclass
 class GPUAvailability:
     """GPU availability for a compute group."""
+
     group_id: str
     group_name: str
     gpu_type: str
@@ -536,10 +537,7 @@ def find_best_compute_group_accurate(
     # Filter by GPU type (normalize: "H100" matches "NVIDIA H100 (80GB)")
     if gpu_type and gpu_type.upper() != "ANY":
         gpu_type_upper = gpu_type.upper()
-        filtered = [
-            g for g in availability
-            if gpu_type_upper in g.gpu_type.upper()
-        ]
+        filtered = [g for g in availability if gpu_type_upper in g.gpu_type.upper()]
     else:
         filtered = list(availability)
 
@@ -678,6 +676,7 @@ def get_full_free_node_counts(
 @dataclass
 class ProjectInfo:
     """Project information with quota details."""
+
     project_id: str
     name: str
     workspace_id: str
@@ -716,6 +715,7 @@ class ProjectInfo:
 @dataclass
 class ImageInfo:
     """Docker image information."""
+
     image_id: str
     url: str
     name: str
@@ -811,6 +811,7 @@ def select_project(
         ValueError: If requested project not found.
         ValueError: If all projects are over quota.
     """
+
     def sort_key(p: ProjectInfo) -> tuple:
         has_quota = p.has_quota()
         try:
@@ -1286,7 +1287,6 @@ def _setup_notebook_rtunnel_sync(
     notebook_lab_path = _browser_api_path(f"/notebook/lab/{notebook_id}/proxy/{port}/")
     known_proxy_url = f"{BASE_URL}{notebook_lab_path}"
     try:
-        import requests as _requests
         http = build_requests_session(session, BASE_URL)
         resp = http.get(known_proxy_url, timeout=5)
         body = resp.text[:200] if resp.text else ""
@@ -1371,7 +1371,9 @@ def _setup_notebook_rtunnel_sync(
 
             # Prefer the launcher terminal card (it appears earlier than the menu bar in some builds).
             try:
-                lab_frame.locator("div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')").first.wait_for(
+                lab_frame.locator(
+                    "div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')"
+                ).first.wait_for(
                     state="visible",
                     timeout=180000,
                 )
@@ -1402,7 +1404,9 @@ def _setup_notebook_rtunnel_sync(
             terminal_opened = False
 
             # Path A: Launcher card
-            terminal_card = lab_frame.locator("div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')")
+            terminal_card = lab_frame.locator(
+                "div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')"
+            )
             try:
                 terminal_card.first.wait_for(state="visible", timeout=20000)
                 terminal_card.first.click(timeout=8000)
@@ -1419,7 +1423,9 @@ def _setup_notebook_rtunnel_sync(
                     if launcher_btn.count() > 0:
                         launcher_btn.click(timeout=2000)
                         page.wait_for_timeout(500)
-                    terminal_card = lab_frame.locator("div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')")
+                    terminal_card = lab_frame.locator(
+                        "div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')"
+                    )
                     terminal_card.first.wait_for(state="visible", timeout=20000)
                     terminal_card.first.click(timeout=8000)
                     terminal_opened = True
@@ -1446,7 +1452,9 @@ def _setup_notebook_rtunnel_sync(
 
             # Ensure terminal tab is active before typing.
             try:
-                term_tab = lab_frame.locator("li.lm-TabBar-tab:has-text('Terminal'), li.lm-TabBar-tab:has-text('终端')").first
+                term_tab = lab_frame.locator(
+                    "li.lm-TabBar-tab:has-text('Terminal'), li.lm-TabBar-tab:has-text('终端')"
+                ).first
                 if term_tab.count() > 0:
                     term_tab.click(timeout=2000)
                     page.wait_for_timeout(250)
@@ -1476,6 +1484,7 @@ def _setup_notebook_rtunnel_sync(
             # Use the same nightly tarball as the local tunnel client.
             try:
                 from inspire.cli.utils.tunnel import _get_rtunnel_download_url
+
                 RTUNNEL_DOWNLOAD_URL = _get_rtunnel_download_url()
             except Exception:
                 RTUNNEL_DOWNLOAD_URL = "https://github.com/Sarfflow/rtunnel/releases/download/nightly/rtunnel-linux-amd64.tar.gz"
@@ -1492,9 +1501,7 @@ def _setup_notebook_rtunnel_sync(
             dropbear_deb_dir = os.environ.get("INSPIRE_DROPBEAR_DEB_DIR")
 
             if pip_index_url:
-                cmd_lines.append(
-                    f"pip config set global.index-url {shlex.quote(pip_index_url)}"
-                )
+                cmd_lines.append(f"pip config set global.index-url {shlex.quote(pip_index_url)}")
                 if pip_trusted_host:
                     cmd_lines.append(
                         f"pip config set global.trusted-host {shlex.quote(pip_trusted_host)}"
@@ -1508,7 +1515,7 @@ def _setup_notebook_rtunnel_sync(
                 cmd_lines.extend(
                     [
                         "echo '>>> configure apt source...'",
-                        "CODENAME=$( . /etc/os-release && echo \"$VERSION_CODENAME\" )",
+                        'CODENAME=$( . /etc/os-release && echo "$VERSION_CODENAME" )',
                         "cat >/etc/apt/sources.list.d/ubuntu.sources <<EOF",
                         "Types: deb",
                         f"URIs: {apt_mirror_url}",
@@ -1524,13 +1531,13 @@ def _setup_notebook_rtunnel_sync(
             if rtunnel_bin:
                 cmd_lines.append(f"RTUNNEL_BIN_PATH={shlex.quote(rtunnel_bin)}")
                 cmd_lines.append(
-                    "if [ -f \"$RTUNNEL_BIN_PATH\" ]; then cp \"$RTUNNEL_BIN_PATH\" /tmp/rtunnel && chmod +x /tmp/rtunnel; fi"
+                    'if [ -f "$RTUNNEL_BIN_PATH" ]; then cp "$RTUNNEL_BIN_PATH" /tmp/rtunnel && chmod +x /tmp/rtunnel; fi'
                 )
 
             if sshd_deb_dir:
                 cmd_lines.append(f"SSHD_DEB_DIR={shlex.quote(sshd_deb_dir)}")
                 cmd_lines.append(
-                    "if [ -d \"$SSHD_DEB_DIR\" ]; then for _i in 1 2 3; do dpkg -i \"$SSHD_DEB_DIR\"/*.deb && break; done; ldconfig >/dev/null 2>&1 || true; fi"
+                    'if [ -d "$SSHD_DEB_DIR" ]; then for _i in 1 2 3; do dpkg -i "$SSHD_DEB_DIR"/*.deb && break; done; ldconfig >/dev/null 2>&1 || true; fi'
                 )
 
             if dropbear_deb_dir:
@@ -1568,20 +1575,22 @@ def _setup_notebook_rtunnel_sync(
                 )
             else:
                 # OpenSSH fallback
-                cmd_lines.extend([
-                    f"RTUNNEL_URL={RTUNNEL_DOWNLOAD_URL!r}",
-                    f"PORT={port}",
-                    f"SSH_PORT={ssh_port}",
-                    "if [ ! -x /usr/sbin/sshd ] && [ -z \"${SSHD_DEB_DIR:-}\" ]; then export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq openssh-server; fi",
-                    "pkill -f 'sshd -p' 2>/dev/null || true",
-                    "if [ -x /usr/sbin/sshd ]; then mkdir -p /run/sshd && chmod 0755 /run/sshd; ssh-keygen -A >/dev/null 2>&1 || true; /usr/sbin/sshd -p \"$SSH_PORT\" -o ListenAddress=127.0.0.1 -o PermitRootLogin=yes -o PasswordAuthentication=no -o PubkeyAuthentication=yes >/dev/null 2>&1 & fi",
-                    # rtunnel for OpenSSH
-                    "RTUNNEL_BIN=/tmp/rtunnel",
-                    "if [ -n \"${RTUNNEL_BIN_PATH:-}\" ] && [ -x \"$RTUNNEL_BIN_PATH\" ]; then cp \"$RTUNNEL_BIN_PATH\" /tmp/rtunnel && chmod +x /tmp/rtunnel; fi",
-                    "pkill -f \"rtunnel.*:$PORT\" 2>/dev/null || true",
-                    f"if [ ! -x \"$RTUNNEL_BIN\" ]; then curl -fsSL '{RTUNNEL_DOWNLOAD_URL}' -o /tmp/rtunnel.tgz && tar -xzf /tmp/rtunnel.tgz -C /tmp && chmod +x /tmp/rtunnel 2>/dev/null; fi",
-                    "nohup \"$RTUNNEL_BIN\" \"127.0.0.1:$SSH_PORT\" \"0.0.0.0:$PORT\" >/tmp/rtunnel-server.log 2>&1 &",
-                ])
+                cmd_lines.extend(
+                    [
+                        f"RTUNNEL_URL={RTUNNEL_DOWNLOAD_URL!r}",
+                        f"PORT={port}",
+                        f"SSH_PORT={ssh_port}",
+                        'if [ ! -x /usr/sbin/sshd ] && [ -z "${SSHD_DEB_DIR:-}" ]; then export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq openssh-server; fi',
+                        "pkill -f 'sshd -p' 2>/dev/null || true",
+                        'if [ -x /usr/sbin/sshd ]; then mkdir -p /run/sshd && chmod 0755 /run/sshd; ssh-keygen -A >/dev/null 2>&1 || true; /usr/sbin/sshd -p "$SSH_PORT" -o ListenAddress=127.0.0.1 -o PermitRootLogin=yes -o PasswordAuthentication=no -o PubkeyAuthentication=yes >/dev/null 2>&1 & fi',
+                        # rtunnel for OpenSSH
+                        "RTUNNEL_BIN=/tmp/rtunnel",
+                        'if [ -n "${RTUNNEL_BIN_PATH:-}" ] && [ -x "$RTUNNEL_BIN_PATH" ]; then cp "$RTUNNEL_BIN_PATH" /tmp/rtunnel && chmod +x /tmp/rtunnel; fi',
+                        'pkill -f "rtunnel.*:$PORT" 2>/dev/null || true',
+                        f"if [ ! -x \"$RTUNNEL_BIN\" ]; then curl -fsSL '{RTUNNEL_DOWNLOAD_URL}' -o /tmp/rtunnel.tgz && tar -xzf /tmp/rtunnel.tgz -C /tmp && chmod +x /tmp/rtunnel 2>/dev/null; fi",
+                        'nohup "$RTUNNEL_BIN" "127.0.0.1:$SSH_PORT" "0.0.0.0:$PORT" >/tmp/rtunnel-server.log 2>&1 &',
+                    ]
+                )
 
             _sys.stderr.write("  Executing setup commands in terminal...\n")
             _sys.stderr.flush()
@@ -1731,7 +1740,7 @@ def _run_command_in_notebook_sync(
     if session is None:
         session = get_web_session()
 
-    _sys.stderr.write(f"Running command in notebook terminal...\n")
+    _sys.stderr.write("Running command in notebook terminal...\n")
     _sys.stderr.flush()
 
     with sync_playwright() as p:
@@ -1781,7 +1790,9 @@ def _run_command_in_notebook_sync(
 
             # Wait for launcher or menu
             try:
-                lab_frame.locator("div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')").first.wait_for(
+                lab_frame.locator(
+                    "div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')"
+                ).first.wait_for(
                     state="visible",
                     timeout=180000,
                 )
@@ -1811,7 +1822,9 @@ def _run_command_in_notebook_sync(
             terminal_opened = False
 
             # Path A: Launcher card
-            terminal_card = lab_frame.locator("div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')")
+            terminal_card = lab_frame.locator(
+                "div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')"
+            )
             try:
                 terminal_card.first.wait_for(state="visible", timeout=20000)
                 terminal_card.first.click(timeout=8000)
@@ -1828,7 +1841,9 @@ def _run_command_in_notebook_sync(
                     if launcher_btn.count() > 0:
                         launcher_btn.click(timeout=2000)
                         page.wait_for_timeout(500)
-                    terminal_card = lab_frame.locator("div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')")
+                    terminal_card = lab_frame.locator(
+                        "div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')"
+                    )
                     terminal_card.first.wait_for(state="visible", timeout=20000)
                     terminal_card.first.click(timeout=8000)
                     terminal_opened = True
@@ -1855,7 +1870,9 @@ def _run_command_in_notebook_sync(
 
             # Ensure terminal tab is active
             try:
-                term_tab = lab_frame.locator("li.lm-TabBar-tab:has-text('Terminal'), li.lm-TabBar-tab:has-text('终端')").first
+                term_tab = lab_frame.locator(
+                    "li.lm-TabBar-tab:has-text('Terminal'), li.lm-TabBar-tab:has-text('终端')"
+                ).first
                 if term_tab.count() > 0:
                     term_tab.click(timeout=2000)
                     page.wait_for_timeout(250)
@@ -1882,13 +1899,13 @@ def _run_command_in_notebook_sync(
                 pass
 
             # Type and execute the command
-            _sys.stderr.write(f"  Executing command...\n")
+            _sys.stderr.write("  Executing command...\n")
             _sys.stderr.flush()
             page.keyboard.type(command, delay=2)
             page.keyboard.press("Enter")
             page.wait_for_timeout(2000)
 
-            _sys.stderr.write(f"  Command sent successfully.\n")
+            _sys.stderr.write("  Command sent successfully.\n")
             _sys.stderr.flush()
 
         finally:

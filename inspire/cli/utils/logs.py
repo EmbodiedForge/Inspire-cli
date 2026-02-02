@@ -4,7 +4,6 @@ Handles reading logs from the shared filesystem.
 """
 
 import glob
-import os
 import time
 from pathlib import Path
 from typing import Callable, Iterator, List, Optional
@@ -12,6 +11,7 @@ from typing import Callable, Iterator, List, Optional
 
 class LogNotFoundError(Exception):
     """Log file not found."""
+
     pass
 
 
@@ -134,10 +134,7 @@ class LogReader:
             return all_lines[-lines:]
 
     def follow(
-        self,
-        log_path: Path,
-        callback: Callable[[str], None],
-        poll_interval: float = 0.5
+        self, log_path: Path, callback: Callable[[str], None], poll_interval: float = 0.5
     ) -> Iterator[str]:
         """Stream new lines as they appear (like tail -f).
 

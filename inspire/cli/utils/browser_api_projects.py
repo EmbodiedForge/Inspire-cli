@@ -16,4 +16,3 @@ __all__ = [
     "list_projects",
     "select_project",
 ]
-

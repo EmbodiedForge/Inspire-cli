@@ -11,8 +11,16 @@ import json
 import logging
 import os
 
-from inspire.api import *  # noqa: F403
-
+from inspire.api import (
+    AuthenticationError,
+    DEFAULT_SHM_ENV_VAR,
+    InspireAPI,
+    InspireAPIError,
+    InspireConfig,
+    JobCreationError,
+    ResourceManager,
+    ValidationError,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -69,7 +77,9 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Smart training job creation
-    create_parser = subparsers.add_parser("create", help="🎯 Smart distributed training job creation")
+    create_parser = subparsers.add_parser(
+        "create", help="🎯 Smart distributed training job creation"
+    )
     create_parser.add_argument("--name", required=True, type=str, help="Training job name")
     create_parser.add_argument("--start-command", required=True, type=str, help="Start command")
     create_parser.add_argument(
@@ -89,9 +99,13 @@ def main() -> int:
         type=str,
         help='Preferred datacenter location (e.g., "Room1", "Room2")',
     )
-    create_parser.add_argument("--priority", type=int, default=8, help="Task priority 1-10 (default: 8)")
+    create_parser.add_argument(
+        "--priority", type=int, default=8, help="Task priority 1-10 (default: 8)"
+    )
     create_parser.add_argument("--image", type=str, help="Custom image name (optional)")
-    create_parser.add_argument("--instances", type=int, default=1, help="Instance count (default: 1)")
+    create_parser.add_argument(
+        "--instances", type=int, default=1, help="Instance count (default: 1)"
+    )
     default_shm_size = InspireAPI.DEFAULT_SHM_SIZE
     create_parser.add_argument(
         "--shm-size",
@@ -109,10 +123,18 @@ def main() -> int:
         help="Max running time (hours) (default: 100)",
     )
     create_parser.add_argument("--project-id", type=str, help="Project ID (optional, uses default)")
-    create_parser.add_argument("--workspace-id", type=str, help="Workspace ID (optional, uses default)")
-    create_parser.add_argument("--auto-fault-tolerance", action="store_true", help="Enable auto fault tolerance")
-    create_parser.add_argument("--enable-notification", action="store_true", help="Enable notifications")
-    create_parser.add_argument("--enable-troubleshoot", action="store_true", help="Enable troubleshooting")
+    create_parser.add_argument(
+        "--workspace-id", type=str, help="Workspace ID (optional, uses default)"
+    )
+    create_parser.add_argument(
+        "--auto-fault-tolerance", action="store_true", help="Enable auto fault tolerance"
+    )
+    create_parser.add_argument(
+        "--enable-notification", action="store_true", help="Enable notifications"
+    )
+    create_parser.add_argument(
+        "--enable-troubleshoot", action="store_true", help="Enable troubleshooting"
+    )
 
     # Query job details
     detail_parser = subparsers.add_parser("detail", help="📋 Query training job details")

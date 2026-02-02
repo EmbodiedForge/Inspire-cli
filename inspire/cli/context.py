@@ -6,7 +6,6 @@ and individual command modules by centralizing common definitions.
 
 import click
 
-
 # Exit codes
 EXIT_SUCCESS = 0
 EXIT_GENERAL_ERROR = 1

@@ -18,18 +18,12 @@ def format_json(data: Any, success: bool = True) -> str:
     Returns:
         JSON string with standard wrapper
     """
-    output = {
-        "success": success,
-        "data": data
-    }
+    output = {"success": success, "data": data}
     return json.dumps(output, indent=2, ensure_ascii=False)
 
 
 def format_json_error(
-    error_type: str,
-    message: str,
-    code: int = 1,
-    hint: Optional[str] = None
+    error_type: str, message: str, code: int = 1, hint: Optional[str] = None
 ) -> str:
     """Format an error as JSON output.
 
@@ -50,10 +44,7 @@ def format_json_error(
     if hint:
         error_data["hint"] = hint
 
-    output = {
-        "success": False,
-        "error": error_data
-    }
+    output = {"success": False, "error": error_data}
     return json.dumps(output, indent=2, ensure_ascii=False)
 
 
@@ -68,10 +59,7 @@ def print_json(data: Any, success: bool = True) -> None:
 
 
 def print_json_error(
-    error_type: str,
-    message: str,
-    code: int = 1,
-    hint: Optional[str] = None
+    error_type: str, message: str, code: int = 1, hint: Optional[str] = None
 ) -> None:
     """Print an error as JSON to stderr.
 

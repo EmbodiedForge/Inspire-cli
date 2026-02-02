@@ -16,7 +16,6 @@ from inspire.cli.utils.config_schema import (
     parse_value,
 )
 
-
 # TOML configuration template (used when no env vars detected or --template flag)
 CONFIG_TEMPLATE = """# Inspire CLI Configuration
 # Location: {location_comment}
@@ -122,7 +121,9 @@ def _format_preview_by_scope(
 
     # Display global options
     if global_opts:
-        click.echo(click.style("Global config (~/.config/inspire/config.toml):", fg="cyan", bold=True))
+        click.echo(
+            click.style("Global config (~/.config/inspire/config.toml):", fg="cyan", bold=True)
+        )
 
         # Group by category within global
         by_category: dict[str, list[tuple[ConfigOption, str]]] = {}
@@ -300,7 +301,9 @@ def _init_smart_mode(
         _write_single_file(detected, project_path, force, "project")
     else:
         # Auto-split by scope
-        _write_auto_split(detected, global_opts, project_opts, global_path, project_path, force, secrets)
+        _write_auto_split(
+            detected, global_opts, project_opts, global_path, project_path, force, secrets
+        )
 
 
 def _write_single_file(
@@ -312,9 +315,7 @@ def _write_single_file(
     """Write all detected options to a single config file."""
     # Check for existing file
     if output_path.exists() and not force:
-        click.echo(
-            click.style(f"Config file already exists: {output_path}", fg="yellow")
-        )
+        click.echo(click.style(f"Config file already exists: {output_path}", fg="yellow"))
         if not click.confirm("\nOverwrite existing config?"):
             click.echo("Aborted.")
             return
@@ -418,7 +419,9 @@ def _init_template_mode(global_flag: bool, project_flag: bool, force: bool) -> N
         click.echo("Where would you like to create the config?")
         click.echo("  [g] Global config (~/.config/inspire/config.toml)")
         click.echo("  [p] Project config (./.inspire/config.toml)")
-        choice = click.prompt("Choice", default="p", type=click.Choice(["g", "p"], case_sensitive=False))
+        choice = click.prompt(
+            "Choice", default="p", type=click.Choice(["g", "p"], case_sensitive=False)
+        )
 
         if choice.lower() == "g":
             config_dir = Config.GLOBAL_CONFIG_PATH.parent
@@ -431,9 +434,7 @@ def _init_template_mode(global_flag: bool, project_flag: bool, force: bool) -> N
 
     # Check if config already exists
     if config_path.exists() and not force:
-        click.echo(
-            click.style(f"Config file already exists: {config_path}", fg="yellow")
-        )
+        click.echo(click.style(f"Config file already exists: {config_path}", fg="yellow"))
         if not click.confirm("\nOverwrite existing config?"):
             click.echo("Aborted.")
             return

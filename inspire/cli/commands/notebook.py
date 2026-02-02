@@ -9,7 +9,6 @@ Usage:
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import sys
@@ -18,7 +17,6 @@ from pathlib import Path
 from typing import Optional
 
 import click
-import requests
 
 from inspire.cli.context import (
     Context,
@@ -65,7 +63,8 @@ def notebook():
     help="Workspace ID (defaults to configured workspace)",
 )
 @click.option(
-    "--all", "-a",
+    "--all",
+    "-a",
     "show_all",
     is_flag=True,
     help="Show all notebooks (not just your own)",
@@ -419,12 +418,14 @@ def _print_notebook_detail(notebook: dict) -> None:
     # Resource spec
     if "resource_spec" in notebook:
         spec = notebook["resource_spec"]
-        fields.extend([
-            ("GPU Count", spec.get("gpu_count")),
-            ("GPU Type", spec.get("gpu_type")),
-            ("CPU", spec.get("cpu_count")),
-            ("Memory", spec.get("memory_size")),
-        ])
+        fields.extend(
+            [
+                ("GPU Count", spec.get("gpu_count")),
+                ("GPU Type", spec.get("gpu_type")),
+                ("CPU", spec.get("cpu_count")),
+                ("Memory", spec.get("memory_size")),
+            ]
+        )
 
     for label, value in fields:
         if value:
@@ -557,7 +558,8 @@ def _load_ssh_public_key(pubkey_path: Optional[str] = None) -> str:
 
 @notebook.command("create")
 @click.option(
-    "--name", "-n",
+    "--name",
+    "-n",
     help="Notebook name (auto-generated if omitted)",
 )
 @click.option(
@@ -569,21 +571,21 @@ def _load_ssh_public_key(pubkey_path: Optional[str] = None) -> str:
     help="Workspace ID (overrides auto-selection)",
 )
 @click.option(
-    "--resource", "-r",
+    "--resource",
+    "-r",
     default=lambda: os.environ.get("INSPIRE_NOTEBOOK_RESOURCE", "1xH200"),
     help="Resource spec (e.g., 1xH200, 4xH100, 4CPU)",
 )
 @click.option(
-    "--project", "-p",
+    "--project",
+    "-p",
     default=lambda: os.environ.get("INSPIRE_PROJECT_ID"),
     help="Project name or ID",
 )
 @click.option(
-    "--image", "-i",
-    default=lambda: (
-        os.environ.get("INSPIRE_NOTEBOOK_IMAGE")
-        or os.environ.get("INSP_IMAGE")
-    ),
+    "--image",
+    "-i",
+    default=lambda: (os.environ.get("INSPIRE_NOTEBOOK_IMAGE") or os.environ.get("INSP_IMAGE")),
     help="Image name/URL (prompts interactively if omitted)",
 )
 @click.option(
@@ -936,7 +938,9 @@ def create_notebook_cmd(
 
     # 2. Get notebook schedule to find quota matching GPU type and count
     try:
-        schedule = browser_api_module.get_notebook_schedule(workspace_id=workspace_id, session=session)
+        schedule = browser_api_module.get_notebook_schedule(
+            workspace_id=workspace_id, session=session
+        )
     except Exception as e:
         if json_output:
             click.echo(
@@ -954,6 +958,7 @@ def create_notebook_cmd(
 
     # Parse quota (might be JSON string)
     import json as json_mod
+
     quota_list = schedule.get("quota", [])
     if isinstance(quota_list, str):
         quota_list = json_mod.loads(quota_list) if quota_list else []
@@ -1021,7 +1026,9 @@ def create_notebook_cmd(
             click.echo(f"Error: No quota found for {gpu_count}x {selected_gpu_type}", err=True)
             click.echo("\nAvailable quotas:", err=True)
             for q in quota_list:
-                click.echo(f"  - {q.get('gpu_count')}x {q.get('gpu_type')} ({q.get('name')})", err=True)
+                click.echo(
+                    f"  - {q.get('gpu_count')}x {q.get('gpu_type')} ({q.get('name')})", err=True
+                )
         sys.exit(EXIT_CONFIG_ERROR)
         return
 
@@ -1072,7 +1079,9 @@ def create_notebook_cmd(
         if not json_output:
             if fallback_msg:
                 click.echo(fallback_msg)
-            click.echo(f"Using project: {selected_project.name}{selected_project.get_quota_status()}")
+            click.echo(
+                f"Using project: {selected_project.name}{selected_project.get_quota_status()}"
+            )
     except ValueError as e:
         error_msg = str(e)
         if "not found" in error_msg:
@@ -1146,9 +1155,11 @@ def create_notebook_cmd(
         # Match by name, URL, or partial match
         image_lower = image.lower()
         for img in images:
-            if (image_lower in img.name.lower() or
-                image_lower in img.url.lower() or
-                img.image_id == image):
+            if (
+                image_lower in img.name.lower()
+                or image_lower in img.url.lower()
+                or img.image_id == image
+            ):
                 selected_image = img
                 break
         if not selected_image:
@@ -1250,7 +1261,7 @@ def create_notebook_cmd(
                 )
             )
         else:
-            click.echo(f"\nNotebook created successfully!")
+            click.echo("\nNotebook created successfully!")
             click.echo(f"  ID: {notebook_id}")
             click.echo(f"  Name: {name}")
             click.echo(f"  Resource: {resource_display}")
@@ -1267,7 +1278,10 @@ def create_notebook_cmd(
                     click.echo("Notebook is now RUNNING.")
             except TimeoutError as e:
                 if json_output:
-                    click.echo(json_formatter.format_json_error("Timeout", str(e), EXIT_API_ERROR), err=True)
+                    click.echo(
+                        json_formatter.format_json_error("Timeout", str(e), EXIT_API_ERROR),
+                        err=True,
+                    )
                 else:
                     click.echo(f"Timeout: {e}", err=True)
                 sys.exit(EXIT_API_ERROR)
@@ -1431,7 +1445,9 @@ def start_notebook_cmd(
             if not json_output:
                 click.echo("Waiting for notebook to reach RUNNING status...")
             try:
-                browser_api_module.wait_for_notebook_running(notebook_id=notebook_id, session=session)
+                browser_api_module.wait_for_notebook_running(
+                    notebook_id=notebook_id, session=session
+                )
                 if not json_output:
                     click.echo("Notebook is now RUNNING.")
             except TimeoutError as e:
@@ -1535,7 +1551,6 @@ def ssh_notebook_cmd(
     """SSH into a running notebook instance via rtunnel ProxyCommand."""
     from inspire.cli.utils.tunnel import (
         BridgeProfile,
-        TunnelConfig,
         get_ssh_command_args,
         has_internet_for_gpu_type,
         load_tunnel_config,
@@ -1583,9 +1598,9 @@ def ssh_notebook_cmd(
     profile_name = save_as or f"notebook-{notebook_id[:8]}"
     cached_config = load_tunnel_config()
     if profile_name in cached_config.bridges:
-        cached_bridge = cached_config.bridges[profile_name]
         # Test if the cached tunnel still works by trying a quick SSH connection
         import subprocess
+
         test_args = get_ssh_command_args(
             bridge_name=profile_name,
             config=cached_config,
@@ -1656,7 +1671,9 @@ def ssh_notebook_cmd(
     # Show profile info with internet status
     internet_status = "yes" if has_internet else "no"
     gpu_label = gpu_type if gpu_type else "CPU"
-    click.echo(f"Added bridge '{profile_name}' (internet: {internet_status}, GPU: {gpu_label})", err=True)
+    click.echo(
+        f"Added bridge '{profile_name}' (internet: {internet_status}, GPU: {gpu_label})", err=True
+    )
 
     args = get_ssh_command_args(
         bridge_name=profile_name,

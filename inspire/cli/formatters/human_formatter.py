@@ -7,7 +7,6 @@ import sys
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 
-
 # Status emoji mapping
 STATUS_EMOJI = {
     "PENDING": "\u23f3",  # hourglass
@@ -261,7 +260,7 @@ def format_groups(groups: List[Any]) -> str:
 
     for group in groups:
         # Handle both dataclass and dict
-        if hasattr(group, 'group_id'):
+        if hasattr(group, "group_id"):
             group_id = group.group_id[:38] if len(group.group_id) > 38 else group.group_id
             name = group.group_name[:16] if len(group.group_name) > 16 else group.group_name
             gpu_type = group.gpu_type
@@ -276,7 +275,9 @@ def format_groups(groups: List[Any]) -> str:
             fault = str(group.get("fault_nodes", 0))
             free_gpus = str(group.get("free_gpus", 0))
 
-        lines.append(f"{group_id:<40} {name:<18} {gpu_type:<8} {online:<8} {fault:<8} {free_gpus:<10}")
+        lines.append(
+            f"{group_id:<40} {name:<18} {gpu_type:<8} {online:<8} {fault:<8} {free_gpus:<10}"
+        )
 
     lines.append("\u2500" * 100)
     lines.append(f"Total: {len(groups)} group(s)")

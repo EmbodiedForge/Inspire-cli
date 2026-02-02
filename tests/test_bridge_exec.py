@@ -236,7 +236,9 @@ def test_bridge_exec_ssh_streaming_success(monkeypatch: pytest.MonkeyPatch, tmp_
     assert len(streamed_lines) == 3
 
 
-def test_bridge_exec_ssh_json_uses_buffered(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_bridge_exec_ssh_json_uses_buffered(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Test that JSON mode uses buffered output, not streaming."""
     config = make_sync_config(tmp_path)
     streaming_called = {"value": False}

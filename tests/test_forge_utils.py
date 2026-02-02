@@ -86,7 +86,10 @@ class TestGiteaClient:
     def test_api_base(self):
         """Test that GiteaClient uses correct API base path."""
         client = GiteaClient(token="test-token", server_url="https://codeberg.org")
-        assert client.get_api_base("owner/repo") == "https://codeberg.org/api/v1/repos/owner/repo/actions"
+        assert (
+            client.get_api_base("owner/repo")
+            == "https://codeberg.org/api/v1/repos/owner/repo/actions"
+        )
 
     def test_raw_file_url(self):
         """Test that GiteaClient uses correct raw file URL format."""
@@ -113,12 +116,17 @@ class TestGitHubClient:
     def test_api_base_github_com(self):
         """Test that GitHubClient uses api.github.com for github.com."""
         client = GitHubClient(token="test-token", server_url="https://github.com")
-        assert client.get_api_base("owner/repo") == "https://api.github.com/repos/owner/repo/actions"
+        assert (
+            client.get_api_base("owner/repo") == "https://api.github.com/repos/owner/repo/actions"
+        )
 
     def test_api_base_github_enterprise(self):
         """Test that GitHubClient uses /api/v3/ for GitHub Enterprise."""
         client = GitHubClient(token="test-token", server_url="https://github.example.com")
-        assert client.get_api_base("owner/repo") == "https://github.example.com/api/v3/repos/owner/repo/actions"
+        assert (
+            client.get_api_base("owner/repo")
+            == "https://github.example.com/api/v3/repos/owner/repo/actions"
+        )
 
     def test_raw_file_url_github_com(self):
         """Test that GitHubClient uses raw.githubusercontent.com for github.com."""

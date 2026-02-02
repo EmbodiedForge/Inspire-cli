@@ -22,4 +22,3 @@ __all__ = [
     "get_full_free_node_counts",
     "list_compute_groups",
 ]
-

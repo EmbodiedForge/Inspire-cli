@@ -19,6 +19,7 @@ from inspire.compute_groups import compute_group_name_map, load_compute_groups_f
 
 class GPUType(Enum):
     """GPU types available in the cluster."""
+
     H100 = "H100"
     H200 = "H200"
 
@@ -26,6 +27,7 @@ class GPUType(Enum):
 @dataclass
 class ComputeGroupAvailability:
     """GPU availability for a compute group."""
+
     group_id: str
     group_name: str
     gpu_type: str
@@ -36,7 +38,7 @@ class ComputeGroupAvailability:
     free_gpus: int  # free_nodes * gpu_per_node
     online_nodes: int = 0  # resource_pool == "online"
     backup_nodes: int = 0  # resource_pool == "backup"
-    fault_nodes: int = 0   # resource_pool == "fault"
+    fault_nodes: int = 0  # resource_pool == "fault"
 
 
 # Known compute groups for smart allocation

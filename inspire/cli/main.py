@@ -15,20 +15,14 @@ from inspire.cli.utils.profile import apply_env_profile
 from inspire.cli.context import (
     Context,
     pass_context,
-    EXIT_SUCCESS,
     EXIT_GENERAL_ERROR,
-    EXIT_CONFIG_ERROR,
-    EXIT_AUTH_ERROR,
-    EXIT_VALIDATION_ERROR,
-    EXIT_API_ERROR,
-    EXIT_TIMEOUT,
-    EXIT_LOG_NOT_FOUND,
-    EXIT_JOB_NOT_FOUND,
 )
 from inspire.cli.commands import job, resources, config, sync, bridge, tunnel, run, notebook, init
 
 
-def _apply_profile_option(ctx: click.Context, param: click.Parameter, value: str | None) -> str | None:
+def _apply_profile_option(
+    ctx: click.Context, param: click.Parameter, value: str | None
+) -> str | None:
     if value:
         apply_env_profile(value)
     return value

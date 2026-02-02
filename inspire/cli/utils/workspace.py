@@ -11,7 +11,6 @@ from typing import Optional
 
 from inspire.cli.utils.config import Config, ConfigError
 
-
 _WORKSPACE_ID_RE = re.compile(
     r"^ws-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
     re.IGNORECASE,
@@ -88,9 +87,7 @@ def select_workspace_id(
 
         if normalized in {"internet", "net", "gpu_internet"}:
             candidate = (
-                config.workspace_internet_id
-                or config.workspace_gpu_id
-                or config.job_workspace_id
+                config.workspace_internet_id or config.workspace_gpu_id or config.job_workspace_id
             )
             if not candidate:
                 raise ConfigError(
@@ -129,9 +126,7 @@ def select_workspace_id(
     if gpu_type is not None:
         if wants_internet:
             candidate = (
-                config.workspace_internet_id
-                or config.workspace_gpu_id
-                or config.job_workspace_id
+                config.workspace_internet_id or config.workspace_gpu_id or config.job_workspace_id
             )
         else:
             candidate = config.workspace_gpu_id or config.job_workspace_id

@@ -4,7 +4,6 @@ import logging
 import os
 import sys
 import time
-from typing import Optional
 
 import click
 
@@ -96,9 +95,12 @@ def list_resources(
     # Watch mode
     if watch:
         if ctx.json_output:
-            click.echo(json_formatter.format_json_error(
-                "InvalidOption", "Watch mode not supported with JSON output", EXIT_CONFIG_ERROR
-            ), err=True)
+            click.echo(
+                json_formatter.format_json_error(
+                    "InvalidOption", "Watch mode not supported with JSON output", EXIT_CONFIG_ERROR
+                ),
+                err=True,
+            )
             sys.exit(EXIT_CONFIG_ERROR)
 
         _watch_resources(ctx, show_all, interval, workspace, use_global)
@@ -150,24 +152,30 @@ def list_nodes(ctx: Context, group: str):
                 continue
             # Use accurate available GPUs if available, otherwise fall back to computed
             free_gpus = accurate_map.get(c.group_id, c.full_free_nodes * c.gpu_per_node)
-            filtered.append({
-                "group_id": c.group_id,
-                "group_name": name,
-                "gpu_per_node": c.gpu_per_node,
-                "total_nodes": c.total_nodes,
-                "ready_nodes": c.ready_nodes,
-                "full_free_nodes": c.full_free_nodes,
-                "full_free_gpus": free_gpus,
-            })
+            filtered.append(
+                {
+                    "group_id": c.group_id,
+                    "group_name": name,
+                    "gpu_per_node": c.gpu_per_node,
+                    "total_nodes": c.total_nodes,
+                    "ready_nodes": c.ready_nodes,
+                    "full_free_nodes": c.full_free_nodes,
+                    "full_free_gpus": free_gpus,
+                }
+            )
 
         # Sort by full_free_nodes descending
         filtered.sort(key=lambda x: x["full_free_nodes"], reverse=True)
 
         if ctx.json_output:
-            click.echo(json_formatter.format_json({
-                "groups": filtered,
-                "total_full_free_nodes": sum(x["full_free_nodes"] for x in filtered),
-            }))
+            click.echo(
+                json_formatter.format_json(
+                    {
+                        "groups": filtered,
+                        "total_full_free_nodes": sum(x["full_free_nodes"] for x in filtered),
+                    }
+                )
+            )
             return
 
         click.echo("")
@@ -197,7 +205,9 @@ def list_nodes(ctx: Context, group: str):
             else:
                 indicator = "🔴"
 
-            click.echo(f"{name:<25} {full_free:>10} {ready:>8} {total:>8} {free_gpus:>10} {indicator}")
+            click.echo(
+                f"{name:<25} {full_free:>10} {ready:>8} {total:>8} {free_gpus:>10} {indicator}"
+            )
 
         click.echo("─" * 78)
         click.echo(f"{'TOTAL':<25} {total_full_free:>10} {'':>8} {'':>8} {total_free_gpus:>10}")
@@ -361,7 +371,7 @@ def _watch_resources(
 
     def _render_nodes_display(availability: list, phase: str, timestamp: str) -> None:
         """Render node-level availability table."""
-        os.system('clear')
+        os.system("clear")
 
         if phase == "fetching":
             fetched = progress_state["fetched"]
@@ -411,7 +421,7 @@ def _watch_resources(
 
     def _render_accurate_display(availability: list, phase: str, timestamp: str) -> None:
         """Render accurate GPU availability table."""
-        os.system('clear')
+        os.system("clear")
 
         if phase == "fetching":
             click.echo("🔄 Fetching accurate availability...\n")
@@ -526,14 +536,16 @@ def _watch_resources(
                         availability = [a for a in availability if a.group_id in known_groups]
                         for entry in availability:
                             if not entry.group_name:
-                                entry.group_name = known_groups.get(entry.group_id, entry.group_name)
+                                entry.group_name = known_groups.get(
+                                    entry.group_id, entry.group_name
+                                )
             except (SessionExpiredError, ValueError) as e:
                 api_logger.setLevel(original_level)
                 click.echo(human_formatter.format_error(str(e)), err=True)
                 sys.exit(EXIT_AUTH_ERROR)
             except Exception as e:
                 # Show error but keep retrying
-                os.system('clear')
+                os.system("clear")
                 click.echo(f"⚠️  API error: {e}")
                 click.echo(f"Retrying in {interval}s...")
                 time.sleep(interval)
@@ -555,7 +567,11 @@ def _watch_resources(
 
 def _format_availability_table(availability, workspace_mode: bool = False) -> None:
     """Format availability as a pretty table."""
-    title = "\U0001f4ca GPU Availability (Workspace)" if workspace_mode else "\U0001f4ca GPU Availability (Live)"
+    title = (
+        "\U0001f4ca GPU Availability (Workspace)"
+        if workspace_mode
+        else "\U0001f4ca GPU Availability (Live)"
+    )
     scope_note = "Shows availability in your workspace only" if workspace_mode else ""
 
     lines = [
@@ -600,9 +616,9 @@ def _format_availability_table(availability, workspace_mode: bool = False) -> No
     lines.append("\u2500" * 80)
     lines.append("")
     lines.append("\U0001f4a1 Usage:")
-    lines.append("  inspire run \"python train.py\"              # Auto-select best group")
-    lines.append("  inspire run \"python train.py\" --type H100   # Prefer H100")
-    lines.append("  inspire run \"python train.py\" --gpus 4      # Use 4 GPUs")
+    lines.append('  inspire run "python train.py"              # Auto-select best group')
+    lines.append('  inspire run "python train.py" --type H100   # Prefer H100')
+    lines.append('  inspire run "python train.py" --gpus 4      # Use 4 GPUs')
     lines.append("")
 
     click.echo("\n".join(lines))
@@ -663,9 +679,9 @@ def _format_accurate_availability_table(availability) -> None:
     lines.append("  Low Pri   = GPUs running low-priority tasks (can be preempted)")
     lines.append("")
     lines.append("💡 Usage:")
-    lines.append("  inspire run \"python train.py\"              # Auto-select best group")
-    lines.append("  inspire run \"python train.py\" --type H100   # Prefer H100")
-    lines.append("  inspire run \"python train.py\" --gpus 4      # Use 4 GPUs")
+    lines.append('  inspire run "python train.py"              # Auto-select best group')
+    lines.append('  inspire run "python train.py" --type H100   # Prefer H100')
+    lines.append('  inspire run "python train.py" --gpus 4      # Use 4 GPUs')
     lines.append("")
 
     click.echo("\n".join(lines))

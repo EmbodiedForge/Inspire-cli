@@ -6,7 +6,6 @@ Commands:
     inspire config env     - Generate .env template
 """
 
-import os
 import json
 import sys
 from pathlib import Path
@@ -27,20 +26,15 @@ from inspire.cli.utils.config import (
     SOURCE_GLOBAL,
     SOURCE_PROJECT,
     SOURCE_ENV,
-    PROJECT_CONFIG_DIR,
-    CONFIG_FILENAME,
 )
 from inspire.cli.utils.config_schema import (
-    CONFIG_OPTIONS,
     ConfigOption,
     get_categories,
     get_options_by_category,
-    CATEGORY_ORDER,
 )
 from inspire.cli.utils.auth import AuthManager, AuthenticationError
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.formatters import json_formatter, human_formatter
-
 
 # Source display labels with color
 SOURCE_LABELS = {
@@ -168,11 +162,13 @@ def _show_table(
     if global_path:
         click.echo(f"  Global:  {global_path} " + click.style("(found)", fg="green"))
     else:
-        click.echo(f"  Global:  ~/.config/inspire/config.toml " + click.style("(not found)", fg="white"))
+        click.echo(
+            "  Global:  ~/.config/inspire/config.toml " + click.style("(not found)", fg="white")
+        )
     if project_path:
         click.echo(f"  Project: {project_path} " + click.style("(found)", fg="green"))
     else:
-        click.echo(f"  Project: ./inspire/config.toml " + click.style("(not found)", fg="white"))
+        click.echo("  Project: ./inspire/config.toml " + click.style("(not found)", fg="white"))
     click.echo()
 
     # Display options by category
@@ -266,7 +262,11 @@ def _show_json(
 
             source = _get_source_for_option(sources, option)
             result["values"][option.env_var] = {
-                "value": value_str if not option.secret else ("********" if value_str != "(not set)" else None),
+                "value": (
+                    value_str
+                    if not option.secret
+                    else ("********" if value_str != "(not set)" else None)
+                ),
                 "source": source,
                 "toml_key": option.toml_key,
                 "description": option.description,
@@ -434,9 +434,7 @@ def check_config(ctx: Context) -> None:
 
             click.echo(f"\nUsername:     {cfg.username}")
             click.echo(f"Base URL:     {cfg.base_url}")
-            click.echo(
-                f"Target dir:   {cfg.target_dir or '(not set - required for logs)'}"
-            )
+            click.echo(f"Target dir:   {cfg.target_dir or '(not set - required for logs)'}")
             click.echo(f"Log pattern:  {cfg.log_pattern}")
             click.echo(f"Job cache:    {cfg.get_expanded_cache_path()}")
             click.echo(f"Timeout:      {cfg.timeout}s")

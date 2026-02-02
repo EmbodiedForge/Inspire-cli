@@ -65,7 +65,12 @@ def job():
 @click.option("--resource", "-r", required=True, help="Resource spec (e.g., '4xH200')")
 @click.option("--command", "-c", required=True, help="Start command")
 @click.option("--framework", default="pytorch", help="Training framework (default: pytorch)")
-@click.option("--priority", type=int, default=lambda: int(os.environ.get("INSP_PRIORITY", "6")), help="Task priority 1-10 (default: 6, env: INSP_PRIORITY)")
+@click.option(
+    "--priority",
+    type=int,
+    default=lambda: int(os.environ.get("INSP_PRIORITY", "6")),
+    help="Task priority 1-10 (default: 6, env: INSP_PRIORITY)",
+)
 @click.option("--max-time", type=float, default=100.0, help="Max runtime in hours (default: 100)")
 @click.option("--location", help="Preferred datacenter location")
 @click.option("--workspace", help="Workspace name (from [workspaces])")
@@ -81,7 +86,8 @@ def job():
 )
 @click.option("--image", default=lambda: os.environ.get("INSP_IMAGE"), help="Custom Docker image")
 @click.option(
-    "--project", "-p",
+    "--project",
+    "-p",
     default=lambda: os.environ.get("INSPIRE_PROJECT_ID"),
     help="Project name or ID (auto-selects first if not specified)",
 )
@@ -140,9 +146,13 @@ def create(
 
         # Parse resource early for workspace routing + optional auto-selection.
         try:
-            requested_gpu_type, requested_gpu_count = api.resource_manager.parse_resource_request(resource)
+            requested_gpu_type, requested_gpu_count = api.resource_manager.parse_resource_request(
+                resource
+            )
         except Exception as e:
-            _handle_error(ctx, "ValidationError", f"Invalid resource spec: {e}", EXIT_VALIDATION_ERROR)
+            _handle_error(
+                ctx, "ValidationError", f"Invalid resource spec: {e}", EXIT_VALIDATION_ERROR
+            )
             return
 
         selected_workspace_id = select_workspace_id(
@@ -581,12 +591,15 @@ def wait(ctx: Context, job_id: str, timeout: int, interval: int):
 @click.option("--limit", "-n", type=int, default=10, help="Max jobs to show (default: 10)")
 @click.option("--status", "-s", help="Filter by status (PENDING, RUNNING, SUCCEEDED, FAILED)")
 @click.option(
-    "--active", "-a",
+    "--active",
+    "-a",
     is_flag=True,
-    help="Show only active jobs (exclude failed, cancelled, stopped)"
+    help="Show only active jobs (exclude failed, cancelled, stopped)",
 )
 @click.option("--watch", "-w", is_flag=True, help="Continuously refresh job list")
-@click.option("--interval", type=int, default=10, help="Refresh interval in seconds for --watch (default: 10)")
+@click.option(
+    "--interval", type=int, default=10, help="Refresh interval in seconds for --watch (default: 10)"
+)
 @pass_context
 def list_jobs(ctx: Context, limit: int, status: str, active: bool, watch: bool, interval: int):
     """List recent jobs from local cache.
@@ -623,8 +636,10 @@ def list_jobs(ctx: Context, limit: int, status: str, active: bool, watch: bool, 
         exclude_statuses = None
         if active:
             exclude_statuses = {
-                "FAILED", "job_failed",
-                "CANCELLED", "job_cancelled",
+                "FAILED",
+                "job_failed",
+                "CANCELLED",
+                "job_cancelled",
                 "job_stopped",
             }
 
@@ -757,9 +772,13 @@ def update_jobs(ctx: Context, status: tuple, limit: int, delay: float):
 @click.option("--tail", "-n", type=int, help="Show last N lines only")
 @click.option("--head", type=int, help="Show first N lines only")
 @click.option("--path", is_flag=True, help="Just print log path, don't read content")
-@click.option("--refresh", is_flag=True, help="Re-fetch log from the beginning (ignore cached offset)")
+@click.option(
+    "--refresh", is_flag=True, help="Re-fetch log from the beginning (ignore cached offset)"
+)
 @click.option("--follow", "-f", is_flag=True, help="Continuously poll for new log content")
-@click.option("--interval", type=int, default=30, help="Poll interval for --follow in seconds (default: 30)")
+@click.option(
+    "--interval", type=int, default=30, help="Poll interval for --follow in seconds (default: 30)"
+)
 @click.option(
     "--status",
     "-s",
@@ -912,21 +931,29 @@ def logs(
                     if path:
                         # Just show path
                         if ctx.json_output:
-                            click.echo(json_formatter.format_json({
-                                "job_id": job_id,
-                                "log_path": str(remote_log_path_str),
-                            }))
+                            click.echo(
+                                json_formatter.format_json(
+                                    {
+                                        "job_id": job_id,
+                                        "log_path": str(remote_log_path_str),
+                                    }
+                                )
+                            )
                         else:
                             click.echo(str(remote_log_path_str))
                     else:
                         # Show content
                         if ctx.json_output:
-                            click.echo(json_formatter.format_json({
-                                "job_id": job_id,
-                                "log_path": str(remote_log_path_str),
-                                "content": content,
-                                "method": "ssh_tunnel",
-                            }))
+                            click.echo(
+                                json_formatter.format_json(
+                                    {
+                                        "job_id": job_id,
+                                        "log_path": str(remote_log_path_str),
+                                        "content": content,
+                                        "method": "ssh_tunnel",
+                                    }
+                                )
+                            )
                         else:
                             if tail:
                                 click.echo(f"=== Last {tail} lines ===\n")
@@ -947,10 +974,14 @@ def logs(
         # Handle --path mode (just show path, no fetch)
         if path:
             if ctx.json_output:
-                click.echo(json_formatter.format_json({
-                    "job_id": job_id,
-                    "log_path": str(remote_log_path_str),
-                }))
+                click.echo(
+                    json_formatter.format_json(
+                        {
+                            "job_id": job_id,
+                            "log_path": str(remote_log_path_str),
+                        }
+                    )
+                )
             else:
                 click.echo(str(remote_log_path_str))
             sys.exit(EXIT_SUCCESS)
@@ -994,10 +1025,7 @@ def logs(
                 # Update offset
                 cache.set_log_offset(job_id, current_offset + bytes_added)
                 if not ctx.json_output and bytes_added == 0:
-                    click.echo(
-                        "No new content. If log was rotated, use --refresh.",
-                        err=True
-                    )
+                    click.echo("No new content. If log was rotated, use --refresh.", err=True)
             except GiteaAuthError as e:
                 _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
             except TimeoutError as e:
@@ -1146,8 +1174,12 @@ def _follow_logs(
     # Initialize API client for status checking
     api = AuthManager.get_api(config)
     terminal_statuses = {
-        "SUCCEEDED", "FAILED", "CANCELLED",
-        "job_succeeded", "job_failed", "job_cancelled",
+        "SUCCEEDED",
+        "FAILED",
+        "CANCELLED",
+        "job_succeeded",
+        "job_failed",
+        "job_cancelled",
     }
     final_status = None
 
@@ -1204,9 +1236,6 @@ def _follow_logs(
             time.sleep(interval)
 
             try:
-                # Remember size before fetch
-                size_before = cache_path.stat().st_size if cache_path.exists() else 0
-
                 # Fetch full log (more robust than incremental)
                 fetch_remote_log_via_bridge(
                     config=config,
@@ -1359,9 +1388,12 @@ def _watch_jobs(
 
     # Terminal statuses - jobs that have finished
     terminal_statuses = {
-        "SUCCEEDED", "job_succeeded",
-        "FAILED", "job_failed",
-        "CANCELLED", "job_cancelled",
+        "SUCCEEDED",
+        "job_succeeded",
+        "FAILED",
+        "job_failed",
+        "CANCELLED",
+        "job_cancelled",
         "job_stopped",
     }
 
@@ -1383,7 +1415,7 @@ def _watch_jobs(
         completed_list: list,
     ) -> None:
         """Clear screen and render job table with progress bar."""
-        os.system('clear')
+        os.system("clear")
         if ctx.json_output:
             timestamp = datetime.now().strftime("%H:%M:%S")
             click.echo(
@@ -1673,8 +1705,12 @@ def _follow_logs_via_ssh(
     # Initialize API client for status checking
     api = AuthManager.get_api(config)
     terminal_statuses = {
-        "SUCCEEDED", "FAILED", "CANCELLED",
-        "job_succeeded", "job_failed", "job_cancelled",
+        "SUCCEEDED",
+        "FAILED",
+        "CANCELLED",
+        "job_succeeded",
+        "job_failed",
+        "job_cancelled",
     }
     final_status = None
     status_check_interval = 5  # Check status every 5 seconds
@@ -1704,7 +1740,7 @@ def _follow_logs_via_ssh(
         click.echo("Job may still be queuing. Check status with: inspire job status <job_id>")
         return
 
-    click.echo(f"\nJob started! Following logs...")
+    click.echo("\nJob started! Following logs...")
     click.echo(f"(showing last {tail_lines} lines, then following new content)")
     click.echo("Press Ctrl+C to stop\n")
 

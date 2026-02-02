@@ -57,8 +57,12 @@ def has_internet_for_gpu_type(gpu_type: str) -> bool:
 
     # CPU and 4090 have internet
     return True
+
+
 # nightly release includes stdio:// mode for SSH ProxyCommand support
-DEFAULT_RTUNNEL_DOWNLOAD_URL = "https://github.com/Sarfflow/rtunnel/releases/download/nightly/rtunnel-linux-amd64.tar.gz"
+DEFAULT_RTUNNEL_DOWNLOAD_URL = (
+    "https://github.com/Sarfflow/rtunnel/releases/download/nightly/rtunnel-linux-amd64.tar.gz"
+)
 
 
 def _get_rtunnel_download_url() -> str:
@@ -76,9 +80,7 @@ def _get_rtunnel_download_url() -> str:
     try:
         from .config import Config
 
-        config, _ = Config.from_files_and_env(
-            require_credentials=False, require_target_dir=False
-        )
+        config, _ = Config.from_files_and_env(require_credentials=False, require_target_dir=False)
         if config.rtunnel_download_url:
             return config.rtunnel_download_url
     except Exception:
@@ -286,7 +288,9 @@ def _get_proxy_command(bridge: BridgeProfile, rtunnel_bin: Path, quiet: bool = F
         cmd = f"{rtunnel_bin} {shlex.quote(ws_url)} stdio://%h:%p 2>/dev/null"
         return f"sh -c {shlex.quote(cmd)}"
     else:
-        return f"{shlex.quote(str(rtunnel_bin))} {shlex.quote(ws_url)} {shlex.quote('stdio://%h:%p')}"
+        return (
+            f"{shlex.quote(str(rtunnel_bin))} {shlex.quote(ws_url)} {shlex.quote('stdio://%h:%p')}"
+        )
 
 
 def _test_ssh_connection(
@@ -316,13 +320,20 @@ def _test_ssh_connection(
         result = subprocess.run(
             [
                 "ssh",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "BatchMode=yes",
-                "-o", f"ConnectTimeout={timeout}",
-                "-o", f"ProxyCommand={proxy_cmd}",
-                "-o", "LogLevel=ERROR",
-                "-p", str(bridge.ssh_port),
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                f"ConnectTimeout={timeout}",
+                "-o",
+                f"ProxyCommand={proxy_cmd}",
+                "-o",
+                "LogLevel=ERROR",
+                "-p",
+                str(bridge.ssh_port),
                 f"{bridge.ssh_user}@localhost",
                 "echo ok",
             ],
@@ -417,16 +428,23 @@ def run_ssh_command(
 
     # Wrap command in login shell to source ~/.bash_profile for PATH etc.
     import shlex
+
     wrapped_command = f"LC_ALL=C LANG=C bash -l -c {shlex.quote(command)}"
 
     ssh_cmd = [
         "ssh",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
-        "-o", "BatchMode=yes",
-        "-o", f"ProxyCommand={proxy_cmd}",
-        "-o", "LogLevel=ERROR",
-        "-p", str(bridge.ssh_port),
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        f"ProxyCommand={proxy_cmd}",
+        "-o",
+        "LogLevel=ERROR",
+        "-p",
+        str(bridge.ssh_port),
         f"{bridge.ssh_user}@localhost",
         wrapped_command,
     ]
@@ -491,19 +509,29 @@ def run_ssh_command_streaming(
 
     ssh_cmd = [
         "ssh",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
-        "-o", "BatchMode=yes",
-        "-o", f"ProxyCommand={proxy_cmd}",
-        "-o", "LogLevel=ERROR",
-        "-p", str(bridge.ssh_port),
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        f"ProxyCommand={proxy_cmd}",
+        "-o",
+        "LogLevel=ERROR",
+        "-p",
+        str(bridge.ssh_port),
         f"{bridge.ssh_user}@localhost",
         wrapped_command,
     ]
 
     # Default callback: print to stdout
     if output_callback is None:
-        output_callback = lambda line: click.echo(line, nl=False)
+
+        def _default_output_callback(line: str) -> None:
+            click.echo(line, nl=False)
+
+        output_callback = _default_output_callback
 
     process = subprocess.Popen(
         ssh_cmd,
@@ -593,11 +621,16 @@ def get_ssh_command_args(
 
     args = [
         "ssh",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
-        "-o", f"ProxyCommand={proxy_cmd}",
-        "-o", "LogLevel=ERROR",
-        "-p", str(bridge.ssh_port),
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        f"ProxyCommand={proxy_cmd}",
+        "-o",
+        "LogLevel=ERROR",
+        "-p",
+        str(bridge.ssh_port),
         f"{bridge.ssh_user}@localhost",
     ]
 
@@ -891,7 +924,7 @@ git rev-parse HEAD
 
         if result.returncode == 0:
             # Extract the synced SHA from output (last line)
-            lines = result.stdout.strip().split('\n')
+            lines = result.stdout.strip().split("\n")
             synced_sha = lines[-1].strip() if lines else ""
 
             return {
@@ -919,4 +952,3 @@ git rev-parse HEAD
             "synced_sha": None,
             "error": str(e),
         }
-

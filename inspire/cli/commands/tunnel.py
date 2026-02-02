@@ -8,21 +8,17 @@ import click
 from inspire.cli.context import (
     Context,
     pass_context,
-    EXIT_SUCCESS,
     EXIT_GENERAL_ERROR,
     EXIT_CONFIG_ERROR,
 )
 from inspire.cli.formatters import human_formatter, json_formatter
 from inspire.cli.utils.tunnel import (
-    TunnelConfig,
     TunnelError,
     TunnelNotAvailableError,
-    BridgeNotFoundError,
     BridgeProfile,
     load_tunnel_config,
     save_tunnel_config,
     get_tunnel_status,
-    is_tunnel_available,
 )
 
 
@@ -75,7 +71,6 @@ def tunnel_status(ctx: Context, bridge: str) -> None:
     click.echo("=" * 50)
 
     # Show all bridges
-    config = load_tunnel_config()
     if status["bridges"]:
         click.echo(f"Bridges: {', '.join(status['bridges'])}")
         click.echo(f"Default: {status['default_bridge'] or '(none)'}")
@@ -126,11 +121,15 @@ def tunnel_status(ctx: Context, bridge: str) -> None:
             if status["default_bridge"]:
                 default_status = get_tunnel_status(bridge_name=status["default_bridge"])
                 if default_status["ssh_works"]:
-                    click.echo(f"Default bridge ({status['default_bridge']}): " +
-                             human_formatter.format_success("Connected"))
+                    click.echo(
+                        f"Default bridge ({status['default_bridge']}): "
+                        + human_formatter.format_success("Connected")
+                    )
                 else:
-                    click.echo(f"Default bridge ({status['default_bridge']}): " +
-                             human_formatter.format_warning("Not responding"))
+                    click.echo(
+                        f"Default bridge ({status['default_bridge']}): "
+                        + human_formatter.format_warning("Not responding")
+                    )
 
 
 @tunnel.command("add")
@@ -174,9 +173,12 @@ def tunnel_add(
                 err=True,
             )
         else:
-            click.echo(human_formatter.format_error(
-                "Invalid bridge name. Use alphanumeric, dash, underscore."
-            ), err=True)
+            click.echo(
+                human_formatter.format_error(
+                    "Invalid bridge name. Use alphanumeric, dash, underscore."
+                ),
+                err=True,
+            )
         sys.exit(EXIT_CONFIG_ERROR)
 
     # Create and add profile
@@ -247,7 +249,7 @@ def tunnel_remove(ctx: Context, name: str) -> None:
             click.echo(human_formatter.format_error(f"Bridge '{name}' not found"), err=True)
         sys.exit(EXIT_CONFIG_ERROR)
 
-    was_default = (name == config.default_bridge)
+    was_default = name == config.default_bridge
     config.remove_bridge(name)
     save_tunnel_config(config)
 
@@ -274,8 +276,20 @@ def tunnel_remove(ctx: Context, name: str) -> None:
 @click.option("--url", help="Update the proxy URL")
 @click.option("--ssh-user", help="Update the SSH user")
 @click.option("--ssh-port", type=int, help="Update the SSH port")
-@click.option("--has-internet", is_flag=True, flag_value=True, default=None, help="Mark bridge as having internet access")
-@click.option("--no-internet", is_flag=True, flag_value=True, default=None, help="Mark bridge as having no internet access")
+@click.option(
+    "--has-internet",
+    is_flag=True,
+    flag_value=True,
+    default=None,
+    help="Mark bridge as having internet access",
+)
+@click.option(
+    "--no-internet",
+    is_flag=True,
+    flag_value=True,
+    default=None,
+    help="Mark bridge as having no internet access",
+)
 @pass_context
 def tunnel_update(
     ctx: Context,
@@ -323,9 +337,12 @@ def tunnel_update(
                 err=True,
             )
         else:
-            click.echo(human_formatter.format_error(
-                "Cannot specify both --has-internet and --no-internet"
-            ), err=True)
+            click.echo(
+                human_formatter.format_error(
+                    "Cannot specify both --has-internet and --no-internet"
+                ),
+                err=True,
+            )
         sys.exit(EXIT_CONFIG_ERROR)
 
     bridge = config.bridges[name]
@@ -358,9 +375,12 @@ def tunnel_update(
                 err=True,
             )
         else:
-            click.echo(human_formatter.format_error(
-                "No fields to update. Use --url, --ssh-user, --ssh-port, --has-internet, or --no-internet."
-            ), err=True)
+            click.echo(
+                human_formatter.format_error(
+                    "No fields to update. Use --url, --ssh-user, --ssh-port, --has-internet, or --no-internet."
+                ),
+                err=True,
+            )
         sys.exit(EXIT_CONFIG_ERROR)
 
     save_tunnel_config(config)
@@ -468,7 +488,7 @@ def tunnel_list(ctx: Context) -> None:
     click.echo("Configured bridges:")
     click.echo("=" * 50)
     for bridge in sorted(bridges, key=lambda b: b.name):
-        is_default = (bridge.name == config.default_bridge)
+        is_default = bridge.name == config.default_bridge
         default_mark = "* " if is_default else "  "
         no_internet_mark = " [no internet]" if not bridge.has_internet else ""
         click.echo(f"{default_mark}{bridge.name}:{no_internet_mark}")
@@ -521,9 +541,12 @@ def tunnel_ssh_config(ctx: Context, bridge: str, install: bool) -> None:
         config = load_tunnel_config()
 
         if not config.bridges:
-            click.echo(human_formatter.format_error(
-                "No bridges configured. Run 'inspire tunnel add <name> <URL>' first."
-            ), err=True)
+            click.echo(
+                human_formatter.format_error(
+                    "No bridges configured. Run 'inspire tunnel add <name> <URL>' first."
+                ),
+                err=True,
+            )
             sys.exit(EXIT_CONFIG_ERROR)
 
         # Ensure rtunnel is available
@@ -553,13 +576,11 @@ def tunnel_ssh_config(ctx: Context, bridge: str, install: bool) -> None:
             if install:
                 result = install_ssh_config(ssh_config, bridge)
                 if result["updated"]:
-                    click.echo(human_formatter.format_success(
-                        f"Updated '{bridge}' entry in ~/.ssh/config"
-                    ))
+                    click.echo(
+                        human_formatter.format_success(f"Updated '{bridge}' entry in ~/.ssh/config")
+                    )
                 else:
-                    click.echo(human_formatter.format_success(
-                        f"Added '{bridge}' to ~/.ssh/config"
-                    ))
+                    click.echo(human_formatter.format_success(f"Added '{bridge}' to ~/.ssh/config"))
                 click.echo("")
                 click.echo("You can now use:")
                 click.echo(f"  ssh {bridge}")
@@ -595,8 +616,8 @@ def tunnel_ssh_config(ctx: Context, bridge: str, install: bool) -> None:
                     # Remove all blocks that contain inspire bridge names
                     for bridge_name in list(config.bridges.keys()):
                         # Match and remove the host block
-                        pattern = rf'Host\s+.*?\b{re.escape(bridge_name)}\b.*?(?=\nHost\s|\Z)'
-                        content = re.sub(pattern, '', content, flags=re.DOTALL | re.MULTILINE)
+                        pattern = rf"Host\s+.*?\b{re.escape(bridge_name)}\b.*?(?=\nHost\s|\Z)"
+                        content = re.sub(pattern, "", content, flags=re.DOTALL | re.MULTILINE)
                     ssh_config_path.write_text(content)
 
                 # Append new configs
@@ -606,9 +627,11 @@ def tunnel_ssh_config(ctx: Context, bridge: str, install: bool) -> None:
                     f.write(all_configs)
                     f.write("\n")
 
-                click.echo(human_formatter.format_success(
-                    f"Added {len(config.bridges)} bridge(s) to ~/.ssh/config"
-                ))
+                click.echo(
+                    human_formatter.format_success(
+                        f"Added {len(config.bridges)} bridge(s) to ~/.ssh/config"
+                    )
+                )
                 click.echo("")
                 click.echo("You can now use:")
                 for b in sorted(config.bridges.keys()):
@@ -662,14 +685,19 @@ def tunnel_test(ctx: Context, bridge: str) -> None:
                 err=True,
             )
         else:
-            click.echo(human_formatter.format_error(
-                "No bridge configured. Run 'inspire tunnel add <name> <URL>' first."
-            ), err=True)
+            click.echo(
+                human_formatter.format_error(
+                    "No bridge configured. Run 'inspire tunnel add <name> <URL>' first."
+                ),
+                err=True,
+            )
         sys.exit(EXIT_CONFIG_ERROR)
 
     try:
         start = time.time()
-        result = run_ssh_command("hostname", bridge_name=bridge_profile.name, config=config, timeout=30)
+        result = run_ssh_command(
+            "hostname", bridge_name=bridge_profile.name, config=config, timeout=30
+        )
         elapsed = time.time() - start
 
         hostname = result.stdout.strip()
@@ -697,7 +725,11 @@ def tunnel_test(ctx: Context, bridge: str) -> None:
                 sys.exit(EXIT_GENERAL_ERROR)
         else:
             if result.returncode == 0:
-                click.echo(human_formatter.format_success(f"Bridge '{bridge_profile.name}': Connected to {hostname}"))
+                click.echo(
+                    human_formatter.format_success(
+                        f"Bridge '{bridge_profile.name}': Connected to {hostname}"
+                    )
+                )
                 click.echo(f"Response time: {elapsed:.2f}s")
             else:
                 click.echo(human_formatter.format_error(f"Connection failed: {result.stderr}"))

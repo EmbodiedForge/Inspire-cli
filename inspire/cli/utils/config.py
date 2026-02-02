@@ -101,9 +101,7 @@ def build_env_exports(env_dict: dict[str, str]) -> str:
     exports: list[str] = []
     for key, raw_value in env_dict.items():
         if not var_name_re.match(key):
-            raise ConfigError(
-                f"Invalid remote_env key: {key!r} (must match {var_name_re.pattern})"
-            )
+            raise ConfigError(f"Invalid remote_env key: {key!r} (must match {var_name_re.pattern})")
 
         value = raw_value
         if value == "":
@@ -246,7 +244,9 @@ class Config:
     sshd_deb_dir: Optional[str] = None
     dropbear_deb_dir: Optional[str] = None
     setup_script: Optional[str] = None
-    rtunnel_download_url: str = "https://github.com/Sarfflow/rtunnel/releases/download/nightly/rtunnel-linux-amd64.tar.gz"
+    rtunnel_download_url: str = (
+        "https://github.com/Sarfflow/rtunnel/releases/download/nightly/rtunnel-linux-amd64.tar.gz"
+    )
 
     # Mirror settings
     apt_mirror_url: Optional[str] = None
@@ -322,9 +322,7 @@ class Config:
             try:
                 max_retries = int(max_retries_env)
             except ValueError:
-                raise ConfigError(
-                    "Invalid INSPIRE_MAX_RETRIES value. It must be an integer."
-                )
+                raise ConfigError("Invalid INSPIRE_MAX_RETRIES value. It must be an integer.")
 
         retry_delay_env = os.getenv("INSPIRE_RETRY_DELAY")
         if retry_delay_env:
@@ -367,7 +365,9 @@ class Config:
             github_server=os.getenv("INSP_GITHUB_SERVER", "https://github.com"),
             github_log_workflow=os.getenv("INSP_GITHUB_LOG_WORKFLOW", "retrieve_job_log.yml"),
             github_sync_workflow=os.getenv("INSP_GITHUB_SYNC_WORKFLOW", "sync_code.yml"),
-            github_bridge_workflow=os.getenv("INSP_GITHUB_BRIDGE_WORKFLOW", "run_bridge_action.yml"),
+            github_bridge_workflow=os.getenv(
+                "INSP_GITHUB_BRIDGE_WORKFLOW", "run_bridge_action.yml"
+            ),
             log_cache_dir=os.getenv("INSP_LOG_CACHE_DIR")
             or os.getenv("INSPIRE_LOG_CACHE_DIR", "~/.inspire/logs"),
             remote_timeout=_parse_remote_timeout(os.getenv("INSP_REMOTE_TIMEOUT", "90")),
@@ -453,7 +453,9 @@ class Config:
             github_server=github_server,
             github_log_workflow=os.getenv("INSP_GITHUB_LOG_WORKFLOW", "retrieve_job_log.yml"),
             github_sync_workflow=os.getenv("INSP_GITHUB_SYNC_WORKFLOW", "sync_code.yml"),
-            github_bridge_workflow=os.getenv("INSP_GITHUB_BRIDGE_WORKFLOW", "run_bridge_action.yml"),
+            github_bridge_workflow=os.getenv(
+                "INSP_GITHUB_BRIDGE_WORKFLOW", "run_bridge_action.yml"
+            ),
             default_remote=os.getenv("INSPIRE_DEFAULT_REMOTE", "origin"),
             remote_timeout=_parse_remote_timeout(os.getenv("INSP_REMOTE_TIMEOUT", "90")),
             bridge_action_timeout=bridge_action_timeout,

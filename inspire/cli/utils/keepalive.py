@@ -46,4 +46,4 @@ def get_keepalive_command() -> str:
     Returns:
         Shell command string that runs the keepalive script via nohup.
     """
-    return f'nohup python -c {shlex.quote(KEEPALIVE_SCRIPT)} > /tmp/keepalive.log 2>&1 &'
+    return f"nohup python -c {shlex.quote(KEEPALIVE_SCRIPT)} > /tmp/keepalive.log 2>&1 &"

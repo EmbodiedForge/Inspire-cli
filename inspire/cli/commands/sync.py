@@ -117,12 +117,14 @@ def _push_to_remote(branch: str, remote: str) -> None:
 
 @click.command()
 @click.option(
-    "--branch", "-b",
+    "--branch",
+    "-b",
     default=None,
     help="Branch to sync (default: current branch)",
 )
 @click.option(
-    "--remote", "-r",
+    "--remote",
+    "-r",
     default=None,
     help="Git remote to push to (default: from INSPIRE_DEFAULT_REMOTE or 'origin')",
 )
@@ -132,7 +134,8 @@ def _push_to_remote(branch: str, remote: str) -> None:
     help="Skip git push, only trigger sync on Bridge",
 )
 @click.option(
-    "--force", "-f",
+    "--force",
+    "-f",
     is_flag=True,
     help="Force sync on Bridge (git reset --hard), discarding any local changes there",
 )
@@ -239,8 +242,21 @@ def sync(
     tunnel_config = load_tunnel_config()
     internet_bridge = tunnel_config.get_bridge_with_internet()
 
-    if internet_bridge and is_tunnel_available(bridge_name=internet_bridge.name, config=tunnel_config):
-        _sync_via_tunnel(ctx, config, branch, commit_sha, commit_msg, remote, force, timeout, internet_bridge.name, tunnel_config)
+    if internet_bridge and is_tunnel_available(
+        bridge_name=internet_bridge.name, config=tunnel_config
+    ):
+        _sync_via_tunnel(
+            ctx,
+            config,
+            branch,
+            commit_sha,
+            commit_msg,
+            remote,
+            force,
+            timeout,
+            internet_bridge.name,
+            tunnel_config,
+        )
     else:
         # Fall back to Gitea Actions
         if not ctx.json_output and tunnel_config.bridges and not internet_bridge:
@@ -261,10 +277,9 @@ def _sync_via_tunnel(
     force: bool,
     timeout: int,
     bridge_name: str = None,
-    tunnel_config = None,
+    tunnel_config=None,
 ) -> None:
     """Sync code via SSH tunnel (fast path)."""
-    from inspire.cli.utils.tunnel import TunnelConfig
     if not ctx.json_output:
         if bridge_name:
             click.echo(f"Syncing via SSH tunnel (bridge: {bridge_name})...")
@@ -301,9 +316,12 @@ def _sync_via_tunnel(
                     )
                 )
             else:
-                click.echo(click.style("OK", fg="green") + f" Synced branch '{branch}' ({synced_sha[:7]}) to {config.target_dir}")
+                click.echo(
+                    click.style("OK", fg="green")
+                    + f" Synced branch '{branch}' ({synced_sha[:7]}) to {config.target_dir}"
+                )
                 click.echo(f"  Commit: {commit_msg}")
-                click.echo(f"  Method: SSH tunnel (fast)")
+                click.echo("  Method: SSH tunnel (fast)")
         else:
             if ctx.json_output:
                 click.echo(
@@ -392,7 +410,10 @@ def _sync_via_gitea(
                     )
                 )
             else:
-                click.echo(click.style("OK", fg="green") + f" Synced branch '{branch}' ({commit_sha[:7]}) to {config.target_dir}")
+                click.echo(
+                    click.style("OK", fg="green")
+                    + f" Synced branch '{branch}' ({commit_sha[:7]}) to {config.target_dir}"
+                )
                 click.echo(f"  Commit: {commit_msg}")
                 click.echo(f"  Remote: {remote}")
         else:
@@ -430,5 +451,9 @@ def _sync_via_gitea(
             )
         else:
             click.echo(click.style("OK", fg="green") + f" Pushed {branch} to {remote}")
-            click.echo(click.style("OK", fg="green") + " Triggered sync workflow" + (f" (run {run_id})" if run_id else ""))
+            click.echo(
+                click.style("OK", fg="green")
+                + " Triggered sync workflow"
+                + (f" (run {run_id})" if run_id else "")
+            )
             click.echo(f"  Commit: {commit_sha[:7]} - {commit_msg}")

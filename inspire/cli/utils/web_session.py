@@ -25,7 +25,9 @@ SESSION_TTL = 3600  # 1 hour
 
 class SessionExpiredError(Exception):
     """Raised when the web session has expired (401 from server)."""
+
     pass
+
 
 # Default workspace placeholder (override with INSPIRE_WORKSPACE_ID env var)
 DEFAULT_WORKSPACE_ID = "ws-00000000-0000-0000-0000-000000000000"
@@ -38,7 +40,9 @@ def get_playwright_proxy() -> Optional[dict]:
     return None
 
 
-def _cookie_jar_from_session(session: "WebSession", base_url: str) -> requests.cookies.RequestsCookieJar:
+def _cookie_jar_from_session(
+    session: "WebSession", base_url: str
+) -> requests.cookies.RequestsCookieJar:
     jar = requests.cookies.RequestsCookieJar()
     base_host = urlsplit(base_url).hostname or ""
 
@@ -224,9 +228,7 @@ def request_json(
             try:
                 return resp.json()
             except ValueError as e:
-                raise SessionExpiredError(
-                    "Session expired or invalid (non-JSON response)"
-                ) from e
+                raise SessionExpiredError("Session expired or invalid (non-JSON response)") from e
         except SessionExpiredError:
             _BROWSER_API_FORCE_BROWSER = True
         finally:
@@ -246,6 +248,7 @@ def request_json(
         # Auto-retry once with fresh session
         if _retry_count < 1:
             import sys
+
             sys.stderr.write("Session expired, re-authenticating...\n")
             sys.stderr.flush()
             clear_session_cache()
@@ -408,15 +411,13 @@ def login_with_playwright(
             except Exception:
                 pass
             try:
-                pass_locator.evaluate(
-                    """
+                pass_locator.evaluate("""
                     el => {
                       const btn = el.form?.querySelector('#passbutton,button[type="submit"],input[type="submit"]');
                       if (btn) { btn.click(); return true; }
                       return false;
                     }
-                    """
-                )
+                    """)
             except Exception:
                 pass
 
@@ -435,9 +436,13 @@ def login_with_playwright(
         # Visit a real page to ensure app session cookies and localStorage are set.
         # Use domcontentloaded with fallback since some pages have long-polling.
         try:
-            page.goto(f"{base_url}/jobs/distributedTraining", wait_until="networkidle", timeout=15000)
+            page.goto(
+                f"{base_url}/jobs/distributedTraining", wait_until="networkidle", timeout=15000
+            )
         except Exception:
-            page.goto(f"{base_url}/jobs/distributedTraining", wait_until="domcontentloaded", timeout=30000)
+            page.goto(
+                f"{base_url}/jobs/distributedTraining", wait_until="domcontentloaded", timeout=30000
+            )
         page.wait_for_timeout(1000)
 
         def _wait_for_api_auth() -> None:
@@ -464,7 +469,7 @@ def login_with_playwright(
 
         # Extract workspace_id (spaceId)
         # Priority: 1) env var override, 2) default workspace, 3) auto-detect from browser
-        workspace_id = os.environ.get('INSPIRE_WORKSPACE_ID')
+        workspace_id = os.environ.get("INSPIRE_WORKSPACE_ID")
 
         # Use default workspace unless explicitly overridden
         if not workspace_id:
@@ -483,7 +488,7 @@ def login_with_playwright(
             storage_state=storage_state,
             cookies=cookie_dict,
             workspace_id=workspace_id,
-            created_at=time.time()
+            created_at=time.time(),
         )
         session.save()
 
@@ -510,7 +515,7 @@ def get_web_session(force_refresh: bool = False, require_workspace: bool = False
                 return cached
 
     # Check for workspace override from environment
-    env_workspace_id = os.environ.get('INSPIRE_WORKSPACE_ID')
+    env_workspace_id = os.environ.get("INSPIRE_WORKSPACE_ID")
 
     # If we can't refresh (missing credentials), try the cached session anyway.
     try:
@@ -624,6 +629,7 @@ def fetch_workspace_availability(
 @dataclass
 class GPUAvailability:
     """Per-GPU availability for a compute group."""
+
     group_id: str
     group_name: str
     gpu_type: str
@@ -674,14 +680,16 @@ def fetch_gpu_availability(
                     gpu_info = node.get("gpu_info", {})
                     gpu_type = gpu_info.get("gpu_type_display", "Unknown")
 
-            results.append(GPUAvailability(
-                group_id=group_id,
-                group_name=group_name,
-                gpu_type=gpu_type,
-                total_gpus=total_gpus,
-                free_gpus=free_gpus,
-                low_priority_gpus=low_priority_gpus,
-            ))
+            results.append(
+                GPUAvailability(
+                    group_id=group_id,
+                    group_name=group_name,
+                    gpu_type=gpu_type,
+                    total_gpus=total_gpus,
+                    free_gpus=free_gpus,
+                    low_priority_gpus=low_priority_gpus,
+                )
+            )
 
         except Exception as e:
             # Skip groups that fail

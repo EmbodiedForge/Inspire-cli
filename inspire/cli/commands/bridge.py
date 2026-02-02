@@ -76,7 +76,13 @@ def bridge() -> None:
     help="Local directory to download artifact contents",
 )
 @click.option("wait", "--wait/--no-wait", default=True, help="Wait for completion (default: wait)")
-@click.option("timeout", "--timeout", type=int, default=None, help="Timeout in seconds (default: config value)")
+@click.option(
+    "timeout",
+    "--timeout",
+    type=int,
+    default=None,
+    help="Timeout in seconds (default: config value)",
+)
 @click.option("--no-tunnel", is_flag=True, help="Force use of Gitea workflow (skip SSH tunnel)")
 @pass_context
 def exec_command(
@@ -107,9 +113,7 @@ def exec_command(
     """
 
     try:
-        config, _ = Config.from_files_and_env(
-            require_target_dir=True, require_credentials=False
-        )
+        config, _ = Config.from_files_and_env(require_target_dir=True, require_credentials=False)
     except ConfigError as e:
         if ctx.json_output:
             click.echo(
@@ -383,9 +387,7 @@ def bridge_ssh(ctx: Context) -> None:
         inspire bridge ssh
     """
     try:
-        config, _ = Config.from_files_and_env(
-            require_target_dir=True, require_credentials=False
-        )
+        config, _ = Config.from_files_and_env(require_target_dir=True, require_credentials=False)
     except ConfigError as e:
         if ctx.json_output:
             click.echo(
@@ -422,7 +424,7 @@ def bridge_ssh(ctx: Context) -> None:
     )
 
     if not ctx.json_output:
-        click.echo(f"Opening SSH connection to Bridge...")
+        click.echo("Opening SSH connection to Bridge...")
         click.echo(f"Working directory: {config.target_dir}")
         click.echo("Press Ctrl+D or type 'exit' to disconnect")
         click.echo("")

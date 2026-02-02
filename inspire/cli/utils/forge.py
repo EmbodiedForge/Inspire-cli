@@ -29,27 +29,32 @@ from inspire.cli.utils.config import Config, ConfigError
 
 class GitPlatform(Enum):
     """Supported Git platforms for Actions."""
+
     GITEA = "gitea"
     GITHUB = "github"
 
 
 class ForgeAuthError(ConfigError):
     """Authentication/configuration error for forge access."""
+
     pass
 
 
 class ForgeError(Exception):
     """Generic forge API or workflow error."""
+
     pass
 
 
 class GiteaAuthError(ForgeAuthError):
     """Authentication error for Gitea (backward compatibility alias)."""
+
     pass
 
 
 class GiteaError(ForgeError):
     """Generic Gitea error (backward compatibility alias)."""
+
     pass
 
 
@@ -120,9 +125,7 @@ def _get_active_repo(config: Config) -> str:
                 "Example: export INSP_GITEA_REPO='owner/repo'"
             )
         if "/" not in repo:
-            raise ForgeAuthError(
-                f"Invalid INSP_GITEA_REPO format '{repo}'. Expected 'owner/repo'."
-            )
+            raise ForgeAuthError(f"Invalid INSP_GITEA_REPO format '{repo}'. Expected 'owner/repo'.")
         return repo
 
 
@@ -234,9 +237,7 @@ class ForgeClient(ABC):
         req.get_method = lambda: method  # type: ignore[assignment]
         return req
 
-    def request_json(
-        self, method: str, url: str, data: Optional[dict] = None
-    ) -> dict:
+    def request_json(self, method: str, url: str, data: Optional[dict] = None) -> dict:
         """Make a JSON request with retry."""
         max_retries = 3
         retry_delay = 2.0
@@ -287,9 +288,7 @@ class ForgeClient(ABC):
                     url,
                     attempt + 1,
                 )
-                req = self._build_request(
-                    method, url, data=None, accept="application/octet-stream"
-                )
+                req = self._build_request(method, url, data=None, accept="application/octet-stream")
                 with urlrequest.urlopen(req, timeout=120) as resp:
                     return resp.read()
             except urlerror.HTTPError as e:
@@ -406,6 +405,7 @@ def create_forge_client(config: Config) -> ForgeClient:
 # Helper functions for workflow operations
 # ============================================================================
 
+
 def _extract_total_count(response: dict) -> Optional[int]:
     """Extract total count from a workflow runs response."""
     total_count = response.get("total_count") or response.get("total") or response.get("count")
@@ -457,6 +457,7 @@ def _artifact_name(job_id: str, request_id: str) -> str:
 # ============================================================================
 # Public API functions (use active platform from config)
 # ============================================================================
+
 
 def trigger_workflow_dispatch(
     config: Config,
@@ -898,9 +899,7 @@ def wait_for_bridge_action_completion(
 
     while True:
         if time.time() > deadline:
-            raise TimeoutError(
-                f"Bridge action timed out after {timeout_seconds} seconds."
-            )
+            raise TimeoutError(f"Bridge action timed out after {timeout_seconds} seconds.")
 
         try:
             runs_url = f"{client.get_api_base(repo)}/runs?{client.get_pagination_params(limit, 1)}"
@@ -968,9 +967,7 @@ def fetch_bridge_output_log(
         if data and len(data) > 0:
             with zipfile.ZipFile(BytesIO(data)) as zf:
                 for member in zf.infolist():
-                    if member.filename == "output.log" or member.filename.endswith(
-                        "/output.log"
-                    ):
+                    if member.filename == "output.log" or member.filename.endswith("/output.log"):
                         with zf.open(member) as f:
                             return f.read().decode("utf-8", errors="replace")
     except ForgeError:

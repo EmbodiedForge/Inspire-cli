@@ -11,7 +11,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -125,10 +124,7 @@ class JobCache:
         return None
 
     def list_jobs(
-        self,
-        limit: int = 10,
-        status: Optional[str] = None,
-        exclude_statuses: Optional[set] = None
+        self, limit: int = 10, status: Optional[str] = None, exclude_statuses: Optional[set] = None
     ) -> List[Dict[str, Any]]:
         """List recent jobs from cache.
 
