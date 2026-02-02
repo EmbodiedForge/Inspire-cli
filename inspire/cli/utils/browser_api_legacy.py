@@ -10,7 +10,7 @@ import math
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Optional
 
 from inspire.cli.utils.browser_api_core import (
     BASE_URL,
@@ -21,11 +21,17 @@ from inspire.cli.utils.browser_api_core import (
     _request_json,
     _run_in_thread,
 )
-from inspire.cli.utils.browser_api_projects import (
+from inspire.cli.utils.browser_api_jobs import (  # noqa: F401
+    JobInfo,
+    get_current_user,
+    list_job_users,
+    list_jobs,
+)
+from inspire.cli.utils.browser_api_projects import (  # noqa: F401
     ProjectInfo,
     list_projects,
     select_project,
-)  # noqa: F401
+)
 from .web_session import (
     get_web_session,
     WebSession,
@@ -34,51 +40,6 @@ from .web_session import (
     clear_session_cache,
     build_requests_session,
 )
-
-
-@dataclass
-class JobInfo:
-    """Training job information."""
-
-    job_id: str
-    name: str
-    status: str
-    command: str
-    created_at: str
-    finished_at: Optional[str]
-    created_by_name: str
-    created_by_id: str
-    project_name: str
-    compute_group_name: str
-    gpu_type: str
-    gpu_count: int
-    instance_count: int
-    priority: int
-    workspace_id: str
-
-    @classmethod
-    def from_api_response(cls, data: dict) -> "JobInfo":
-        """Create JobInfo from API response."""
-        framework_config = data.get("framework_config", [{}])[0]
-        gpu_info = framework_config.get("instance_spec_price_info", {}).get("gpu_info", {})
-
-        return cls(
-            job_id=data.get("job_id", ""),
-            name=data.get("name", ""),
-            status=data.get("status", ""),
-            command=data.get("command", ""),
-            created_at=data.get("created_at", ""),
-            finished_at=data.get("finished_at"),
-            created_by_name=data.get("created_by", {}).get("name", ""),
-            created_by_id=data.get("created_by", {}).get("id", ""),
-            project_name=data.get("project_name", ""),
-            compute_group_name=data.get("logic_compute_group_name", ""),
-            gpu_type=gpu_info.get("gpu_type_display", ""),
-            gpu_count=framework_config.get("gpu_count", 0),
-            instance_count=framework_config.get("instance_count", 1),
-            priority=data.get("priority", 0),
-            workspace_id=data.get("workspace_id", ""),
-        )
 
 
 @dataclass
@@ -95,65 +56,6 @@ class GPUAvailability:
     free_nodes: int = 0
     gpu_per_node: int = 0
     selection_source: str = "aggregate"
-
-
-def list_jobs(
-    workspace_id: Optional[str] = None,
-    created_by: Optional[str] = None,
-    status: Optional[str] = None,
-    page_num: int = 1,
-    page_size: int = 50,
-    session: Optional[WebSession] = None,
-) -> tuple[list[JobInfo], int]:
-    """List training jobs using browser API.
-
-    This API is not available via OpenAPI - it requires SSO authentication.
-
-    Args:
-        workspace_id: Workspace to list jobs from. Defaults to DEFAULT_WORKSPACE_ID.
-        created_by: Filter by creator user ID.
-        status: Filter by job status (e.g., "job_running", "job_stopped").
-        page_num: Page number (1-indexed).
-        page_size: Number of jobs per page.
-        session: Optional pre-existing web session.
-
-    Returns:
-        Tuple of (list of JobInfo, total count).
-    """
-    if session is None:
-        session = get_web_session()
-
-    if workspace_id is None:
-        workspace_id = session.workspace_id or DEFAULT_WORKSPACE_ID
-
-    body: dict[str, Any] = {
-        "workspace_id": workspace_id,
-        "page_num": page_num,
-        "page_size": page_size,
-    }
-
-    if created_by:
-        body["created_by"] = created_by
-    if status:
-        body["status"] = status
-
-    data = _request_json(
-        session,
-        "POST",
-        _browser_api_path("/train_job/list"),
-        referer=f"{BASE_URL}/jobs/distributedTraining",
-        body=body,
-        timeout=30,
-    )
-
-    if data.get("code") != 0:
-        raise ValueError(f"API error: {data.get('message')}")
-
-    jobs_data = data.get("data", {}).get("jobs", [])
-    total = data.get("data", {}).get("total", 0)
-
-    jobs = [JobInfo.from_api_response(j) for j in jobs_data]
-    return jobs, total
 
 
 def list_compute_groups(
@@ -190,58 +92,6 @@ def list_compute_groups(
         timeout=30,
     )
     return data.get("data", {}).get("logic_compute_groups", [])
-
-
-def get_current_user(session: Optional[WebSession] = None) -> dict:
-    """Get current user details.
-
-    Args:
-        session: Optional pre-existing web session.
-
-    Returns:
-        User details dictionary.
-    """
-    if session is None:
-        session = get_web_session()
-
-    data = _request_json(
-        session,
-        "GET",
-        _browser_api_path("/user/detail"),
-        referer=f"{BASE_URL}/jobs/distributedTraining",
-        timeout=30,
-    )
-    return data.get("data", {})
-
-
-def list_job_users(
-    workspace_id: Optional[str] = None,
-    session: Optional[WebSession] = None,
-) -> list[dict]:
-    """List users who have created jobs.
-
-    Args:
-        workspace_id: Workspace to list users from.
-        session: Optional pre-existing web session.
-
-    Returns:
-        List of user dictionaries.
-    """
-    if session is None:
-        session = get_web_session()
-
-    if workspace_id is None:
-        workspace_id = session.workspace_id or DEFAULT_WORKSPACE_ID
-
-    data = _request_json(
-        session,
-        "POST",
-        _browser_api_path("/train_job/users"),
-        referer=f"{BASE_URL}/jobs/distributedTraining",
-        body={"workspace_id": workspace_id},
-        timeout=30,
-    )
-    return data.get("data", {}).get("items", [])
 
 
 def get_accurate_gpu_availability(
