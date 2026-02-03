@@ -3,7 +3,8 @@
 ## Project Structure & Module Organization
 - `inspire/` is the main Python package. CLI entry point lives in `inspire/cli/main.py`, command groups in `inspire/cli/commands/`, shared helpers in `inspire/cli/utils/`, and output formatters in `inspire/cli/formatters/`.
 - `inspire/inspire_api_control.py` is a legacy script; current CLI behavior is in `inspire/cli/` (see `inspire/README.md` for legacy notes).
-- Command groups may be split across modules: `inspire/cli/commands/job.py` and `inspire/cli/commands/notebook.py` are registries, with subcommands implemented in `job_*.py` / `notebook_*.py`.
+- Command groups may be split across modules: `inspire/cli/commands/job.py`, `notebook.py`, `tunnel.py`, and `resources.py` are registries, with subcommands implemented in `<group>_*.py`.
+- Large utility modules may also be split behind façades to keep imports stable (for example, `inspire/cli/utils/tunnel.py` and `inspire/cli/utils/browser_api_notebooks.py` re-export from `tunnel_*` / `browser_api_*` modules).
 - `tests/` contains pytest suites (for example, `tests/test_cli_commands.py` and `tests/test_cli_smoke.py`).
 - `examples/` holds workflow YAMLs for Gitea Actions.
 - `scripts/` contains exploration/automation utilities used during API and UI discovery.
