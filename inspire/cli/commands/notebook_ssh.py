@@ -6,7 +6,7 @@ from typing import Optional
 
 import click
 
-from inspire.cli.commands.notebook_ssh_flow import run_notebook_ssh
+from inspire.cli.commands._impl.notebook_ssh.flow import run_notebook_ssh
 from inspire.cli.context import Context, pass_context
 
 
