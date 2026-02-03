@@ -2,11 +2,51 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from inspire.cli.utils.browser_api_core import BASE_URL, _browser_api_path, _request_json
 from inspire.cli.utils.browser_api_notebooks_models import ImageInfo
 from inspire.cli.utils.web_session import DEFAULT_WORKSPACE_ID, WebSession, get_web_session
+
+_NOTEBOOKS_REFERER = f"{BASE_URL}/jobs/interactiveModeling"
+
+
+def _get_session_and_workspace_id(
+    *,
+    workspace_id: Optional[str],
+    session: Optional[WebSession],
+) -> tuple[WebSession, str]:
+    if session is None:
+        session = get_web_session()
+
+    if workspace_id is None:
+        workspace_id = session.workspace_id or DEFAULT_WORKSPACE_ID
+
+    return session, workspace_id
+
+
+def _request_notebooks_data(
+    session: WebSession,
+    method: str,
+    endpoint_path: str,
+    *,
+    body: Optional[dict] = None,
+    timeout: int = 30,
+    default_data: Any = None,
+) -> Any:
+    data = _request_json(
+        session,
+        method,
+        _browser_api_path(endpoint_path),
+        referer=_NOTEBOOKS_REFERER,
+        body=body,
+        timeout=timeout,
+    )
+
+    if data.get("code") != 0:
+        raise ValueError(f"API error: {data.get('message')}")
+
+    return data.get("data", default_data)
 
 
 def list_images(
@@ -15,11 +55,9 @@ def list_images(
     session: Optional[WebSession] = None,
 ) -> list[ImageInfo]:
     """List available Docker images."""
-    if session is None:
-        session = get_web_session()
-
-    if workspace_id is None:
-        workspace_id = session.workspace_id or DEFAULT_WORKSPACE_ID
+    session, workspace_id = _get_session_and_workspace_id(
+        workspace_id=workspace_id, session=session
+    )
 
     body = {
         "page": 0,
@@ -31,19 +69,15 @@ def list_images(
         },
     }
 
-    data = _request_json(
+    data = _request_notebooks_data(
         session,
         "POST",
-        _browser_api_path("/image/list"),
-        referer=f"{BASE_URL}/jobs/interactiveModeling",
+        "/image/list",
         body=body,
         timeout=30,
+        default_data={},
     )
-
-    if data.get("code") != 0:
-        raise ValueError(f"API error: {data.get('message')}")
-
-    items = data.get("data", {}).get("images", [])
+    items = data.get("images", [])
     results = []
     for item in items:
         url = item.get("address", "")
@@ -68,24 +102,17 @@ def get_notebook_schedule(
     session: Optional[WebSession] = None,
 ) -> dict:
     """Get notebook schedule configuration including resource specs."""
-    if session is None:
-        session = get_web_session()
-
-    if workspace_id is None:
-        workspace_id = session.workspace_id or DEFAULT_WORKSPACE_ID
-
-    data = _request_json(
-        session,
-        "GET",
-        _browser_api_path(f"/notebook/schedule?workspace_id={workspace_id}"),
-        referer=f"{BASE_URL}/jobs/interactiveModeling",
-        timeout=30,
+    session, workspace_id = _get_session_and_workspace_id(
+        workspace_id=workspace_id, session=session
     )
 
-    if data.get("code") != 0:
-        raise ValueError(f"API error: {data.get('message')}")
-
-    return data.get("data", {})
+    return _request_notebooks_data(
+        session,
+        "GET",
+        f"/notebook/schedule?workspace_id={workspace_id}",
+        timeout=30,
+        default_data={},
+    )
 
 
 def list_notebook_compute_groups(
@@ -93,29 +120,22 @@ def list_notebook_compute_groups(
     session: Optional[WebSession] = None,
 ) -> list[dict]:
     """List notebook compute groups."""
-    if session is None:
-        session = get_web_session()
-
-    if workspace_id is None:
-        workspace_id = session.workspace_id or DEFAULT_WORKSPACE_ID
+    session, workspace_id = _get_session_and_workspace_id(
+        workspace_id=workspace_id, session=session
+    )
 
     body = {
         "workspace_id": workspace_id,
     }
 
-    data = _request_json(
+    return _request_notebooks_data(
         session,
         "POST",
-        _browser_api_path("/notebook/compute_groups"),
-        referer=f"{BASE_URL}/jobs/interactiveModeling",
+        "/notebook/compute_groups",
         body=body,
         timeout=30,
+        default_data=[],
     )
-
-    if data.get("code") != 0:
-        raise ValueError(f"API error: {data.get('message')}")
-
-    return data.get("data", [])
 
 
 def create_notebook(
@@ -136,11 +156,9 @@ def create_notebook(
     session: Optional[WebSession] = None,
 ) -> dict:
     """Create a new notebook instance."""
-    if session is None:
-        session = get_web_session()
-
-    if workspace_id is None:
-        workspace_id = session.workspace_id or DEFAULT_WORKSPACE_ID
+    session, workspace_id = _get_session_and_workspace_id(
+        workspace_id=workspace_id, session=session
+    )
 
     body = {
         "name": name,
@@ -159,19 +177,14 @@ def create_notebook(
         "workspace_id": workspace_id,
     }
 
-    data = _request_json(
+    return _request_notebooks_data(
         session,
         "POST",
-        _browser_api_path("/notebook/create"),
-        referer=f"{BASE_URL}/jobs/interactiveModeling",
+        "/notebook/create",
         body=body,
         timeout=30,
+        default_data={},
     )
-
-    if data.get("code") != 0:
-        raise ValueError(f"API error: {data.get('message')}")
-
-    return data.get("data", {})
 
 
 def stop_notebook(
@@ -179,27 +192,21 @@ def stop_notebook(
     session: Optional[WebSession] = None,
 ) -> dict:
     """Stop a running notebook instance."""
-    if session is None:
-        session = get_web_session()
+    session, _ = _get_session_and_workspace_id(workspace_id=None, session=session)
 
     body = {
         "notebook_id": notebook_id,
         "operation": "STOP",
     }
 
-    data = _request_json(
+    return _request_notebooks_data(
         session,
         "POST",
-        _browser_api_path("/notebook/operate"),
-        referer=f"{BASE_URL}/jobs/interactiveModeling",
+        "/notebook/operate",
         body=body,
         timeout=30,
+        default_data={},
     )
-
-    if data.get("code") != 0:
-        raise ValueError(f"API error: {data.get('message')}")
-
-    return data.get("data", {})
 
 
 def start_notebook(
@@ -207,27 +214,21 @@ def start_notebook(
     session: Optional[WebSession] = None,
 ) -> dict:
     """Start a stopped notebook instance."""
-    if session is None:
-        session = get_web_session()
+    session, _ = _get_session_and_workspace_id(workspace_id=None, session=session)
 
     body = {
         "notebook_id": notebook_id,
         "operation": "START",
     }
 
-    data = _request_json(
+    return _request_notebooks_data(
         session,
         "POST",
-        _browser_api_path("/notebook/operate"),
-        referer=f"{BASE_URL}/jobs/interactiveModeling",
+        "/notebook/operate",
         body=body,
         timeout=30,
+        default_data={},
     )
-
-    if data.get("code") != 0:
-        raise ValueError(f"API error: {data.get('message')}")
-
-    return data.get("data", {})
 
 
 def get_notebook_detail(
@@ -235,21 +236,15 @@ def get_notebook_detail(
     session: Optional[WebSession] = None,
 ) -> dict:
     """Get detailed notebook information."""
-    if session is None:
-        session = get_web_session()
+    session, _ = _get_session_and_workspace_id(workspace_id=None, session=session)
 
-    data = _request_json(
+    return _request_notebooks_data(
         session,
         "GET",
-        _browser_api_path(f"/notebook/{notebook_id}"),
-        referer=f"{BASE_URL}/jobs/interactiveModeling",
+        f"/notebook/{notebook_id}",
         timeout=30,
+        default_data={},
     )
-
-    if data.get("code") != 0:
-        raise ValueError(f"API error: {data.get('message')}")
-
-    return data.get("data", {})
 
 
 __all__ = [
