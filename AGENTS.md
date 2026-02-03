@@ -4,7 +4,7 @@
 - `inspire/` is the main Python package. CLI entry point lives in `inspire/cli/main.py`, command groups in `inspire/cli/commands/`, shared helpers in `inspire/cli/utils/`, and output formatters in `inspire/cli/formatters/`.
 - `inspire/inspire_api_control.py` is a legacy script; current CLI behavior is in `inspire/cli/` (see `inspire/README.md` for legacy notes).
 - Command groups may be split across modules: `inspire/cli/commands/job.py`, `notebook.py`, `tunnel.py`, and `resources.py` are registries, with subcommands implemented in `<group>_*.py`.
-- Large utility modules may also be split behind façades to keep imports stable (for example, `inspire/cli/utils/tunnel.py` and `inspire/cli/utils/browser_api_notebooks.py` re-export from `tunnel_*` / `browser_api_*` modules).
+- Large utility modules may also be split behind façades to keep imports stable (for example, `inspire/cli/utils/tunnel.py`, `inspire/cli/utils/web_session.py`, and `inspire/cli/utils/forge.py` re-export from `tunnel_*`, `web_session_*`, and `forge_*` modules; similarly `inspire/cli/utils/browser_api_notebooks.py` re-exports from `browser_api_*` modules).
 - `tests/` contains pytest suites (for example, `tests/test_cli_commands.py` and `tests/test_cli_smoke.py`).
 - `examples/` holds workflow YAMLs for Gitea Actions.
 - `scripts/` contains exploration/automation utilities used during API and UI discovery.
@@ -34,4 +34,5 @@
 
 ## Configuration & Security Tips
 - Required environment variables include `INSPIRE_USERNAME`, `INSPIRE_PASSWORD`, and `INSPIRE_TARGET_DIR`; Gitea variables (`INSP_GITEA_REPO`, `INSP_GITEA_TOKEN`, `INSP_GITEA_SERVER`) are needed for sync/remote logs.
+- Optional: `INSPIRE_SHM_SIZE` (or `job.shm_size` in config.toml) sets default shared memory (GiB) for job creation (`inspire job create`, `inspire run`) and notebook creation (`inspire notebook create`).
 - Never commit credentials; prefer shell exports or local dotenv tooling. Use `inspire config check` to validate setup.
