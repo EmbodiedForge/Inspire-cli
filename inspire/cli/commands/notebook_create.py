@@ -152,8 +152,8 @@ def _match_gpu_type(pattern: str, gpu_type_display: str) -> bool:
 @click.option(
     "--shm-size",
     type=int,
-    default=32,
-    help="Shared memory size in GB (default: 32)",
+    default=None,
+    help="Shared memory size in GB (default: INSPIRE_SHM_SIZE/job.shm_size, else 32)",
 )
 @click.option(
     "--auto-stop/--no-auto-stop",
@@ -190,7 +190,7 @@ def create_notebook_cmd(
     resource: str,
     project: Optional[str],
     image: Optional[str],
-    shm_size: int,
+    shm_size: Optional[int],
     auto_stop: bool,
     auto: bool,
     wait: bool,
@@ -224,6 +224,16 @@ def create_notebook_cmd(
         ),
     )
     config = load_config(ctx)
+    if shm_size is None:
+        shm_size = config.shm_size if config.shm_size is not None else 32
+    if shm_size < 1:
+        _handle_error(
+            ctx,
+            "ValidationError",
+            "Shared memory size must be >= 1.",
+            EXIT_CONFIG_ERROR,
+        )
+        return
 
     # Parse resource string
     try:

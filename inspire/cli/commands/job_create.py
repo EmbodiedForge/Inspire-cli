@@ -219,7 +219,7 @@ def build_create_command(_deps) -> click.Command:  # noqa: ARG001
             max_time_ms = str(int(max_time * 3600 * 1000))
 
             # Create job
-            result = api.create_training_job_smart(
+            create_kwargs = dict(
                 name=name,
                 command=final_command,
                 resource=resource,
@@ -232,6 +232,18 @@ def build_create_command(_deps) -> click.Command:  # noqa: ARG001
                 instance_count=nodes,
                 max_running_time_ms=max_time_ms,
             )
+            if config.shm_size is not None:
+                if config.shm_size < 1:
+                    _handle_error(
+                        ctx,
+                        "ConfigError",
+                        "Shared memory size must be >= 1 (set INSPIRE_SHM_SIZE or job.shm_size).",
+                        EXIT_CONFIG_ERROR,
+                    )
+                    return
+                create_kwargs["shm_gi"] = int(config.shm_size)
+
+            result = api.create_training_job_smart(**create_kwargs)
 
             # Extract job ID from response
             data = result.get("data", {}) if isinstance(result, dict) else {}
