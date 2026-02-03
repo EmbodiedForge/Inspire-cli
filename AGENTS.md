@@ -6,9 +6,11 @@
 - Command groups may be split across modules: `inspire/cli/commands/job.py`, `notebook.py`, `tunnel.py`, and `resources.py` are registries, with subcommands implemented in `<group>_*.py`.
 - Large command/utility modules may be split behind façades to keep imports stable:
   - `inspire/cli/commands/config.py` is a registry; command bodies live in `config_show.py`, `config_env_template.py`, and `config_check.py`.
+  - `inspire/cli/commands/notebook_create_flow.py` re-exports from `notebook_create_flow_*` modules.
   - `inspire/cli/utils/tunnel.py` and `inspire/cli/utils/tunnel_ssh.py` re-export from `tunnel_*` and `tunnel_ssh_*` modules.
   - `inspire/cli/utils/web_session.py` re-exports from `web_session_*` modules.
   - `inspire/cli/utils/forge.py` re-exports from `forge_*` modules; similarly `inspire/cli/utils/browser_api_notebooks.py` and `browser_api_legacy.py` re-export from `browser_api_*` modules.
+  - `inspire/cli/utils/config_loader.py` re-exports from `config_loader_*` modules.
 - `tests/` contains pytest suites (for example, `tests/test_cli_commands.py` and `tests/test_cli_smoke.py`).
 - `examples/` holds workflow YAMLs for Gitea Actions.
 - `scripts/` contains exploration/automation utilities used during API and UI discovery.
