@@ -3,7 +3,8 @@
 ## Project Structure & Module Organization
 - `inspire/` is the main Python package. CLI entry point lives in `inspire/cli/main.py`, command groups in `inspire/cli/commands/`, shared helpers in `inspire/cli/utils/`, and output formatters in `inspire/cli/formatters/`.
 - `inspire/inspire_api_control.py` is a legacy script; current CLI behavior is in `inspire/cli/` (see `inspire/README.md` for legacy notes).
-- `tests/` contains pytest suites (for example, `tests/test_cli_commands.py`).
+- Command groups may be split across modules: `inspire/cli/commands/job.py` and `inspire/cli/commands/notebook.py` are registries, with subcommands implemented in `job_*.py` / `notebook_*.py`.
+- `tests/` contains pytest suites (for example, `tests/test_cli_commands.py` and `tests/test_cli_smoke.py`).
 - `examples/` holds workflow YAMLs for Gitea Actions.
 - `scripts/` contains exploration/automation utilities used during API and UI discovery.
 - `docs/` and `README.md` document usage; `bin/inspire` is a repo-local wrapper.
@@ -14,16 +15,17 @@
 - `inspire --help` validates the entry point.
 - `pytest` runs the unit test suite.
 - `pytest -m integration` runs integration tests that require live API access.
-- `ruff check .` and `black .` run linting and formatting.
+- `ruff check .` and `uv tool run black .` run linting and formatting.
 
 ## Coding Style & Naming Conventions
 - Python 3.10+ codebase; follow Black and Ruff defaults with a 100-character line length.
 - Use `snake_case` for functions/variables, `CapWords` for classes, and `test_*.py` for test files.
-- CLI commands map to modules in `inspire/cli/commands/` (for example, `job.py` for `inspire job ...`).
+- CLI command groups map to `inspire/cli/commands/<group>.py` (for example, `job.py` for `inspire job ...`); subcommands may live in `inspire/cli/commands/<group>_*.py`.
 
 ## Testing Guidelines
 - Tests live under `tests/` and use pytest.
 - Integration tests are marked with `@pytest.mark.integration`; keep them isolated from unit tests and avoid requiring live credentials in unit runs.
+- `tests/test_cli_smoke.py` covers basic `--help` output; update it when adding/removing top-level command groups.
 
 ## Commit & Pull Request Guidelines
 - Recent commits use short, imperative, sentence-case subjects (for example, "Fix job logs --follow..."); follow this style and avoid verbose prefixes.
