@@ -97,6 +97,10 @@ username = "your_username"
 [api]
 base_url = "https://your-inspire-platform.com"
 
+[bridge]
+# Timeout in seconds for `inspire bridge exec`
+action_timeout = 600
+
 [workspaces]
 # cpu = "ws-..."       # Default workspace (CPU jobs / notebooks)
 # gpu = "ws-..."       # GPU workspace (H100/H200 jobs)
