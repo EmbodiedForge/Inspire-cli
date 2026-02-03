@@ -40,15 +40,18 @@ def _wrap_command_in_login_shell(command: str) -> str:
     return f"LC_ALL=C LANG=C bash -l -c {shlex.quote(command)}"
 
 
-def _build_ssh_base_args(*, bridge: BridgeProfile, proxy_cmd: str) -> list[str]:
-    return [
+def _build_ssh_base_args(
+    *,
+    bridge: BridgeProfile,
+    proxy_cmd: str,
+    batch_mode: bool = True,
+) -> list[str]:
+    args = [
         "ssh",
         "-o",
         "StrictHostKeyChecking=no",
         "-o",
         "UserKnownHostsFile=/dev/null",
-        "-o",
-        "BatchMode=yes",
         "-o",
         f"ProxyCommand={proxy_cmd}",
         "-o",
@@ -57,6 +60,9 @@ def _build_ssh_base_args(*, bridge: BridgeProfile, proxy_cmd: str) -> list[str]:
         str(bridge.ssh_port),
         f"{bridge.ssh_user}@localhost",
     ]
+    if batch_mode:
+        args[5:5] = ["-o", "BatchMode=yes"]
+    return args
 
 
 __all__ = ["_build_ssh_base_args", "_resolve_bridge_and_proxy", "_wrap_command_in_login_shell"]

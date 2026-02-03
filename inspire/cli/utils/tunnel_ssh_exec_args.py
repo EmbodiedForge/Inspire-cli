@@ -15,7 +15,7 @@ def get_ssh_command_args(
 ) -> list[str]:
     """Build SSH command arguments with ProxyCommand."""
     _config, bridge, proxy_cmd = _resolve_bridge_and_proxy(bridge_name, config)
-    args = _build_ssh_base_args(bridge=bridge, proxy_cmd=proxy_cmd)
+    args = _build_ssh_base_args(bridge=bridge, proxy_cmd=proxy_cmd, batch_mode=False)
     if remote_command:
         args.append(remote_command)
     return args
