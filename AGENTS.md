@@ -9,10 +9,12 @@
   - `inspire/cli/commands/config_show.py` delegates rendering to `config_show_render.py`.
   - `inspire/cli/commands/job_create.py` delegates execution to `job_create_flow.py`.
   - `inspire/cli/commands/notebook_create_flow.py` re-exports from `notebook_create_flow_*` modules.
+  - `inspire/cli/commands/notebook_ssh.py` delegates execution to `notebook_ssh_flow.py`.
   - `inspire/cli/commands/run_flow.py` re-exports from `run_flow_*` modules.
   - `inspire/cli/commands/bridge_exec_helpers.py` re-exports from `bridge_exec_helpers_*` modules.
   - `inspire/cli/commands/job_logs_flow.py` delegates single-job handling to `job_logs_flow_single.py`, which delegates to `job_logs_flow_single_*` modules.
   - `inspire/cli/commands/job_list.py` delegates watch mode to `job_list_watch.py`.
+  - `inspire/cli/commands/resources_list_watch.py` delegates to `resources_list_watch_*` modules.
   - `inspire/cli/utils/job_cache.py` re-exports from `job_cache_api.py`.
   - `inspire/cli/utils/tunnel.py` and `inspire/cli/utils/tunnel_ssh.py` re-export from `tunnel_*` and `tunnel_ssh_*` modules.
   - `inspire/cli/utils/tunnel_ssh_exec.py` re-exports from `tunnel_ssh_exec_*` modules.
