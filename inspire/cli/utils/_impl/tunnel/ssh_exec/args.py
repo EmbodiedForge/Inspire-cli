@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Optional
 
 from inspire.cli.utils.tunnel_models import TunnelConfig
-from inspire.cli.utils.tunnel_ssh_exec_core import _build_ssh_base_args, _resolve_bridge_and_proxy
+from .core import _build_ssh_base_args, _resolve_bridge_and_proxy
 
 
 def get_ssh_command_args(

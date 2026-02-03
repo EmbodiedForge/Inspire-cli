@@ -8,7 +8,7 @@ import time
 from typing import Callable, Optional
 
 from inspire.cli.utils.tunnel_models import TunnelConfig
-from inspire.cli.utils.tunnel_ssh_exec_core import (
+from .core import (
     _build_ssh_base_args,
     _resolve_bridge_and_proxy,
     _wrap_command_in_login_shell,
