@@ -11,7 +11,9 @@
   - `inspire/cli/commands/notebook_create_flow.py` re-exports from `notebook_create_flow_*` modules.
   - `inspire/cli/commands/run_flow.py` re-exports from `run_flow_*` modules.
   - `inspire/cli/commands/bridge_exec_helpers.py` re-exports from `bridge_exec_helpers_*` modules.
-  - `inspire/cli/commands/job_logs_flow.py` delegates single-job handling to `job_logs_flow_single.py`.
+  - `inspire/cli/commands/job_logs_flow.py` delegates single-job handling to `job_logs_flow_single.py`, which delegates to `job_logs_flow_single_*` modules.
+  - `inspire/cli/commands/job_list.py` delegates watch mode to `job_list_watch.py`.
+  - `inspire/cli/utils/job_cache.py` re-exports from `job_cache_api.py`.
   - `inspire/cli/utils/tunnel.py` and `inspire/cli/utils/tunnel_ssh.py` re-export from `tunnel_*` and `tunnel_ssh_*` modules.
   - `inspire/cli/utils/tunnel_ssh_exec.py` re-exports from `tunnel_ssh_exec_*` modules.
   - `inspire/cli/utils/web_session.py` re-exports from `web_session_*` modules.
@@ -19,6 +21,7 @@
   - `inspire/cli/utils/browser_api_availability.py` and `browser_api_notebooks_http.py` re-export from `browser_api_*` modules.
   - `inspire/cli/utils/config_loader.py` re-exports from `config_loader_*` modules.
   - `inspire/api/openapi_client.py` delegates to `openapi_client_*` modules.
+  - `inspire/api/openapi_resources.py` delegates to `openapi_resources_*` modules.
 - `tests/` contains pytest suites (for example, `tests/test_cli_commands.py` and `tests/test_cli_smoke.py`).
 - `examples/` holds workflow YAMLs for Gitea Actions.
 - `scripts/` contains exploration/automation utilities used during API and UI discovery.
