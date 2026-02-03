@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 import requests
 
-from inspire.cli.utils.web_session_models import WebSession
+from .models import WebSession
 
 
 def _cookie_jar_from_session(

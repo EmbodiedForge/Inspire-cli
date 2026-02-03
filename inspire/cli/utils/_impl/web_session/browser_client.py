@@ -6,8 +6,8 @@ import hashlib
 import json
 from typing import Optional
 
-from inspire.cli.utils.web_session_models import SessionExpiredError, WebSession
-from inspire.cli.utils.web_session_proxy import get_playwright_proxy
+from .models import SessionExpiredError, WebSession
+from .proxy import get_playwright_proxy
 
 
 class _BrowserRequestClient:

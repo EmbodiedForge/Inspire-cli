@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from inspire.cli.utils.web_session_models import WebSession
+from .models import WebSession
 
 
 def fetch_node_specs(

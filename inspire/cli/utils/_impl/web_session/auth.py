@@ -6,8 +6,8 @@ import os
 import time
 from typing import Optional
 
-from inspire.cli.utils.web_session_models import DEFAULT_WORKSPACE_ID, WebSession
-from inspire.cli.utils.web_session_proxy import get_playwright_proxy
+from .models import DEFAULT_WORKSPACE_ID, WebSession
+from .proxy import get_playwright_proxy
 
 
 def get_credentials() -> tuple[str, str]:

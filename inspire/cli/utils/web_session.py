@@ -1,11 +1,7 @@
 """Web session management for web UI APIs.
 
 This module keeps the historical import path stable while splitting the implementation into
-smaller, testable modules:
-- `web_session_models`: models + cache persistence
-- `web_session_proxy`: proxy discovery for Playwright
-- `web_session_auth`: login + session refresh
-- `web_session_workspace`: workspace availability helpers
+smaller, testable modules under `inspire.cli.utils._impl.web_session`.
 """
 
 from __future__ import annotations
@@ -13,23 +9,26 @@ from __future__ import annotations
 import atexit
 from typing import Callable, Optional
 
-from inspire.cli.utils.web_session_browser_client import _BrowserRequestClient  # noqa: F401
-from inspire.cli.utils.web_session_browser_client import _close_browser_client, _get_browser_client
-from inspire.cli.utils.web_session_auth import (
+from inspire.cli.utils._impl.web_session.browser_client import _BrowserRequestClient  # noqa: F401
+from inspire.cli.utils._impl.web_session.browser_client import (
+    _close_browser_client,
+    _get_browser_client,
+)
+from inspire.cli.utils._impl.web_session.auth import (
     get_credentials as _get_credentials,
     get_web_session as _get_web_session,
     login_with_playwright as _login_with_playwright,
 )
-from inspire.cli.utils.web_session_models import (
+from inspire.cli.utils._impl.web_session.models import (
     DEFAULT_WORKSPACE_ID,
     SESSION_CACHE_FILE,
     SESSION_TTL,
     SessionExpiredError,
     WebSession,
 )
-from inspire.cli.utils.web_session_proxy import get_playwright_proxy
-from inspire.cli.utils.web_session_requests import build_requests_session
-from inspire.cli.utils.web_session_workspace import (
+from inspire.cli.utils._impl.web_session.proxy import get_playwright_proxy
+from inspire.cli.utils._impl.web_session.requests import build_requests_session
+from inspire.cli.utils._impl.web_session.workspace import (
     GPUAvailability,
     fetch_gpu_availability as _fetch_gpu_availability,
     fetch_node_specs as _fetch_node_specs,
