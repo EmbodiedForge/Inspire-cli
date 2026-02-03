@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import click
 
-from inspire.cli.commands.notebook_common import _require_web_session, _resolve_json_output
 from inspire.cli.context import Context, EXIT_API_ERROR, pass_context
 from inspire.cli.formatters import json_formatter
 from inspire.cli.utils import browser_api as browser_api_module
 from inspire.cli.utils.errors import exit_with_error as _handle_error
+from inspire.cli.utils.notebook_cli import require_web_session, resolve_json_output
 
 
 @click.command("stop")
@@ -31,9 +31,9 @@ def stop_notebook_cmd(
     Examples:
         inspire notebook stop abc123-def456
     """
-    json_output = _resolve_json_output(ctx, json_output)
+    json_output = resolve_json_output(ctx, json_output)
 
-    session = _require_web_session(
+    session = require_web_session(
         ctx,
         hint=(
             "Stopping notebooks requires web authentication. "
@@ -90,9 +90,9 @@ def start_notebook_cmd(
         inspire notebook start abc123-def456
         inspire notebook start abc123-def456 --wait
     """
-    json_output = _resolve_json_output(ctx, json_output)
+    json_output = resolve_json_output(ctx, json_output)
 
-    session = _require_web_session(
+    session = require_web_session(
         ctx,
         hint=(
             "Starting notebooks requires web authentication. "

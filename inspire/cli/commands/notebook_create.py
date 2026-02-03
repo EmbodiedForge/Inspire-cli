@@ -9,14 +9,10 @@ from typing import Optional
 
 import click
 
-from inspire.cli.commands.notebook_common import (
-    _load_config,
-    _require_web_session,
-    _resolve_json_output,
-)
 from inspire.cli.context import Context, EXIT_API_ERROR, EXIT_CONFIG_ERROR, pass_context
 from inspire.cli.formatters import json_formatter
 from inspire.cli.utils import browser_api as browser_api_module
+from inspire.cli.utils.notebook_cli import load_config, require_web_session, resolve_json_output
 from inspire.cli.utils.config import ConfigError
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.workspace import select_workspace_id
@@ -218,16 +214,16 @@ def create_notebook_cmd(
     """
     from inspire.cli.utils.keepalive import get_keepalive_command
 
-    json_output = _resolve_json_output(ctx, json_output)
+    json_output = resolve_json_output(ctx, json_output)
 
-    session = _require_web_session(
+    session = require_web_session(
         ctx,
         hint=(
             "Creating notebooks requires web authentication. "
             "Set INSPIRE_USERNAME and INSPIRE_PASSWORD."
         ),
     )
-    config = _load_config(ctx)
+    config = load_config(ctx)
 
     # Parse resource string
     try:

@@ -1,4 +1,4 @@
-"""Shared notebook CLI helpers.
+"""Notebook command helpers.
 
 These helpers centralize global CLI behaviors (JSON output, config/session loading)
 so notebook subcommands can stay small and consistent.
@@ -11,31 +11,31 @@ import os
 from inspire.cli.context import Context, EXIT_CONFIG_ERROR
 from inspire.cli.utils import web_session as web_session_module
 from inspire.cli.utils.config import Config, ConfigError
-from inspire.cli.utils.errors import exit_with_error as _handle_error
+from inspire.cli.utils.errors import exit_with_error
 
 
-def _get_base_url() -> str:
+def get_base_url() -> str:
     return os.environ.get("INSPIRE_BASE_URL", "https://api.example.com")
 
 
-def _resolve_json_output(ctx: Context, json_output: bool) -> bool:
+def resolve_json_output(ctx: Context, json_output: bool) -> bool:
     if json_output and not ctx.json_output:
         ctx.json_output = True
     return ctx.json_output
 
 
-def _require_web_session(ctx: Context, *, hint: str) -> web_session_module.WebSession:
+def require_web_session(ctx: Context, *, hint: str) -> web_session_module.WebSession:
     try:
         return web_session_module.get_web_session()
     except ValueError as e:
-        _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR, hint=hint)
+        exit_with_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR, hint=hint)
         raise  # pragma: no cover
 
 
-def _load_config(ctx: Context) -> Config:
+def load_config(ctx: Context) -> Config:
     try:
         config, _ = Config.from_files_and_env(require_credentials=False)
         return config
     except ConfigError as e:
-        _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
+        exit_with_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
         raise  # pragma: no cover

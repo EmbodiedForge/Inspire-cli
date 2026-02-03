@@ -6,12 +6,6 @@ from typing import Optional
 
 import click
 
-from inspire.cli.commands.notebook_common import (
-    _get_base_url,
-    _load_config,
-    _require_web_session,
-    _resolve_json_output,
-)
 from inspire.cli.context import (
     Context,
     EXIT_API_ERROR,
@@ -19,6 +13,12 @@ from inspire.cli.context import (
     pass_context,
 )
 from inspire.cli.formatters import json_formatter
+from inspire.cli.utils.notebook_cli import (
+    get_base_url,
+    load_config,
+    require_web_session,
+    resolve_json_output,
+)
 from inspire.cli.utils import web_session as web_session_module
 from inspire.cli.utils.config import ConfigError
 from inspire.cli.utils.errors import exit_with_error as _handle_error
@@ -64,16 +64,16 @@ def list_notebooks(
         inspire notebook list --workspace-id ws-xxx
         inspire notebook list --json
     """
-    json_output = _resolve_json_output(ctx, json_output)
+    json_output = resolve_json_output(ctx, json_output)
 
-    session = _require_web_session(
+    session = require_web_session(
         ctx,
         hint=(
             "Listing notebooks requires web authentication. "
             "Set INSPIRE_USERNAME and INSPIRE_PASSWORD."
         ),
     )
-    config = _load_config(ctx)
+    config = load_config(ctx)
 
     # Use workspace_id from session if not provided
     if not workspace_id:
@@ -102,7 +102,7 @@ def list_notebooks(
             )
             return
 
-    base_url = _get_base_url()
+    base_url = get_base_url()
 
     # Get current user ID for filtering (unless --all is specified)
     user_ids: list[str] = []

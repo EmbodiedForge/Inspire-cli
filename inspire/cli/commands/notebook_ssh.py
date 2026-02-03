@@ -8,10 +8,10 @@ from typing import Optional
 
 import click
 
-from inspire.cli.commands.notebook_common import _require_web_session
 from inspire.cli.context import Context, EXIT_API_ERROR, EXIT_CONFIG_ERROR, pass_context
 from inspire.cli.utils import browser_api as browser_api_module
 from inspire.cli.utils.errors import exit_with_error as _handle_error
+from inspire.cli.utils.notebook_cli import require_web_session
 
 
 def _load_ssh_public_key(pubkey_path: Optional[str] = None) -> str:
@@ -108,7 +108,7 @@ def ssh_notebook_cmd(
         save_tunnel_config,
     )
 
-    session = _require_web_session(
+    session = require_web_session(
         ctx,
         hint=(
             "Notebook SSH requires web authentication. "

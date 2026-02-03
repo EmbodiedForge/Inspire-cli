@@ -6,7 +6,6 @@ import sys
 
 import click
 
-from inspire.cli.commands.job_common import _ensure_valid_job_id
 from inspire.cli.context import (
     Context,
     EXIT_GENERAL_ERROR,
@@ -17,6 +16,7 @@ from inspire.cli.context import (
     pass_context,
 )
 from inspire.cli.formatters import human_formatter, json_formatter
+from inspire.cli.utils.job_cli import ensure_valid_job_id
 from inspire.cli.utils.auth import AuthManager, AuthenticationError
 from inspire.cli.utils.config import Config, ConfigError
 from inspire.cli.utils.errors import exit_with_error as _handle_error
@@ -40,7 +40,7 @@ def build_wait_command(deps) -> click.Command:
         Example:
             inspire job wait job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf --timeout 7200
         """
-        if not _ensure_valid_job_id(ctx, job_id):
+        if not ensure_valid_job_id(ctx, job_id):
             return
 
         try:

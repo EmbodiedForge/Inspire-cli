@@ -6,7 +6,6 @@ import os
 
 import click
 
-from inspire.cli.commands.job_common import _ensure_valid_job_id
 from inspire.cli.context import (
     Context,
     EXIT_API_ERROR,
@@ -16,6 +15,7 @@ from inspire.cli.context import (
     pass_context,
 )
 from inspire.cli.formatters import json_formatter
+from inspire.cli.utils.job_cli import ensure_valid_job_id
 from inspire.cli.utils.auth import AuthManager, AuthenticationError
 from inspire.cli.utils.config import Config, ConfigError
 from inspire.cli.utils.errors import exit_with_error as _handle_error
@@ -27,7 +27,7 @@ def build_command_command(deps) -> click.Command:
     @pass_context
     def show_command(ctx: Context, job_id: str) -> None:
         """Show the training command used for a job."""
-        if not _ensure_valid_job_id(ctx, job_id):
+        if not ensure_valid_job_id(ctx, job_id):
             return
 
         cached_command = None

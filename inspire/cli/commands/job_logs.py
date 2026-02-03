@@ -10,7 +10,6 @@ from typing import Optional
 
 import click
 
-from inspire.cli.commands.job_common import _ensure_valid_job_id
 from inspire.cli.context import (
     Context,
     EXIT_CONFIG_ERROR,
@@ -23,6 +22,7 @@ from inspire.cli.context import (
     pass_context,
 )
 from inspire.cli.formatters import json_formatter
+from inspire.cli.utils.job_cli import ensure_valid_job_id
 from inspire.cli.utils.auth import AuthManager
 from inspire.cli.utils.config import Config, ConfigError
 from inspire.cli.utils.errors import exit_with_error as _handle_error
@@ -120,7 +120,7 @@ def build_logs_command(deps) -> click.Command:
             _bulk_update_logs(ctx, status=status, limit=limit, refresh=refresh, deps=deps)
             return
 
-        if not _ensure_valid_job_id(ctx, job_id):
+        if not ensure_valid_job_id(ctx, job_id):
             return
 
         try:
