@@ -5,15 +5,12 @@ from __future__ import annotations
 from typing import Optional
 
 from inspire.api.openapi_models import ComputeGroup, GPUType, ResourceSpec
-from inspire.api.openapi_resources_display import display_available_resources
-from inspire.api.openapi_resources_match import (
-    find_compute_groups,
-    find_matching_specs,
-    select_compute_group,
-)
-from inspire.api.openapi_resources_parse import parse_resource_request
-from inspire.api.openapi_resources_specs import build_default_resource_specs
 from inspire.compute_groups import load_compute_groups_from_config
+
+from .display import display_available_resources
+from .match import find_compute_groups, find_matching_specs, select_compute_group
+from .parse import parse_resource_request
+from .specs import build_default_resource_specs
 
 
 class ResourceManager:

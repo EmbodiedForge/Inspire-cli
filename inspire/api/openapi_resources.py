@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from inspire.api.openapi_resources_manager import ResourceManager
+from inspire.api._impl.openapi_resources.manager import ResourceManager
 
 __all__ = ["ResourceManager"]
