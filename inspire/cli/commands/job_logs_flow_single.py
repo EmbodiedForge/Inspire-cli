@@ -6,24 +6,24 @@ import sys
 
 import click
 
-from inspire.cli.commands.job_logs_flow_single_cache import (
+from inspire.cli.commands._impl.job_logs.single_cache import (
     build_log_cache_paths,
     get_current_log_offset,
     migrate_legacy_log_filename,
     update_log_offset_to_filesize,
 )
-from inspire.cli.commands.job_logs_flow_single_fetch import (
+from inspire.cli.commands._impl.job_logs.single_fetch import (
     fetch_log_full_via_bridge,
     fetch_log_incremental,
     format_remote_log_error_message,
 )
-from inspire.cli.commands.job_logs_flow_single_output import (
+from inspire.cli.commands._impl.job_logs.single_output import (
     echo_file_content,
     echo_file_head,
     echo_file_tail,
     echo_log_path,
 )
-from inspire.cli.commands.job_logs_flow_single_ssh import try_get_ssh_exit_code
+from inspire.cli.commands._impl.job_logs.single_ssh import try_get_ssh_exit_code
 from inspire.cli.commands.job_logs_helpers import _follow_logs
 from inspire.cli.context import (
     Context,
