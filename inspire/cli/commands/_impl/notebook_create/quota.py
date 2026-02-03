@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 from typing import Optional
 
-from inspire.cli.commands.notebook_create_helpers import format_resource_display
 from inspire.cli.context import Context, EXIT_CONFIG_ERROR
 from inspire.cli.utils.errors import exit_with_error as _handle_error
+
+from .helpers import format_resource_display
 
 
 def resolve_notebook_quota(

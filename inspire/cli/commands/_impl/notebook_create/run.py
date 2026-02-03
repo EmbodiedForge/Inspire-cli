@@ -7,24 +7,19 @@ from typing import Optional
 
 import click
 
-from inspire.cli.commands.notebook_create_flow_compute_group import resolve_notebook_compute_group
-from inspire.cli.commands.notebook_create_flow_image import resolve_notebook_image
-from inspire.cli.commands.notebook_create_flow_post import (
-    maybe_start_keepalive,
-    maybe_wait_for_running,
-)
-from inspire.cli.commands.notebook_create_flow_project import resolve_notebook_project
-from inspire.cli.commands.notebook_create_flow_quota import resolve_notebook_quota
-from inspire.cli.commands.notebook_create_flow_submit import create_notebook_and_report
-from inspire.cli.commands.notebook_create_flow_workspace import resolve_notebook_workspace_id
-from inspire.cli.commands.notebook_create_helpers import (
-    format_resource_display,
-    parse_resource_string,
-)
 from inspire.cli.context import Context, EXIT_API_ERROR, EXIT_CONFIG_ERROR
 from inspire.cli.utils import browser_api as browser_api_module
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.notebook_cli import load_config, require_web_session, resolve_json_output
+
+from .compute_group import resolve_notebook_compute_group
+from .helpers import format_resource_display, parse_resource_string
+from .image import resolve_notebook_image
+from .post import maybe_start_keepalive, maybe_wait_for_running
+from .project import resolve_notebook_project
+from .quota import resolve_notebook_quota
+from .submit import create_notebook_and_report
+from .workspace import resolve_notebook_workspace_id
 
 
 def run_notebook_create(
