@@ -9,19 +9,22 @@ import click
 
 from inspire.cli.commands.notebook_create_flow_compute_group import resolve_notebook_compute_group
 from inspire.cli.commands.notebook_create_flow_image import resolve_notebook_image
+from inspire.cli.commands.notebook_create_flow_post import (
+    maybe_start_keepalive,
+    maybe_wait_for_running,
+)
 from inspire.cli.commands.notebook_create_flow_project import resolve_notebook_project
 from inspire.cli.commands.notebook_create_flow_quota import resolve_notebook_quota
+from inspire.cli.commands.notebook_create_flow_submit import create_notebook_and_report
+from inspire.cli.commands.notebook_create_flow_workspace import resolve_notebook_workspace_id
 from inspire.cli.commands.notebook_create_helpers import (
     format_resource_display,
     parse_resource_string,
 )
 from inspire.cli.context import Context, EXIT_API_ERROR, EXIT_CONFIG_ERROR
-from inspire.cli.formatters import json_formatter
 from inspire.cli.utils import browser_api as browser_api_module
-from inspire.cli.utils.config import ConfigError
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.notebook_cli import load_config, require_web_session, resolve_json_output
-from inspire.cli.utils.workspace import select_workspace_id
 
 
 def run_notebook_create(
@@ -41,8 +44,6 @@ def run_notebook_create(
     json_output: bool,
 ) -> None:
     """Run the notebook creation flow."""
-    from inspire.cli.utils.keepalive import get_keepalive_command
-
     json_output = resolve_json_output(ctx, json_output)
 
     session = require_web_session(
@@ -68,36 +69,17 @@ def run_notebook_create(
     requested_cpu_count = cpu_count
     resource_display = format_resource_display(gpu_count, gpu_pattern, requested_cpu_count)
 
-    try:
-        auto_workspace_id = select_workspace_id(
-            config,
-            gpu_type=gpu_pattern if gpu_count > 0 else None,
-            cpu_only=(gpu_count == 0),
-            explicit_workspace_id=workspace_id,
-            explicit_workspace_name=workspace,
-        )
-    except ConfigError as e:
-        _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
+    workspace_id = resolve_notebook_workspace_id(
+        ctx,
+        config=config,
+        session=session,
+        workspace=workspace,
+        workspace_id=workspace_id,
+        gpu_count=gpu_count,
+        gpu_pattern=gpu_pattern,
+    )
+    if not workspace_id:
         return
-
-    if not auto_workspace_id:
-        auto_workspace_id = session.workspace_id
-
-    if auto_workspace_id == "ws-00000000-0000-0000-0000-000000000000":
-        auto_workspace_id = None
-
-    if not auto_workspace_id:
-        hint = (
-            "Use --workspace-id, set [workspaces].cpu in config.toml, or set INSPIRE_WORKSPACE_ID."
-            if gpu_count == 0
-            else "Use --workspace-id, set [workspaces].gpu in config.toml, or set INSPIRE_WORKSPACE_ID."
-        )
-        _handle_error(
-            ctx, "ConfigError", "No workspace_id configured.", EXIT_CONFIG_ERROR, hint=hint
-        )
-        return
-
-    workspace_id = auto_workspace_id
 
     compute_group = resolve_notebook_compute_group(
         ctx,
@@ -183,84 +165,49 @@ def run_notebook_create(
         if not json_output:
             click.echo(f"Generated name: {name}")
 
-    try:
-        result = browser_api_module.create_notebook(
-            name=name,
-            project_id=selected_project.project_id,
-            project_name=selected_project.name,
-            image_id=selected_image.image_id,
-            image_url=selected_image.url,
-            logic_compute_group_id=logic_compute_group_id,
-            quota_id=quota_id,
-            gpu_type=selected_gpu_type,
-            gpu_count=gpu_count,
-            cpu_count=cpu_count,
-            memory_size=memory_size,
-            shared_memory_size=shm_size,
-            auto_stop=auto_stop,
-            workspace_id=workspace_id,
-            session=session,
-        )
-
-        notebook_id = result.get("notebook_id", "")
-
-        if json_output:
-            click.echo(
-                json_formatter.format_json(
-                    {
-                        "notebook_id": notebook_id,
-                        "name": name,
-                        "resource": resource_display,
-                        "project": selected_project.name,
-                        "image": selected_image.name,
-                    }
-                )
-            )
-        else:
-            click.echo("\nNotebook created successfully!")
-            click.echo(f"  ID: {notebook_id}")
-            click.echo(f"  Name: {name}")
-            click.echo(f"  Resource: {resource_display}")
-
-        if wait or keepalive:
-            if not json_output:
-                click.echo("Waiting for notebook to reach RUNNING status...")
-            try:
-                browser_api_module.wait_for_notebook_running(
-                    notebook_id=notebook_id, session=session, timeout=600
-                )
-                if not json_output:
-                    click.echo("Notebook is now RUNNING.")
-            except TimeoutError as e:
-                _handle_error(
-                    ctx,
-                    "Timeout",
-                    f"Timed out waiting for notebook to reach RUNNING: {e}",
-                    EXIT_API_ERROR,
-                )
-                return
-
-        if keepalive and gpu_count > 0:
-            if not json_output:
-                click.echo("Starting GPU keepalive script...")
-            try:
-                browser_api_module.run_command_in_notebook(
-                    notebook_id=notebook_id,
-                    command=get_keepalive_command(),
-                    session=session,
-                )
-                if not json_output:
-                    click.echo("GPU keepalive script started (log: /tmp/keepalive.log)")
-            except Exception as e:
-                if not json_output:
-                    click.echo(f"Warning: Failed to start keepalive script: {e}", err=True)
-
-        if not json_output:
-            click.echo(f"\nUse 'inspire notebook status {notebook_id}' to check status.")
-
-    except Exception as e:
-        _handle_error(ctx, "APIError", f"Failed to create notebook: {e}", EXIT_API_ERROR)
+    notebook_id = create_notebook_and_report(
+        ctx,
+        name=name,
+        resource_display=resource_display,
+        selected_project=selected_project,
+        selected_image=selected_image,
+        logic_compute_group_id=logic_compute_group_id,
+        quota_id=quota_id,
+        selected_gpu_type=selected_gpu_type,
+        gpu_count=gpu_count,
+        cpu_count=cpu_count,
+        memory_size=memory_size,
+        shm_size=shm_size,
+        auto_stop=auto_stop,
+        workspace_id=workspace_id,
+        session=session,
+        json_output=json_output,
+    )
+    if not notebook_id:
         return
+
+    if not maybe_wait_for_running(
+        ctx,
+        notebook_id=notebook_id,
+        session=session,
+        wait=wait,
+        keepalive=keepalive,
+        json_output=json_output,
+        timeout=600,
+    ):
+        return
+
+    maybe_start_keepalive(
+        ctx,
+        notebook_id=notebook_id,
+        session=session,
+        keepalive=keepalive,
+        gpu_count=gpu_count,
+        json_output=json_output,
+    )
+
+    if not json_output:
+        click.echo(f"\nUse 'inspire notebook status {notebook_id}' to check status.")
 
 
 __all__ = ["run_notebook_create"]
