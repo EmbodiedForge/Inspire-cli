@@ -64,7 +64,7 @@ bridge_workflow = "run_bridge_action.yml"
 default_remote = "origin"
 
 [bridge]
-action_timeout = 300
+action_timeout = 600
 denylist = ["*.tmp", ".git/*"]
 
 [workspaces]
