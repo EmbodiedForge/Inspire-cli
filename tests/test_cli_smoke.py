@@ -9,6 +9,8 @@ def test_cli_help_includes_top_level_groups() -> None:
     assert result.exit_code == 0
     assert "job" in result.output
     assert "notebook" in result.output
+    assert "resources" in result.output
+    assert "tunnel" in result.output
 
 
 def test_job_help_includes_key_subcommands() -> None:
@@ -26,3 +28,19 @@ def test_notebook_help_includes_key_subcommands() -> None:
     assert "list" in result.output
     assert "status" in result.output
 
+
+def test_resources_help_includes_key_subcommands() -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["resources", "--help"])
+    assert result.exit_code == 0
+    assert "list" in result.output
+    assert "nodes" in result.output
+
+
+def test_tunnel_help_includes_key_subcommands() -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["tunnel", "--help"])
+    assert result.exit_code == 0
+    assert "add" in result.output
+    assert "list" in result.output
+    assert "status" in result.output
