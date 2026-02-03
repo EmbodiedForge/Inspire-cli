@@ -4,26 +4,19 @@ from __future__ import annotations
 
 import os
 import sys
-import time
-from pathlib import Path
 from typing import Optional
-
-import subprocess
 
 import click
 
+from inspire.cli.commands.bridge_exec_helpers import exec_via_workflow, try_exec_via_ssh_tunnel
 from inspire.cli.context import (
     Context,
-    EXIT_SUCCESS,
     EXIT_GENERAL_ERROR,
     EXIT_CONFIG_ERROR,
-    EXIT_TIMEOUT,
     pass_context,
 )
 from inspire.cli.utils.config import Config, ConfigError, build_env_exports
 from inspire.cli.utils.gitea import (
-    GiteaError,
-    GiteaAuthError,
     trigger_bridge_action_workflow,
     wait_for_bridge_action_completion,
     download_bridge_artifact,
@@ -35,19 +28,8 @@ from inspire.cli.utils.tunnel import (
     run_ssh_command_streaming,
     get_ssh_command_args,
     load_tunnel_config,
-    TunnelNotAvailableError,
 )
 from inspire.cli.formatters import json_formatter
-
-
-def _split_denylist(items: tuple[str, ...]) -> list[str]:
-    parts: list[str] = []
-    for raw in items:
-        for chunk in raw.replace("\r", "").replace("\n", ",").split(","):
-            item = chunk.strip()
-            if item:
-                parts.append(item)
-    return parts
 
 
 @click.group()
@@ -128,250 +110,33 @@ def exec_command(
 
     # Try SSH tunnel first (unless --no-tunnel or artifacts requested)
     if not no_tunnel and not artifact_path and not download:
-        try:
-            if is_tunnel_available(
-                retries=config.tunnel_retries,
-                retry_pause=config.tunnel_retry_pause,
-            ):
-                # Build full command with env exports and cd to target dir
-                env_exports = build_env_exports(config.remote_env)
-                full_command = f'{env_exports}cd "{config.target_dir}" && {command}'
-
-                if ctx.json_output:
-                    # JSON mode: use buffered output for valid JSON response
-                    result = run_ssh_command(
-                        command=full_command,
-                        timeout=action_timeout,
-                        capture_output=True,
-                    )
-
-                    if result.returncode != 0:
-                        click.echo(
-                            json_formatter.format_json_error(
-                                "CommandFailed",
-                                f"Command failed with exit code {result.returncode}",
-                                EXIT_GENERAL_ERROR,
-                            ),
-                            err=True,
-                        )
-                        sys.exit(EXIT_GENERAL_ERROR)
-
-                    click.echo(
-                        json_formatter.format_json(
-                            {
-                                "status": "success",
-                                "method": "ssh_tunnel",
-                                "returncode": result.returncode,
-                                "output": result.stdout + result.stderr,
-                            }
-                        )
-                    )
-                    sys.exit(EXIT_SUCCESS)
-                else:
-                    # Human output: use streaming for real-time display
-                    click.echo("Using SSH tunnel (fast path)")
-                    click.echo(f"Command: {command}")
-                    click.echo(f"Working dir: {config.target_dir}")
-                    click.echo("")
-                    click.echo("--- Command Output ---")
-
-                    exit_code = run_ssh_command_streaming(
-                        command=full_command,
-                        timeout=action_timeout,
-                    )
-
-                    click.echo("--- End Output ---")
-                    click.echo("")
-
-                    if exit_code != 0:
-                        click.echo(f"Command failed with exit code {exit_code}", err=True)
-                        sys.exit(EXIT_GENERAL_ERROR)
-
-                    click.echo("OK Command completed successfully (via SSH)")
-                    sys.exit(EXIT_SUCCESS)
-
-        except TunnelNotAvailableError:
-            if not ctx.json_output:
-                click.echo("Tunnel not available, using Gitea workflow...", err=True)
-        except subprocess.TimeoutExpired:
-            if ctx.json_output:
-                click.echo(
-                    json_formatter.format_json_error(
-                        "Timeout",
-                        f"Command timed out after {action_timeout}s",
-                        EXIT_TIMEOUT,
-                    ),
-                    err=True,
-                )
-            else:
-                click.echo(f"Command timed out after {action_timeout}s", err=True)
-            sys.exit(EXIT_TIMEOUT)
-        except Exception as e:
-            if not ctx.json_output:
-                click.echo(f"SSH execution failed: {e}", err=True)
-                click.echo("Falling back to Gitea workflow...", err=True)
-
-    # Gitea workflow path (original implementation)
-
-    # Prepend remote_env exports to command
-    env_exports = build_env_exports(config.remote_env)
-    workflow_command = f"{env_exports}{command}" if env_exports else command
-
-    # Merge denylist from env + CLI
-    merged_denylist: list[str] = []
-    if config.bridge_action_denylist:
-        merged_denylist.extend(config.bridge_action_denylist)
-    merged_denylist.extend(_split_denylist(denylist))
-
-    if not merged_denylist and not ctx.json_output:
-        click.echo("Warning: no denylist provided; proceeding", err=True)
-
-    request_id = f"{int(time.time())}-{os.getpid()}"
-    artifact_paths_list = list(artifact_path)
-
-    if not ctx.json_output:
-        click.echo(f"Triggering bridge exec (request {request_id})")
-        click.echo(f"Command: {command}")
-        click.echo(f"Working dir: {config.target_dir}")
-        if merged_denylist:
-            click.echo(f"Denylist: {merged_denylist}")
-        if artifact_paths_list:
-            click.echo(f"Artifact paths: {artifact_paths_list}")
-
-    try:
-        trigger_bridge_action_workflow(
+        ssh_exit_code = try_exec_via_ssh_tunnel(
+            ctx,
+            command=command,
             config=config,
-            raw_command=workflow_command,
-            artifact_paths=artifact_paths_list,
-            request_id=request_id,
-            denylist=merged_denylist,
+            timeout_s=action_timeout,
+            is_tunnel_available_fn=is_tunnel_available,
+            run_ssh_command_fn=run_ssh_command,
+            run_ssh_command_streaming_fn=run_ssh_command_streaming,
         )
-    except (GiteaError, GiteaAuthError) as e:
-        if ctx.json_output:
-            click.echo(
-                json_formatter.format_json_error("GiteaError", str(e), EXIT_GENERAL_ERROR),
-                err=True,
-            )
-        else:
-            click.echo(f"Error: {e}", err=True)
-        sys.exit(EXIT_GENERAL_ERROR)
+        if ssh_exit_code is not None:
+            sys.exit(ssh_exit_code)
 
-    if not wait:
-        if ctx.json_output:
-            click.echo(
-                json_formatter.format_json(
-                    {
-                        "status": "triggered",
-                        "request_id": request_id,
-                        "command": command,
-                    }
-                )
-            )
-        else:
-            click.echo("Workflow dispatched; not waiting for completion")
-        sys.exit(EXIT_SUCCESS)
-
-    action_timeout = timeout or config.bridge_action_timeout or 300
-
-    if not ctx.json_output:
-        click.echo(f"Waiting for completion (timeout {action_timeout}s)...")
-
-    try:
-        result = wait_for_bridge_action_completion(
-            config=config,
-            request_id=request_id,
-            timeout=action_timeout,
-        )
-    except TimeoutError as e:
-        if ctx.json_output:
-            click.echo(
-                json_formatter.format_json_error("Timeout", str(e), EXIT_TIMEOUT),
-                err=True,
-            )
-        else:
-            click.echo(f"Timeout: {e}", err=True)
-        sys.exit(EXIT_TIMEOUT)
-    except GiteaError as e:
-        if ctx.json_output:
-            click.echo(
-                json_formatter.format_json_error("GiteaError", str(e), EXIT_GENERAL_ERROR),
-                err=True,
-            )
-        else:
-            click.echo(f"Error: {e}", err=True)
-        sys.exit(EXIT_GENERAL_ERROR)
-
-    # Fetch and display command output
-    output_log: Optional[str] = None
-    try:
-        output_log = fetch_bridge_output_log(config, request_id)
-    except GiteaError:
-        pass  # Output fetch is best-effort
-
-    if output_log and not ctx.json_output:
-        click.echo("")
-        click.echo("--- Command Output ---")
-        click.echo(output_log)
-        click.echo("--- End Output ---")
-        click.echo("")
-
-    if result.get("conclusion") != "success":
-        if ctx.json_output:
-            hint = result.get("html_url") or None
-            click.echo(
-                json_formatter.format_json_error(
-                    "BridgeActionFailed",
-                    f"Action failed: {result.get('conclusion')}",
-                    EXIT_GENERAL_ERROR,
-                    hint=hint,
-                ),
-                err=True,
-            )
-        else:
-            click.echo(
-                f"Action failed: {result.get('conclusion')} (see {result.get('html_url', '')})",
-                err=True,
-            )
-        sys.exit(EXIT_GENERAL_ERROR)
-
-    if download:
-        if not ctx.json_output:
-            click.echo(f"Downloading artifact to {download}...")
-        try:
-            download_bridge_artifact(config, request_id, Path(download))
-        except GiteaError as e:
-            if ctx.json_output:
-                click.echo(
-                    json_formatter.format_json_error(
-                        "ArtifactError",
-                        f"Artifact download failed: {e}",
-                        EXIT_GENERAL_ERROR,
-                    ),
-                    err=True,
-                )
-            else:
-                click.echo(f"Warning: artifact download failed: {e}", err=True)
-            sys.exit(EXIT_GENERAL_ERROR)
-
-    if ctx.json_output:
-        click.echo(
-            json_formatter.format_json(
-                {
-                    "status": "success",
-                    "request_id": request_id,
-                    "artifact_downloaded": bool(download),
-                    "output": output_log,
-                }
-            )
-        )
-    else:
-        click.echo("OK Action completed successfully")
-        if result.get("html_url"):
-            click.echo(f"Workflow: {result.get('html_url')}")
-        if download:
-            click.echo("Artifacts downloaded")
-
-    sys.exit(EXIT_SUCCESS)
+    workflow_exit_code = exec_via_workflow(
+        ctx,
+        command=command,
+        denylist=denylist,
+        artifact_path=artifact_path,
+        download=download,
+        wait=wait,
+        timeout_s=action_timeout,
+        config=config,
+        trigger_bridge_action_workflow_fn=trigger_bridge_action_workflow,
+        wait_for_bridge_action_completion_fn=wait_for_bridge_action_completion,
+        fetch_bridge_output_log_fn=fetch_bridge_output_log,
+        download_bridge_artifact_fn=download_bridge_artifact,
+    )
+    sys.exit(workflow_exit_code)
 
 
 @bridge.command("ssh")
