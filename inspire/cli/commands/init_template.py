@@ -70,6 +70,7 @@ denylist = ["*.tmp", ".git/*"]
 # workspace_id = "ws-..."
 # image = "pytorch:latest"
 # priority = 6
+# shm_size = 32  # Default shared memory (GiB) for notebooks; jobs use it when set
 
 [notebook]
 resource = "1xH200"
