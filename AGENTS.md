@@ -14,9 +14,9 @@
 - `uv tool install -e .` installs the CLI in editable mode without activating a venv.
 - `uv venv .venv && uv pip install -e .` creates a local venv and installs the package for development.
 - `inspire --help` validates the entry point.
-- `pytest` runs the unit test suite.
-- `pytest -m integration` runs integration tests that require live API access.
-- `ruff check .` and `uv tool run black .` run linting and formatting.
+- `uv run pytest` runs the unit test suite.
+- `uv run pytest -m integration` runs integration tests that require live API access.
+- `uv run ruff check .` and `uv tool run black .` run linting and formatting.
 
 ## Coding Style & Naming Conventions
 - Python 3.10+ codebase; follow Black and Ruff defaults with a 100-character line length.
