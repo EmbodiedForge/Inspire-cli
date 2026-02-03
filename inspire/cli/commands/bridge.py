@@ -106,7 +106,7 @@ def exec_command(
             click.echo(f"Configuration error: {e}", err=True)
         sys.exit(EXIT_CONFIG_ERROR)
 
-    action_timeout = timeout or config.bridge_action_timeout or 300
+    action_timeout = int(timeout) if timeout is not None else int(config.bridge_action_timeout)
 
     # Try SSH tunnel first (unless --no-tunnel or artifacts requested)
     if not no_tunnel and not artifact_path and not download:

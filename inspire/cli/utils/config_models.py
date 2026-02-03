@@ -68,7 +68,7 @@ class Config:
     default_remote: str = "origin"
 
     # Bridge action settings
-    bridge_action_timeout: int = 300
+    bridge_action_timeout: int = 600
     bridge_action_denylist: list[str] = field(default_factory=list)
 
     # API settings (additional)

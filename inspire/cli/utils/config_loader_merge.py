@@ -57,7 +57,7 @@ def config_from_files_and_env(
         "log_cache_dir": "~/.inspire/logs",
         "remote_timeout": 90,
         "default_remote": "origin",
-        "bridge_action_timeout": 300,
+        "bridge_action_timeout": 600,
         "bridge_action_denylist": [],
         "skip_ssl_verify": False,
         "force_proxy": False,

@@ -73,7 +73,7 @@ def wait_for_bridge_action_completion(
     """Poll for bridge action workflow completion."""
     repo = _get_active_repo(config)
     client = create_forge_client(config)
-    timeout_seconds = timeout or config.bridge_action_timeout or 300
+    timeout_seconds = int(timeout) if timeout is not None else int(config.bridge_action_timeout)
     deadline = time.time() + max(5, int(timeout_seconds))
 
     limit = 20

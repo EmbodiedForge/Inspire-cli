@@ -10,10 +10,10 @@ BRIDGE_OPTIONS: list[ConfigOption] = [
         toml_key="bridge.action_timeout",
         field_name="bridge_action_timeout",
         description="Bridge action timeout in seconds",
-        default=300,
+        default=600,
         category="Bridge",
         parser=_parse_int,
-        scope="project",
+        scope="global",
     ),
     ConfigOption(
         env_var="INSPIRE_BRIDGE_DENYLIST",

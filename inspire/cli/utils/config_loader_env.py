@@ -63,7 +63,7 @@ def config_from_env(*, require_target_dir: bool = False) -> Config:
                 "Invalid INSPIRE_RETRY_DELAY value. It must be a number of seconds."
             ) from e
 
-    bridge_action_timeout = 300
+    bridge_action_timeout = 600
     bat_env = os.getenv("INSPIRE_BRIDGE_ACTION_TIMEOUT")
     if bat_env:
         try:
@@ -142,7 +142,7 @@ def config_from_env_for_sync() -> Config:
                 "Or use GitHub by setting INSP_GIT_PLATFORM=github and INSP_GITHUB_REPO."
             )
 
-    bridge_action_timeout = 300
+    bridge_action_timeout = 600
     bat_env = os.getenv("INSPIRE_BRIDGE_ACTION_TIMEOUT")
     if bat_env:
         try:
