@@ -4,7 +4,11 @@
 - `inspire/` is the main Python package. CLI entry point lives in `inspire/cli/main.py`, command groups in `inspire/cli/commands/`, shared helpers in `inspire/cli/utils/`, and output formatters in `inspire/cli/formatters/`.
 - `inspire/inspire_api_control.py` is a legacy script; current CLI behavior is in `inspire/cli/` (see `inspire/README.md` for legacy notes).
 - Command groups may be split across modules: `inspire/cli/commands/job.py`, `notebook.py`, `tunnel.py`, and `resources.py` are registries, with subcommands implemented in `<group>_*.py`.
-- Large utility modules may also be split behind façades to keep imports stable (for example, `inspire/cli/utils/tunnel.py`, `inspire/cli/utils/web_session.py`, and `inspire/cli/utils/forge.py` re-export from `tunnel_*`, `web_session_*`, and `forge_*` modules; similarly `inspire/cli/utils/browser_api_notebooks.py` re-exports from `browser_api_*` modules).
+- Large command/utility modules may be split behind façades to keep imports stable:
+  - `inspire/cli/commands/config.py` is a registry; command bodies live in `config_show.py`, `config_env_template.py`, and `config_check.py`.
+  - `inspire/cli/utils/tunnel.py` and `inspire/cli/utils/tunnel_ssh.py` re-export from `tunnel_*` and `tunnel_ssh_*` modules.
+  - `inspire/cli/utils/web_session.py` re-exports from `web_session_*` modules.
+  - `inspire/cli/utils/forge.py` re-exports from `forge_*` modules; similarly `inspire/cli/utils/browser_api_notebooks.py` and `browser_api_legacy.py` re-export from `browser_api_*` modules.
 - `tests/` contains pytest suites (for example, `tests/test_cli_commands.py` and `tests/test_cli_smoke.py`).
 - `examples/` holds workflow YAMLs for Gitea Actions.
 - `scripts/` contains exploration/automation utilities used during API and UI discovery.
@@ -17,6 +21,7 @@
 - `uv run pytest` runs the unit test suite.
 - `uv run pytest -m integration` runs integration tests that require live API access.
 - `uv run ruff check .` and `uv tool run black .` run linting and formatting.
+- `uv` may update `uv.lock` during runs; avoid committing it unless you intentionally changed dependencies.
 
 ## Coding Style & Naming Conventions
 - Python 3.10+ codebase; follow Black and Ruff defaults with a 100-character line length.
@@ -35,4 +40,5 @@
 ## Configuration & Security Tips
 - Required environment variables include `INSPIRE_USERNAME`, `INSPIRE_PASSWORD`, and `INSPIRE_TARGET_DIR`; Gitea variables (`INSP_GITEA_REPO`, `INSP_GITEA_TOKEN`, `INSP_GITEA_SERVER`) are needed for sync/remote logs.
 - Optional: `INSPIRE_SHM_SIZE` (or `job.shm_size` in config.toml) sets default shared memory (GiB) for job creation (`inspire job create`, `inspire run`) and notebook creation (`inspire notebook create`).
+- Optional: `INSPIRE_BRIDGE_ACTION_TIMEOUT` (or `bridge.action_timeout` in config.toml) sets default timeout (seconds) for `inspire bridge exec`.
 - Never commit credentials; prefer shell exports or local dotenv tooling. Use `inspire config check` to validate setup.
