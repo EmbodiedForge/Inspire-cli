@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import os
 import re
-import sys
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -27,6 +26,7 @@ from inspire.cli.context import (
 from inspire.cli.formatters import json_formatter
 from inspire.cli.utils.config import Config, ConfigError
 from inspire.cli.utils import browser_api as browser_api_module
+from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.workspace import select_workspace_id
 from inspire.cli.utils import web_session as web_session_module
 
@@ -39,6 +39,23 @@ def _resolve_json_output(ctx: Context, json_output: bool) -> bool:
     if json_output and not ctx.json_output:
         ctx.json_output = True
     return ctx.json_output
+
+
+def _require_web_session(ctx: Context, *, hint: str) -> web_session_module.WebSession:
+    try:
+        return web_session_module.get_web_session()
+    except ValueError as e:
+        _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR, hint=hint)
+        raise  # pragma: no cover
+
+
+def _load_config(ctx: Context) -> Config:
+    try:
+        config, _ = Config.from_files_and_env(require_credentials=False)
+        return config
+    except ConfigError as e:
+        _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
+        raise  # pragma: no cover
 
 
 @click.group()
@@ -94,44 +111,14 @@ def list_notebooks(
     """
     json_output = _resolve_json_output(ctx, json_output)
 
-    # Get web session for authentication
-    try:
-        session = web_session_module.get_web_session()
-    except ValueError as e:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "ConfigError",
-                    str(e),
-                    EXIT_CONFIG_ERROR,
-                    hint="Set INSPIRE_USERNAME and INSPIRE_PASSWORD environment variables.",
-                ),
-                err=True,
-            )
-        else:
-            click.echo(f"Error: {e}", err=True)
-            click.echo(
-                "\nNote: Listing notebooks requires web authentication. "
-                "Please set INSPIRE_USERNAME and INSPIRE_PASSWORD environment variables.",
-                err=True,
-            )
-        return sys.exit(EXIT_CONFIG_ERROR)
-
-    try:
-        config, _ = Config.from_files_and_env(require_credentials=False)
-    except ConfigError as e:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "ConfigError",
-                    str(e),
-                    EXIT_CONFIG_ERROR,
-                ),
-                err=True,
-            )
-        else:
-            click.echo(f"Error: {e}", err=True)
-        return sys.exit(EXIT_CONFIG_ERROR)
+    session = _require_web_session(
+        ctx,
+        hint=(
+            "Listing notebooks requires web authentication. "
+            "Set INSPIRE_USERNAME and INSPIRE_PASSWORD."
+        ),
+    )
+    config = _load_config(ctx)
 
     # Use workspace_id from session if not provided
     if not workspace_id:
@@ -141,18 +128,8 @@ def list_notebooks(
             else:
                 workspace_id = select_workspace_id(config)
         except ConfigError as e:
-            if json_output:
-                click.echo(
-                    json_formatter.format_json_error(
-                        "ConfigError",
-                        str(e),
-                        EXIT_CONFIG_ERROR,
-                    ),
-                    err=True,
-                )
-            else:
-                click.echo(f"Error: {e}", err=True)
-            return sys.exit(EXIT_CONFIG_ERROR)
+            _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
+            return
 
         if not workspace_id:
             workspace_id = session.workspace_id
@@ -161,23 +138,14 @@ def list_notebooks(
             workspace_id = None
 
         if not workspace_id:
-            if json_output:
-                click.echo(
-                    json_formatter.format_json_error(
-                        "ConfigError",
-                        "No workspace_id configured or provided.",
-                        EXIT_CONFIG_ERROR,
-                        hint="Use --workspace-id, set [workspaces].cpu in config.toml, or set INSPIRE_WORKSPACE_ID.",
-                    ),
-                    err=True,
-                )
-            else:
-                click.echo(
-                    "Error: No workspace_id configured or provided. "
-                    "Use --workspace-id, set [workspaces].cpu in config.toml, or set INSPIRE_WORKSPACE_ID.",
-                    err=True,
-                )
-            return sys.exit(EXIT_CONFIG_ERROR)
+            _handle_error(
+                ctx,
+                "ConfigError",
+                "No workspace_id configured or provided.",
+                EXIT_CONFIG_ERROR,
+                hint="Use --workspace-id, set [workspaces].cpu in config.toml, or set INSPIRE_WORKSPACE_ID.",
+            )
+            return
 
     base_url = _get_base_url()
 
@@ -223,37 +191,22 @@ def list_notebooks(
 
         if data.get("code") != 0:
             message = data.get("message", "Unknown error")
-            if json_output:
-                click.echo(
-                    json_formatter.format_json_error(
-                        "APIError",
-                        f"API error: {message}",
-                        EXIT_API_ERROR,
-                    ),
-                    err=True,
-                )
-            else:
-                click.echo(f"Error: {message}", err=True)
-            return sys.exit(EXIT_API_ERROR)
+            _handle_error(ctx, "APIError", f"API error: {message}", EXIT_API_ERROR)
+            return
 
         # API returns items in data.list (not data.items)
         items = data.get("data", {}).get("list", [])
         _print_notebook_list(items, json_output, ctx)
 
     except ValueError as e:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "APIError",
-                    str(e),
-                    EXIT_API_ERROR,
-                    hint="Check auth and proxy configuration.",
-                ),
-                err=True,
-            )
-        else:
-            click.echo(f"Error: {e}", err=True)
-        return sys.exit(EXIT_API_ERROR)
+        _handle_error(
+            ctx,
+            "APIError",
+            str(e),
+            EXIT_API_ERROR,
+            hint="Check auth and proxy configuration.",
+        )
+        return
 
 
 def _print_notebook_list(items: list, json_output: bool, ctx: Context) -> None:
@@ -318,22 +271,13 @@ def notebook_status(
     """
     json_output = _resolve_json_output(ctx, json_output)
 
-    try:
-        session = web_session_module.get_web_session()
-    except ValueError as e:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "ConfigError",
-                    str(e),
-                    EXIT_CONFIG_ERROR,
-                    hint="Set INSPIRE_USERNAME and INSPIRE_PASSWORD environment variables.",
-                ),
-                err=True,
-            )
-        else:
-            click.echo(f"Error: {e}", err=True)
-        return sys.exit(EXIT_CONFIG_ERROR)
+    session = _require_web_session(
+        ctx,
+        hint=(
+            "Notebook status requires web authentication. "
+            "Set INSPIRE_USERNAME and INSPIRE_PASSWORD."
+        ),
+    )
 
     base_url = _get_base_url()
 
@@ -348,38 +292,18 @@ def notebook_status(
     except ValueError as e:
         message = str(e)
         if "API returned 404" in message:
-            if json_output:
-                click.echo(
-                    json_formatter.format_json_error(
-                        "NotFound",
-                        f"Notebook instance '{instance_id}' not found",
-                        EXIT_API_ERROR,
-                    ),
-                    err=True,
-                )
-            else:
-                click.echo(
-                    f"Error: Notebook instance '{instance_id}' not found",
-                    err=True,
-                )
-        else:
-            if json_output:
-                click.echo(
-                    json_formatter.format_json_error("APIError", message, EXIT_API_ERROR),
-                    err=True,
-                )
-            else:
-                click.echo(f"Error: {message}", err=True)
-        return sys.exit(EXIT_API_ERROR)
-    except Exception as e:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error("APIError", str(e), EXIT_API_ERROR),
-                err=True,
+            _handle_error(
+                ctx,
+                "NotFound",
+                f"Notebook instance '{instance_id}' not found",
+                EXIT_API_ERROR,
             )
         else:
-            click.echo(f"Error: {e}", err=True)
-        return sys.exit(EXIT_API_ERROR)
+            _handle_error(ctx, "APIError", message, EXIT_API_ERROR)
+        return
+    except Exception as e:
+        _handle_error(ctx, "APIError", str(e), EXIT_API_ERROR)
+        return
 
     if data.get("code") == 0:
         notebook = data.get("data", {})
@@ -388,18 +312,13 @@ def notebook_status(
         else:
             _print_notebook_detail(notebook)
     else:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "APIError",
-                    data.get("message", "Unknown error"),
-                    EXIT_API_ERROR,
-                ),
-                err=True,
-            )
-        else:
-            click.echo(f"Error: {data.get('message', 'Unknown error')}", err=True)
-        return sys.exit(EXIT_API_ERROR)
+        _handle_error(
+            ctx,
+            "APIError",
+            data.get("message", "Unknown error"),
+            EXIT_API_ERROR,
+        )
+        return
 
 
 def _print_notebook_detail(notebook: dict) -> None:
@@ -655,63 +574,20 @@ def create_notebook_cmd(
 
     json_output = _resolve_json_output(ctx, json_output)
 
-    # Get web session for authentication
-    try:
-        session = web_session_module.get_web_session()
-    except ValueError as e:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "ConfigError",
-                    str(e),
-                    EXIT_CONFIG_ERROR,
-                    hint="Set INSPIRE_USERNAME and INSPIRE_PASSWORD environment variables.",
-                ),
-                err=True,
-            )
-        else:
-            click.echo(f"Error: {e}", err=True)
-            click.echo(
-                "\nNote: Creating notebooks requires web authentication. "
-                "Please set INSPIRE_USERNAME and INSPIRE_PASSWORD environment variables.",
-                err=True,
-            )
-        sys.exit(EXIT_CONFIG_ERROR)
-        return
-
-    try:
-        config, _ = Config.from_files_and_env(require_credentials=False)
-    except ConfigError as e:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "ConfigError",
-                    str(e),
-                    EXIT_CONFIG_ERROR,
-                ),
-                err=True,
-            )
-        else:
-            click.echo(f"Error: {e}", err=True)
-        sys.exit(EXIT_CONFIG_ERROR)
-        return
+    session = _require_web_session(
+        ctx,
+        hint=(
+            "Creating notebooks requires web authentication. "
+            "Set INSPIRE_USERNAME and INSPIRE_PASSWORD."
+        ),
+    )
+    config = _load_config(ctx)
 
     # Parse resource string
     try:
         gpu_count, gpu_pattern, cpu_count = _parse_resource_string(resource)
     except ValueError as e:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "ValidationError",
-                    str(e),
-                    EXIT_CONFIG_ERROR,
-                ),
-                err=True,
-            )
-        else:
-            click.echo(f"Error: {e}", err=True)
-        sys.exit(EXIT_CONFIG_ERROR)
+        _handle_error(ctx, "ValidationError", str(e), EXIT_CONFIG_ERROR)
         return
 
     requested_cpu_count = cpu_count
@@ -726,18 +602,7 @@ def create_notebook_cmd(
             explicit_workspace_name=workspace,
         )
     except ConfigError as e:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "ConfigError",
-                    str(e),
-                    EXIT_CONFIG_ERROR,
-                ),
-                err=True,
-            )
-        else:
-            click.echo(f"Error: {e}", err=True)
-        sys.exit(EXIT_CONFIG_ERROR)
+        _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
         return
 
     if not auto_workspace_id:
@@ -752,19 +617,9 @@ def create_notebook_cmd(
             if gpu_count == 0
             else "Use --workspace-id, set [workspaces].gpu in config.toml, or set INSPIRE_WORKSPACE_ID."
         )
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "ConfigError",
-                    "No workspace_id configured.",
-                    EXIT_CONFIG_ERROR,
-                    hint=hint,
-                ),
-                err=True,
-            )
-        else:
-            click.echo(f"Error: No workspace_id configured. {hint}", err=True)
-        sys.exit(EXIT_CONFIG_ERROR)
+        _handle_error(
+            ctx, "ConfigError", "No workspace_id configured.", EXIT_CONFIG_ERROR, hint=hint
+        )
         return
 
     workspace_id = auto_workspace_id
@@ -806,21 +661,12 @@ def create_notebook_cmd(
                         )
             elif gpu_pattern == "GPU":
                 # No availability found and we need to auto-select type
-                if json_output:
-                    click.echo(
-                        json_formatter.format_json_error(
-                            "AvailabilityError",
-                            f"No compute group has {gpu_count} GPUs available",
-                            EXIT_CONFIG_ERROR,
-                        ),
-                        err=True,
-                    )
-                else:
-                    click.echo(
-                        f"Error: No compute group has {gpu_count} GPUs available",
-                        err=True,
-                    )
-                sys.exit(EXIT_CONFIG_ERROR)
+                _handle_error(
+                    ctx,
+                    "AvailabilityError",
+                    f"No compute group has {gpu_count} GPUs available",
+                    EXIT_CONFIG_ERROR,
+                )
                 return
         except Exception as e:
             # Auto-select failed, fall back to manual selection
@@ -841,18 +687,7 @@ def create_notebook_cmd(
             session=session,
         )
     except Exception as e:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "APIError",
-                    f"Error fetching compute groups: {e}",
-                    EXIT_API_ERROR,
-                ),
-                err=True,
-            )
-        else:
-            click.echo(f"Error fetching compute groups: {e}", err=True)
-        sys.exit(EXIT_API_ERROR)
+        _handle_error(ctx, "APIError", f"Error fetching compute groups: {e}", EXIT_API_ERROR)
         return
 
     # Find compute group with matching resource type
@@ -903,35 +738,27 @@ def create_notebook_cmd(
                 break
 
     if not selected_group:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "ValidationError",
-                    f"No compute group found with resource type matching '{gpu_pattern}'",
-                    EXIT_CONFIG_ERROR,
-                ),
-                err=True,
-            )
-            sys.exit(EXIT_CONFIG_ERROR)
-            return
-
-        click.echo(
-            f"Error: No compute group found with resource type matching '{gpu_pattern}'",
-            err=True,
-        )
-        click.echo("\nAvailable resource types:", err=True)
-        available = set()
+        available_types: set[str] = set()
         for group in compute_groups:
             for stats in group.get("gpu_type_stats", []):
                 gpu_type = stats.get("gpu_info", {}).get("gpu_type_display", "Unknown")
                 if gpu_type:
-                    available.add(gpu_type)
-        if available:
-            for gpu_type in sorted(available):
-                click.echo(f"  - {gpu_type}", err=True)
-        elif gpu_count == 0:
-            click.echo("  - CPU", err=True)
-        sys.exit(EXIT_CONFIG_ERROR)
+                    available_types.add(gpu_type)
+        if not available_types and gpu_count == 0:
+            available_types.add("CPU")
+
+        hint = None
+        if available_types:
+            formatted = "\n".join(f"  - {gpu_type}" for gpu_type in sorted(available_types))
+            hint = f"Available resource types:\n{formatted}"
+
+        _handle_error(
+            ctx,
+            "ValidationError",
+            f"No compute group found with resource type matching '{gpu_pattern}'",
+            EXIT_CONFIG_ERROR,
+            hint=hint,
+        )
         return
 
     logic_compute_group_id = selected_group.get("logic_compute_group_id")
@@ -942,18 +769,7 @@ def create_notebook_cmd(
             workspace_id=workspace_id, session=session
         )
     except Exception as e:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "APIError",
-                    f"Error fetching notebook schedule: {e}",
-                    EXIT_API_ERROR,
-                ),
-                err=True,
-            )
-        else:
-            click.echo(f"Error fetching notebook schedule: {e}", err=True)
-        sys.exit(EXIT_API_ERROR)
+        _handle_error(ctx, "APIError", f"Failed to fetch notebook schedule: {e}", EXIT_API_ERROR)
         return
 
     # Parse quota (might be JSON string)
@@ -989,47 +805,33 @@ def create_notebook_cmd(
                 break
 
     if not selected_quota:
-        if json_output:
-            if gpu_count == 0:
-                requested_label = (
-                    f"{requested_cpu_count}xCPU" if requested_cpu_count is not None else "CPU"
-                )
-                message = f"No quota found for {requested_label}"
-            else:
-                message = f"No quota found for {gpu_count}x {selected_gpu_type}"
-            click.echo(
-                json_formatter.format_json_error(
-                    "ValidationError",
-                    message,
-                    EXIT_CONFIG_ERROR,
-                ),
-                err=True,
-            )
-            sys.exit(EXIT_CONFIG_ERROR)
-            return
-
         if gpu_count == 0:
             requested_label = (
                 f"{requested_cpu_count}xCPU" if requested_cpu_count is not None else "CPU"
             )
-            click.echo(f"Error: No quota found for {requested_label}", err=True)
-            click.echo("\nAvailable CPU quotas:", err=True)
+            message = f"No quota found for {requested_label}"
+
+            lines: list[str] = []
             for quota in cpu_quotas:
                 quota_cpu = quota.get("cpu_count")
                 quota_name = quota.get("name")
                 label = f"{quota_cpu}xCPU" if quota_cpu else "CPU"
-                if quota_name:
-                    click.echo(f"  - {label} ({quota_name})", err=True)
-                else:
-                    click.echo(f"  - {label}", err=True)
+                suffix = f" ({quota_name})" if quota_name else ""
+                lines.append(f"  - {label}{suffix}")
+
+            hint = "Available CPU quotas:\n" + "\n".join(lines) if lines else None
         else:
-            click.echo(f"Error: No quota found for {gpu_count}x {selected_gpu_type}", err=True)
-            click.echo("\nAvailable quotas:", err=True)
-            for q in quota_list:
-                click.echo(
-                    f"  - {q.get('gpu_count')}x {q.get('gpu_type')} ({q.get('name')})", err=True
-                )
-        sys.exit(EXIT_CONFIG_ERROR)
+            message = f"No quota found for {gpu_count}x {selected_gpu_type}"
+
+            lines = []
+            for quota in quota_list:
+                quota_name = quota.get("name")
+                suffix = f" ({quota_name})" if quota_name else ""
+                lines.append(f"  - {quota.get('gpu_count')}x {quota.get('gpu_type')}{suffix}")
+
+            hint = "Available quotas:\n" + "\n".join(lines) if lines else None
+
+        _handle_error(ctx, "ValidationError", message, EXIT_CONFIG_ERROR, hint=hint)
         return
 
     quota_id = selected_quota.get("id", "")
@@ -1043,33 +845,16 @@ def create_notebook_cmd(
     try:
         projects = browser_api_module.list_projects(workspace_id=workspace_id, session=session)
     except Exception as e:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "APIError",
-                    f"Error fetching projects: {e}",
-                    EXIT_API_ERROR,
-                ),
-                err=True,
-            )
-        else:
-            click.echo(f"Error fetching projects: {e}", err=True)
-        sys.exit(EXIT_API_ERROR)
+        _handle_error(ctx, "APIError", f"Failed to fetch projects: {e}", EXIT_API_ERROR)
         return
 
     if not projects:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "ConfigError",
-                    "No projects available in this workspace",
-                    EXIT_CONFIG_ERROR,
-                ),
-                err=True,
-            )
-        else:
-            click.echo("Error: No projects available in this workspace", err=True)
-        sys.exit(EXIT_CONFIG_ERROR)
+        _handle_error(
+            ctx,
+            "ConfigError",
+            "No projects available in this workspace",
+            EXIT_CONFIG_ERROR,
+        )
         return
 
     # Select project
@@ -1085,68 +870,24 @@ def create_notebook_cmd(
     except ValueError as e:
         error_msg = str(e)
         if "not found" in error_msg:
-            if json_output:
-                click.echo(
-                    json_formatter.format_json_error(
-                        "ValidationError",
-                        error_msg,
-                        EXIT_CONFIG_ERROR,
-                    ),
-                    err=True,
-                )
-            else:
-                click.echo(f"Error: {error_msg}", err=True)
-                click.echo("\nAvailable projects:", err=True)
-                for p in projects:
-                    click.echo(f"  - {p.name}", err=True)
-            sys.exit(EXIT_CONFIG_ERROR)
+            hint = None
+            if projects:
+                hint = "Available projects:\n" + "\n".join(f"  - {p.name}" for p in projects)
+            _handle_error(ctx, "ValidationError", error_msg, EXIT_CONFIG_ERROR, hint=hint)
             return
         else:  # All projects over quota
-            if json_output:
-                click.echo(
-                    json_formatter.format_json_error(
-                        "QuotaExceeded",
-                        error_msg,
-                        EXIT_CONFIG_ERROR,
-                    ),
-                    err=True,
-                )
-            else:
-                click.echo(f"Error: {error_msg}", err=True)
-            sys.exit(EXIT_CONFIG_ERROR)
+            _handle_error(ctx, "QuotaExceeded", error_msg, EXIT_CONFIG_ERROR)
             return
 
     # 4. Get images
     try:
         images = browser_api_module.list_images(workspace_id=workspace_id, session=session)
     except Exception as e:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "APIError",
-                    f"Error fetching images: {e}",
-                    EXIT_API_ERROR,
-                ),
-                err=True,
-            )
-        else:
-            click.echo(f"Error fetching images: {e}", err=True)
-        sys.exit(EXIT_API_ERROR)
+        _handle_error(ctx, "APIError", f"Failed to fetch images: {e}", EXIT_API_ERROR)
         return
 
     if not images:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "ConfigError",
-                    "No images available",
-                    EXIT_CONFIG_ERROR,
-                ),
-                err=True,
-            )
-        else:
-            click.echo("Error: No images available", err=True)
-        sys.exit(EXIT_CONFIG_ERROR)
+        _handle_error(ctx, "ConfigError", "No images available", EXIT_CONFIG_ERROR)
         return
 
     # Select image
@@ -1163,18 +904,14 @@ def create_notebook_cmd(
                 selected_image = img
                 break
         if not selected_image:
-            if json_output:
-                click.echo(
-                    json_formatter.format_json_error(
-                        "ValidationError",
-                        f"Image '{image}' not found",
-                        EXIT_CONFIG_ERROR,
-                    ),
-                    err=True,
-                )
-            else:
-                click.echo(f"Error: Image '{image}' not found", err=True)
-            sys.exit(EXIT_CONFIG_ERROR)
+            hint = "Available images:\n" + "\n".join(f"  - {img.name}" for img in images[:20])
+            _handle_error(
+                ctx,
+                "ValidationError",
+                f"Image '{image}' not found",
+                EXIT_CONFIG_ERROR,
+                hint=hint,
+            )
             return
     else:
         # Interactive selection
@@ -1200,13 +937,17 @@ def create_notebook_cmd(
                     default=default_idx,
                 )
                 if choice < 1 or choice > len(images):
-                    click.echo("Invalid selection", err=True)
-                    sys.exit(EXIT_CONFIG_ERROR)
+                    _handle_error(
+                        ctx,
+                        "ValidationError",
+                        "Invalid selection",
+                        EXIT_CONFIG_ERROR,
+                        hint=f"Choose between 1 and {len(images)}.",
+                    )
                     return
                 selected_image = images[choice - 1]
             except click.Abort:
-                click.echo("\nAborted.", err=True)
-                sys.exit(EXIT_CONFIG_ERROR)
+                _handle_error(ctx, "Aborted", "Aborted.", EXIT_CONFIG_ERROR)
                 return
         else:
             # In JSON mode, use first pytorch image or first available
@@ -1277,14 +1018,12 @@ def create_notebook_cmd(
                 if not json_output:
                     click.echo("Notebook is now RUNNING.")
             except TimeoutError as e:
-                if json_output:
-                    click.echo(
-                        json_formatter.format_json_error("Timeout", str(e), EXIT_API_ERROR),
-                        err=True,
-                    )
-                else:
-                    click.echo(f"Timeout: {e}", err=True)
-                sys.exit(EXIT_API_ERROR)
+                _handle_error(
+                    ctx,
+                    "Timeout",
+                    f"Timed out waiting for notebook to reach RUNNING: {e}",
+                    EXIT_API_ERROR,
+                )
                 return
 
         # Run keepalive script if requested (GPU notebooks only)
@@ -1308,14 +1047,7 @@ def create_notebook_cmd(
             click.echo(f"\nUse 'inspire notebook status {notebook_id}' to check status.")
 
     except Exception as e:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error("APIError", str(e), EXIT_API_ERROR),
-                err=True,
-            )
-        else:
-            click.echo(f"Error creating notebook: {e}", err=True)
-        sys.exit(EXIT_API_ERROR)
+        _handle_error(ctx, "APIError", f"Failed to create notebook: {e}", EXIT_API_ERROR)
         return
 
 
@@ -1341,23 +1073,13 @@ def stop_notebook_cmd(
     """
     json_output = _resolve_json_output(ctx, json_output)
 
-    try:
-        session = web_session_module.get_web_session()
-    except ValueError as e:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "ConfigError",
-                    str(e),
-                    EXIT_CONFIG_ERROR,
-                    hint="Set INSPIRE_USERNAME and INSPIRE_PASSWORD environment variables.",
-                ),
-                err=True,
-            )
-        else:
-            click.echo(f"Error: {e}", err=True)
-        sys.exit(EXIT_CONFIG_ERROR)
-        return
+    session = _require_web_session(
+        ctx,
+        hint=(
+            "Stopping notebooks requires web authentication. "
+            "Set INSPIRE_USERNAME and INSPIRE_PASSWORD."
+        ),
+    )
 
     try:
         result = browser_api_module.stop_notebook(notebook_id=notebook_id, session=session)
@@ -1377,14 +1099,7 @@ def stop_notebook_cmd(
             click.echo(f"Use 'inspire notebook status {notebook_id}' to check status.")
 
     except Exception as e:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error("APIError", str(e), EXIT_API_ERROR),
-                err=True,
-            )
-        else:
-            click.echo(f"Error stopping notebook: {e}", err=True)
-        sys.exit(EXIT_API_ERROR)
+        _handle_error(ctx, "APIError", f"Failed to stop notebook: {e}", EXIT_API_ERROR)
         return
 
 
@@ -1417,23 +1132,13 @@ def start_notebook_cmd(
     """
     json_output = _resolve_json_output(ctx, json_output)
 
-    try:
-        session = web_session_module.get_web_session()
-    except ValueError as e:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "ConfigError",
-                    str(e),
-                    EXIT_CONFIG_ERROR,
-                    hint="Set INSPIRE_USERNAME and INSPIRE_PASSWORD environment variables.",
-                ),
-                err=True,
-            )
-        else:
-            click.echo(f"Error: {e}", err=True)
-        sys.exit(EXIT_CONFIG_ERROR)
-        return
+    session = _require_web_session(
+        ctx,
+        hint=(
+            "Starting notebooks requires web authentication. "
+            "Set INSPIRE_USERNAME and INSPIRE_PASSWORD."
+        ),
+    )
 
     try:
         result = browser_api_module.start_notebook(notebook_id=notebook_id, session=session)
@@ -1451,14 +1156,12 @@ def start_notebook_cmd(
                 if not json_output:
                     click.echo("Notebook is now RUNNING.")
             except TimeoutError as e:
-                if json_output:
-                    click.echo(
-                        json_formatter.format_json_error("Timeout", str(e), EXIT_API_ERROR),
-                        err=True,
-                    )
-                else:
-                    click.echo(f"Timeout: {e}", err=True)
-                sys.exit(EXIT_API_ERROR)
+                _handle_error(
+                    ctx,
+                    "Timeout",
+                    f"Timed out waiting for notebook to reach RUNNING: {e}",
+                    EXIT_API_ERROR,
+                )
                 return
 
         if json_output:
@@ -1475,14 +1178,7 @@ def start_notebook_cmd(
             click.echo(f"Use 'inspire notebook status {notebook_id}' to check status.")
 
     except Exception as e:
-        if json_output:
-            click.echo(
-                json_formatter.format_json_error("APIError", str(e), EXIT_API_ERROR),
-                err=True,
-            )
-        else:
-            click.echo(f"Error starting notebook: {e}", err=True)
-        sys.exit(EXIT_API_ERROR)
+        _handle_error(ctx, "APIError", f"Failed to start notebook: {e}", EXIT_API_ERROR)
         return
 
 
@@ -1557,17 +1253,13 @@ def ssh_notebook_cmd(
         save_tunnel_config,
     )
 
-    try:
-        session = web_session_module.get_web_session()
-    except ValueError as e:
-        click.echo(f"Error: {e}", err=True)
-        click.echo(
-            "\nNote: Notebook SSH requires web authentication. "
-            "Please set INSPIRE_USERNAME and INSPIRE_PASSWORD environment variables.",
-            err=True,
-        )
-        sys.exit(EXIT_CONFIG_ERROR)
-        return
+    session = _require_web_session(
+        ctx,
+        hint=(
+            "Notebook SSH requires web authentication. "
+            "Set INSPIRE_USERNAME and INSPIRE_PASSWORD."
+        ),
+    )
 
     # Wait for running (optional) and get notebook detail for GPU info
     notebook_detail = None
@@ -1581,12 +1273,15 @@ def ssh_notebook_cmd(
                 notebook_id=notebook_id, session=session
             )
     except TimeoutError as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(EXIT_API_ERROR)
+        _handle_error(
+            ctx,
+            "Timeout",
+            f"Timed out waiting for notebook to reach RUNNING: {e}",
+            EXIT_API_ERROR,
+        )
         return
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(EXIT_API_ERROR)
+        _handle_error(ctx, "APIError", str(e), EXIT_API_ERROR)
         return
 
     # Extract GPU type from notebook detail for internet capability detection
@@ -1630,8 +1325,7 @@ def ssh_notebook_cmd(
     try:
         ssh_public_key = _load_ssh_public_key(pubkey)
     except ValueError as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(EXIT_CONFIG_ERROR)
+        _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
         return
 
     # Set up rtunnel + sshd in notebook and derive proxy URL from Jupyter
@@ -1649,8 +1343,7 @@ def ssh_notebook_cmd(
             timeout=setup_timeout,
         )
     except Exception as e:
-        click.echo(f"Error setting up notebook tunnel: {e}", err=True)
-        sys.exit(EXIT_API_ERROR)
+        _handle_error(ctx, "APIError", f"Failed to set up notebook tunnel: {e}", EXIT_API_ERROR)
         return
 
     # Build a bridge profile for this notebook
