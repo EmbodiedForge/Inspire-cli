@@ -4,17 +4,19 @@
 - `inspire/` is the main Python package. CLI entry point lives in `inspire/cli/main.py`, command groups in `inspire/cli/commands/`, shared helpers in `inspire/cli/utils/`, and output formatters in `inspire/cli/formatters/`.
 - `inspire/inspire_api_control.py` is a legacy script; current CLI behavior is in `inspire/cli/` (see `inspire/README.md` for legacy notes).
 - Command groups may be split across modules: `inspire/cli/commands/job.py`, `notebook.py`, `tunnel.py`, and `resources.py` are registries, with subcommands implemented in `<group>_*.py`.
-- Large command/utility modules may be split behind façades to keep imports stable:
+- Large command/utility modules may be split behind façades to keep imports stable. Internal implementations live under `_impl/` subpackages where possible:
+  - `inspire/cli/commands/_impl/` holds internal command implementations.
+  - `inspire/api/_impl/` holds internal API implementations.
   - `inspire/cli/commands/config.py` is a registry; command bodies live in `config_show.py`, `config_env_template.py`, and `config_check.py`.
   - `inspire/cli/commands/config_show.py` delegates rendering to `config_show_render.py`.
   - `inspire/cli/commands/job_create.py` delegates execution to `job_create_flow.py`.
-  - `inspire/cli/commands/notebook_create_flow.py` re-exports from `notebook_create_flow_*` modules.
-  - `inspire/cli/commands/notebook_ssh.py` delegates execution to `notebook_ssh_flow.py`.
+  - `inspire/cli/commands/notebook_create_flow.py` delegates to `inspire/cli/commands/_impl/notebook_create/`.
+  - `inspire/cli/commands/notebook_ssh.py` delegates to `inspire/cli/commands/_impl/notebook_ssh/`.
   - `inspire/cli/commands/run_flow.py` re-exports from `run_flow_*` modules.
   - `inspire/cli/commands/bridge_exec_helpers.py` re-exports from `bridge_exec_helpers_*` modules.
-  - `inspire/cli/commands/job_logs_flow.py` delegates single-job handling to `job_logs_flow_single.py`, which delegates to `job_logs_flow_single_*` modules.
+  - `inspire/cli/commands/job_logs_flow.py` delegates single-job handling to `job_logs_flow_single.py`, which delegates to `inspire/cli/commands/_impl/job_logs/`.
   - `inspire/cli/commands/job_list.py` delegates watch mode to `job_list_watch.py`.
-  - `inspire/cli/commands/resources_list_watch.py` delegates to `resources_list_watch_*` modules.
+  - `inspire/cli/commands/resources_list_watch.py` delegates to `inspire/cli/commands/_impl/resources_list/`.
   - `inspire/cli/utils/job_cache.py` re-exports from `job_cache_api.py`.
   - `inspire/cli/utils/tunnel.py` and `inspire/cli/utils/tunnel_ssh.py` re-export from `tunnel_*` and `tunnel_ssh_*` modules.
   - `inspire/cli/utils/tunnel_ssh_exec.py` re-exports from `tunnel_ssh_exec_*` modules.
@@ -23,7 +25,7 @@
   - `inspire/cli/utils/browser_api_availability.py` and `browser_api_notebooks_http.py` re-export from `browser_api_*` modules.
   - `inspire/cli/utils/config_loader.py` re-exports from `config_loader_*` modules.
   - `inspire/api/openapi_client.py` delegates to `openapi_client_*` modules.
-  - `inspire/api/openapi_resources.py` delegates to `openapi_resources_*` modules.
+  - `inspire/api/openapi_resources.py` delegates to `inspire/api/_impl/openapi_resources/`.
 - `tests/` contains pytest suites (for example, `tests/test_cli_commands.py` and `tests/test_cli_smoke.py`).
 - `examples/` holds workflow YAMLs for Gitea Actions.
 - `scripts/` contains exploration/automation utilities used during API and UI discovery.
