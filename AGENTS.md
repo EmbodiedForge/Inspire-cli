@@ -7,6 +7,7 @@
 - Large command/utility modules may be split behind façades to keep imports stable. Internal implementations live under `_impl/` subpackages where possible:
   - `inspire/cli/commands/_impl/` holds internal command implementations.
   - `inspire/api/_impl/` holds internal API implementations.
+  - `inspire/cli/utils/_impl/` holds internal utility implementations.
   - `inspire/cli/commands/config.py` is a registry; command bodies live in `config_show.py`, `config_env_template.py`, and `config_check.py`.
   - `inspire/cli/commands/config_show.py` delegates rendering to `config_show_render.py`.
   - `inspire/cli/commands/job_create.py` delegates execution to `job_create_flow.py`.
@@ -19,11 +20,14 @@
   - `inspire/cli/commands/resources_list_watch.py` delegates to `inspire/cli/commands/_impl/resources_list/`.
   - `inspire/cli/utils/job_cache.py` re-exports from `job_cache_api.py`.
   - `inspire/cli/utils/tunnel.py` and `inspire/cli/utils/tunnel_ssh.py` re-export from `tunnel_*` and `tunnel_ssh_*` modules.
-  - `inspire/cli/utils/tunnel_ssh_exec.py` re-exports from `tunnel_ssh_exec_*` modules.
-  - `inspire/cli/utils/web_session.py` re-exports from `web_session_*` modules.
-  - `inspire/cli/utils/forge.py` re-exports from `forge_*` modules; similarly `inspire/cli/utils/browser_api_notebooks.py` and `browser_api_legacy.py` re-export from `browser_api_*` modules.
-  - `inspire/cli/utils/browser_api_availability.py` and `browser_api_notebooks_http.py` re-export from `browser_api_*` modules.
-  - `inspire/cli/utils/config_loader.py` re-exports from `config_loader_*` modules.
+  - `inspire/cli/utils/tunnel_ssh_exec.py` re-exports from `inspire/cli/utils/_impl/tunnel/ssh_exec/`.
+  - `inspire/cli/utils/web_session.py` re-exports from `inspire/cli/utils/_impl/web_session/`.
+  - `inspire/cli/utils/forge.py` imports/re-exports from `inspire/cli/utils/_impl/forge/`.
+  - `inspire/cli/utils/config_loader.py` imports/re-exports from `inspire/cli/utils/_impl/config_loader/`.
+  - `inspire/cli/utils/config_schema.py` imports option groups from `inspire/cli/utils/_impl/config_schema/options/`.
+  - `inspire/cli/utils/browser_api_notebooks_playwright.py` imports internals from `inspire/cli/utils/_impl/browser_api/notebooks/playwright/`.
+  - `inspire/cli/utils/browser_api_availability.py` imports internals from `inspire/cli/utils/_impl/browser_api/availability/`.
+  - `inspire/cli/utils/browser_api_notebooks.py` and `browser_api_legacy.py` re-export from `browser_api_*` modules for backward compatibility.
   - `inspire/api/openapi_client.py` delegates to `openapi_client_*` modules.
   - `inspire/api/openapi_resources.py` delegates to `inspire/api/_impl/openapi_resources/`.
 - `tests/` contains pytest suites (for example, `tests/test_cli_commands.py` and `tests/test_cli_smoke.py`).
@@ -56,6 +60,7 @@
 
 ## Configuration & Security Tips
 - Required environment variables include `INSPIRE_USERNAME`, `INSPIRE_PASSWORD`, and `INSPIRE_TARGET_DIR`; Gitea variables (`INSP_GITEA_REPO`, `INSP_GITEA_TOKEN`, `INSP_GITEA_SERVER`) are needed for sync/remote logs.
+- Config files are loaded from `~/.config/inspire/config.toml` (global) and `./.inspire/config.toml` (project).
 - Optional: `INSPIRE_SHM_SIZE` (or `job.shm_size` in config.toml) sets default shared memory (GiB) for job creation (`inspire job create`, `inspire run`) and notebook creation (`inspire notebook create`).
 - Optional: `INSPIRE_BRIDGE_ACTION_TIMEOUT` (or `bridge.action_timeout` in config.toml) sets default timeout (seconds) for `inspire bridge exec`.
 - Never commit credentials; prefer shell exports or local dotenv tooling. Use `inspire config check` to validate setup.
