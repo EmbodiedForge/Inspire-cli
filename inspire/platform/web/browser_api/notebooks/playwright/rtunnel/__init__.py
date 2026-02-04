@@ -1,21 +1,13 @@
-"""Browser (web-session) notebook APIs (Playwright rtunnel setup).
-
-This module keeps the historical import path stable while splitting the implementation into
-smaller internal modules under `inspire.cli.utils._impl.browser_api.notebooks.playwright.rtunnel`.
-"""
+"""Browser (web-session) notebook APIs (Playwright rtunnel setup)."""
 
 from __future__ import annotations
 
 from typing import Optional
 
-from inspire.cli.utils.browser_api_core import (
-    _in_asyncio_loop,
-    _run_in_thread,
-)
-from inspire.cli.utils._impl.browser_api.notebooks.playwright.rtunnel.flow import (
-    _setup_notebook_rtunnel_sync,
-)
+from inspire.platform.web.browser_api.core import _in_asyncio_loop, _run_in_thread
 from inspire.platform.web.session import WebSession
+
+from .flow import _setup_notebook_rtunnel_sync
 
 
 def setup_notebook_rtunnel(
@@ -48,3 +40,6 @@ def setup_notebook_rtunnel(
         headless=headless,
         timeout=timeout,
     )
+
+
+__all__ = ["setup_notebook_rtunnel"]

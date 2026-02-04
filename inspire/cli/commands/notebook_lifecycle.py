@@ -6,7 +6,7 @@ import click
 
 from inspire.cli.context import Context, EXIT_API_ERROR, pass_context
 from inspire.cli.formatters import json_formatter
-from inspire.cli.utils import browser_api as browser_api_module
+from inspire.platform.web import browser_api as browser_api_module
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.notebook_cli import require_web_session, resolve_json_output
 

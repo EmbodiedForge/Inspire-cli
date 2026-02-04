@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from inspire.cli.utils import browser_api as browser_api_module
+from inspire.platform.web import browser_api as browser_api_module
 
 
 def find_best_compute_group_location(

@@ -8,7 +8,7 @@ from inspire.cli.commands.resources_list_format import _format_accurate_availabi
 from inspire.cli.commands.resources_list_known_groups import _known_compute_groups_from_config
 from inspire.cli.context import Context, EXIT_API_ERROR, EXIT_AUTH_ERROR
 from inspire.cli.formatters import human_formatter, json_formatter
-from inspire.cli.utils import browser_api as browser_api_module
+from inspire.platform.web import browser_api as browser_api_module
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.platform.web.session import SessionExpiredError
 

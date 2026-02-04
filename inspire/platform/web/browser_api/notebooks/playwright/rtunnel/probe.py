@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from inspire.cli.utils.browser_api_core import BASE_URL, _browser_api_path
+from inspire.platform.web.browser_api.core import BASE_URL, _browser_api_path
 from inspire.platform.web.session import WebSession, build_requests_session
 
 

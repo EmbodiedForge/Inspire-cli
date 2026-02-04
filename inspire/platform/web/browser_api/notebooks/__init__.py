@@ -1,11 +1,9 @@
-"""Browser (web-session) notebook APIs (HTTP endpoints only).
-
-This module is kept as a façade and re-exports from smaller `browser_api_notebooks_*` modules.
-"""
+"""Browser (web-session) notebook APIs."""
 
 from __future__ import annotations
 
-from inspire.cli.utils._impl.browser_api.notebooks.http.api import (  # noqa: F401
+from .http import (
+    ImageInfo,
     create_notebook,
     get_notebook_detail,
     get_notebook_schedule,
@@ -13,11 +11,9 @@ from inspire.cli.utils._impl.browser_api.notebooks.http.api import (  # noqa: F4
     list_notebook_compute_groups,
     start_notebook,
     stop_notebook,
-)
-from inspire.cli.utils._impl.browser_api.notebooks.http.wait import (  # noqa: F401
     wait_for_notebook_running,
 )
-from inspire.cli.utils._impl.browser_api.notebooks.http.models import ImageInfo  # noqa: F401
+from .playwright import run_command_in_notebook, setup_notebook_rtunnel
 
 __all__ = [
     "ImageInfo",
@@ -26,6 +22,8 @@ __all__ = [
     "get_notebook_schedule",
     "list_images",
     "list_notebook_compute_groups",
+    "run_command_in_notebook",
+    "setup_notebook_rtunnel",
     "start_notebook",
     "stop_notebook",
     "wait_for_notebook_running",

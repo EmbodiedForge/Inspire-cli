@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from urllib.parse import urlsplit, urlunsplit
 
-from inspire.cli.utils.browser_api_core import BASE_URL, _browser_api_path
+from inspire.platform.web.browser_api.core import BASE_URL, _browser_api_path
 
 
 def open_notebook_lab(page, *, notebook_id: str):  # noqa: ANN001

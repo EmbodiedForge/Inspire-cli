@@ -6,7 +6,7 @@ into smaller domain modules, and this file re-exports the public API to keep imp
 
 from __future__ import annotations
 
-from inspire.cli.utils.browser_api_availability import (
+from .availability import (
     FullFreeNodeCount,
     GPUAvailability,
     find_best_compute_group_accurate,
@@ -14,13 +14,13 @@ from inspire.cli.utils.browser_api_availability import (
     get_full_free_node_counts,
     list_compute_groups,
 )
-from inspire.cli.utils.browser_api_jobs import (
+from .jobs import (
     JobInfo,
     get_current_user,
     list_job_users,
     list_jobs,
 )
-from inspire.cli.utils.browser_api_notebooks import (  # noqa: F401
+from .notebooks import (
     ImageInfo,
     create_notebook,
     get_notebook_detail,
@@ -33,7 +33,7 @@ from inspire.cli.utils.browser_api_notebooks import (  # noqa: F401
     stop_notebook,
     wait_for_notebook_running,
 )
-from inspire.cli.utils.browser_api_projects import (
+from .projects import (
     ProjectInfo,
     list_projects,
     select_project,

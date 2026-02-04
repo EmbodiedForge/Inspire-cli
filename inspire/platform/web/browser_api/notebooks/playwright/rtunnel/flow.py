@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from inspire.cli.utils.browser_api_core import (
+from inspire.platform.web.browser_api.core import (
     _launch_browser,
     _new_context,
 )

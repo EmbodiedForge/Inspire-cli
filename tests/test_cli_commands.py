@@ -17,7 +17,7 @@ from inspire.cli.context import (
 
 from inspire import config as config_module
 from inspire.cli.utils import auth as auth_module
-from inspire.cli.utils import browser_api as browser_api_module
+from inspire.platform.web import browser_api as browser_api_module
 from inspire.platform.web import session as web_session_module
 from inspire.cli.utils.auth import AuthenticationError
 from inspire.config import ConfigError
@@ -195,7 +195,7 @@ def patch_config_and_auth(
 def test_global_json_flag_with_resources_list(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     # Include test compute groups in config
     patch_config_and_auth(monkeypatch, tmp_path, include_compute_groups=True)
-    from inspire.cli.utils import browser_api as browser_api_module
+    from inspire.platform.web import browser_api as browser_api_module
 
     # Use a test placeholder UUID instead of real compute group ID
     test_group_id = "lcg-test000-0000-0000-0000-000000000000"
@@ -227,7 +227,7 @@ def test_global_json_flag_with_resources_list(monkeypatch: pytest.MonkeyPatch, t
 
 def test_global_debug_flag_runs_subcommand(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     patch_config_and_auth(monkeypatch, tmp_path)
-    from inspire.cli.utils import browser_api as browser_api_module
+    from inspire.platform.web import browser_api as browser_api_module
 
     monkeypatch.setattr(
         browser_api_module,
@@ -746,7 +746,7 @@ def test_job_logs_missing_file_sets_exit_code(monkeypatch: pytest.MonkeyPatch, t
 def test_nodes_list_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     # Include test compute groups in config
     patch_config_and_auth(monkeypatch, tmp_path, include_compute_groups=True)
-    from inspire.cli.utils import browser_api as browser_api_module
+    from inspire.platform.web import browser_api as browser_api_module
 
     test_group_id = "lcg-test000-0000-0000-0000-000000000000"
     monkeypatch.setattr(
