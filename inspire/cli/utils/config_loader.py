@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from inspire.cli.utils.config_loader_env import (  # noqa: F401
+from inspire.cli.utils._impl.config_loader.env import (  # noqa: F401
     config_from_env,
     config_from_env_for_sync,
 )
-from inspire.cli.utils.config_loader_merge import (  # noqa: F401
+from inspire.cli.utils._impl.config_loader.merge import (  # noqa: F401
     config_from_files_and_env,
     get_config_paths,
 )
-from inspire.cli.utils.config_loader_toml import (  # noqa: F401
+from inspire.cli.utils._impl.config_loader.toml import (  # noqa: F401
     _find_project_config,
     _flatten_toml,
     _load_toml,

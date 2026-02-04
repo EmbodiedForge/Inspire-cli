@@ -15,7 +15,7 @@ from inspire.cli.utils.config_models import (
     ConfigError,
 )
 from inspire.cli.utils.config_schema import CONFIG_OPTIONS
-from inspire.cli.utils.config_loader_toml import (
+from inspire.cli.utils._impl.config_loader.toml import (
     _find_project_config,
     _flatten_toml,
     _load_toml,
