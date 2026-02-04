@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from inspire.cli.utils.browser_api_core import BASE_URL, _browser_api_path, _request_json
-from inspire.cli.utils.browser_api_notebooks_models import ImageInfo
+from .models import ImageInfo
 from inspire.cli.utils.web_session import DEFAULT_WORKSPACE_ID, WebSession, get_web_session
 
 _NOTEBOOKS_REFERER = f"{BASE_URL}/jobs/interactiveModeling"

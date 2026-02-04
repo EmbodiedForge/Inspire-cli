@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-from inspire.cli.utils.browser_api_notebooks_http_api import get_notebook_detail
+from .api import get_notebook_detail
 from inspire.cli.utils.web_session import WebSession, get_web_session
 
 
