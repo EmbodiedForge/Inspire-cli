@@ -26,7 +26,7 @@ from inspire.cli.commands.job_status import build_status_command
 from inspire.cli.commands.job_stop import build_stop_command
 from inspire.cli.commands.job_update import build_update_command
 from inspire.cli.commands.job_wait import build_wait_command
-from inspire.cli.utils.gitea import fetch_remote_log_via_bridge  # re-exported for tests
+from inspire.bridge.forge import fetch_remote_log_via_bridge  # re-exported for tests
 from inspire.cli.utils.job_cache import JobCache  # re-exported for tests
 
 __all__ = [

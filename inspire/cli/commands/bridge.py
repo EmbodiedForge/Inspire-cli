@@ -16,7 +16,7 @@ from inspire.cli.context import (
     pass_context,
 )
 from inspire.config import Config, ConfigError, build_env_exports
-from inspire.cli.utils.gitea import (
+from inspire.bridge.forge import (
     trigger_bridge_action_workflow,
     wait_for_bridge_action_completion,
     download_bridge_artifact,

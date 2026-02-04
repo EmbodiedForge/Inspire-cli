@@ -3,9 +3,9 @@
 import json
 import pytest
 
-from inspire.cli.utils import forge as forge_module
+from inspire.bridge import forge as forge_module
 from inspire.config import Config
-from inspire.cli.utils.forge import (
+from inspire.bridge.forge import (
     GitPlatform,
     GiteaClient,
     GitHubClient,
@@ -282,7 +282,7 @@ class TestHelperFunctions:
 
     def test_extract_total_count_variations(self):
         """Test _extract_total_count handles various response formats."""
-        from inspire.cli.utils.forge import _extract_total_count
+        from inspire.bridge.forge import _extract_total_count
 
         assert _extract_total_count({"total_count": 42}) == 42
         assert _extract_total_count({"total": 42}) == 42
@@ -293,7 +293,7 @@ class TestHelperFunctions:
 
     def test_parse_event_inputs(self):
         """Test _parse_event_inputs handles various event payloads."""
-        from inspire.cli.utils.forge import _parse_event_inputs
+        from inspire.bridge.forge import _parse_event_inputs
 
         # Valid JSON with inputs
         event = json.dumps({"inputs": {"key": "value"}})
@@ -311,7 +311,7 @@ class TestHelperFunctions:
 
     def test_matches_inputs(self):
         """Test _matches_inputs logic."""
-        from inspire.cli.utils.forge import _matches_inputs
+        from inspire.bridge.forge import _matches_inputs
 
         inputs = {"key1": "value1", "key2": "value2"}
 
@@ -333,7 +333,7 @@ class TestHelperFunctions:
 
     def test_find_run_by_inputs(self):
         """Test _find_run_by_inputs logic."""
-        from inspire.cli.utils.forge import _find_run_by_inputs
+        from inspire.bridge.forge import _find_run_by_inputs
 
         runs = [
             {
@@ -362,7 +362,7 @@ class TestHelperFunctions:
 
     def test_artifact_name(self):
         """Test _artifact_name generates correct format."""
-        from inspire.cli.utils.forge import _artifact_name
+        from inspire.bridge.forge import _artifact_name
 
         result = _artifact_name("job-123", "req-456")
         assert result == "job-job-123-log-req-456"

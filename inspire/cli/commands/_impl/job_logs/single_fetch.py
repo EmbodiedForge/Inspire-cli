@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from inspire.config import Config
-from inspire.cli.utils.gitea import fetch_remote_log_incremental
+from inspire.bridge.forge import fetch_remote_log_incremental
 
 
 def fetch_log_incremental(

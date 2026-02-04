@@ -1,7 +1,7 @@
 """Forge configuration helpers.
 
 Resolves the active Git platform (Gitea vs GitHub) and extracts the relevant settings from
-`inspire.cli.utils.config.Config`.
+`inspire.config.Config`.
 """
 
 from __future__ import annotations
