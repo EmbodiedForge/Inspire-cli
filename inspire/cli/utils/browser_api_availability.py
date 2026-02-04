@@ -12,16 +12,16 @@ to keep historical import paths stable.
 
 from __future__ import annotations
 
-from inspire.cli.utils.browser_api_availability_api import (  # noqa: F401
+from inspire.cli.utils._impl.browser_api.availability.api import (  # noqa: F401
     get_accurate_gpu_availability,
     get_full_free_node_counts,
     list_compute_groups,
 )
-from inspire.cli.utils.browser_api_availability_models import (  # noqa: F401
+from inspire.cli.utils._impl.browser_api.availability.models import (  # noqa: F401
     FullFreeNodeCount,
     GPUAvailability,
 )
-from inspire.cli.utils.browser_api_availability_select import (  # noqa: F401
+from inspire.cli.utils._impl.browser_api.availability.select import (  # noqa: F401
     find_best_compute_group_accurate,
 )
 

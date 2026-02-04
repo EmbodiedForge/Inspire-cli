@@ -5,8 +5,8 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-from inspire.cli.utils.browser_api_availability_api import get_accurate_gpu_availability
-from inspire.cli.utils.browser_api_availability_models import GPUAvailability
+from .api import get_accurate_gpu_availability
+from .models import GPUAvailability
 
 
 def find_best_compute_group_accurate(
