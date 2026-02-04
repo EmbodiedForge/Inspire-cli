@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 from inspire.platform.web import browser_api as browser_api_module
 from inspire.platform.web import session as web_session_module
@@ -30,7 +30,7 @@ def build_remote_logged_command(config: Config, *, command: str) -> tuple[str, s
 
     log_path = None
     if config.target_dir:
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         log_dir = os.path.join(config.target_dir, ".inspire")
         log_filename = f"training_master_{timestamp}.log"
         log_path = os.path.join(log_dir, log_filename)
