@@ -1,36 +1,18 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `inspire/` is the main Python package. CLI entry point lives in `inspire/cli/main.py`, command groups in `inspire/cli/commands/`, shared helpers in `inspire/cli/utils/`, and output formatters in `inspire/cli/formatters/`.
-- `inspire/inspire_api_control.py` is a legacy script; current CLI behavior is in `inspire/cli/` (see `inspire/README.md` for legacy notes).
+- `inspire/` is the main Python package.
+- CLI entry point: `inspire/cli/main.py`; command groups in `inspire/cli/commands/`; formatters in `inspire/cli/formatters/`.
+- Domain packages (preferred for shared logic; used by CLI):
+  - `inspire/config/` config models, TOML/env loading, and schema/options.
+  - `inspire/platform/openapi/` platform OpenAPI client + resource selection.
+  - `inspire/platform/web/` web-session (SSO) + browser-only endpoints (`session/`, `browser_api/`).
+  - `inspire/core/` small shared utilities (no CLI concerns).
+  - `inspire/bridge/` bridge/tunnel/SSH integrations (in progress).
+  - `inspire/features/` higher-level workflows (in progress).
+- Legacy: `inspire/inspire_api_control.py` and `inspire/api/` are kept for legacy notes/compat; current CLI behavior is in `inspire/cli/`.
 - Command groups may be split across modules: `inspire/cli/commands/job.py`, `notebook.py`, `tunnel.py`, and `resources.py` are registries, with subcommands implemented in `<group>_*.py`.
-- Large command/utility modules may be split behind façades to keep imports stable. Internal implementations live under `_impl/` subpackages where possible:
-  - `inspire/cli/commands/_impl/` holds internal command implementations.
-  - `inspire/api/_impl/` holds internal API implementations.
-  - `inspire/cli/utils/_impl/` holds internal utility implementations.
-  - `inspire/cli/commands/config.py` is a registry; command bodies live in `config_show.py`, `config_env_template.py`, and `config_check.py`.
-  - `inspire/cli/commands/config_show.py` delegates rendering to `config_show_render.py`.
-  - `inspire/cli/commands/job_create.py` delegates execution to `job_create_flow.py`.
-  - `inspire/cli/commands/notebook_create_flow.py` delegates to `inspire/cli/commands/_impl/notebook_create/`.
-  - `inspire/cli/commands/notebook_ssh.py` delegates to `inspire/cli/commands/_impl/notebook_ssh/`.
-  - `inspire/cli/commands/run_flow.py` re-exports from `run_flow_*` modules.
-  - `inspire/cli/commands/bridge_exec_helpers.py` re-exports from `bridge_exec_helpers_*` modules.
-  - `inspire/cli/commands/job_logs_flow.py` delegates single-job handling to `job_logs_flow_single.py`, which delegates to `inspire/cli/commands/_impl/job_logs/`.
-  - `inspire/cli/commands/job_list.py` delegates watch mode to `job_list_watch.py`.
-  - `inspire/cli/commands/resources_list_watch.py` delegates to `inspire/cli/commands/_impl/resources_list/`.
-  - `inspire/cli/utils/job_cache.py` re-exports from `job_cache_api.py`.
-  - `inspire/cli/utils/tunnel.py` and `inspire/cli/utils/tunnel_ssh.py` re-export from tunnel helpers under `inspire/cli/utils/_impl/tunnel/`.
-  - `inspire/cli/utils/tunnel_ssh_exec.py` re-exports from `inspire/cli/utils/_impl/tunnel/ssh_exec/`.
-  - `inspire/cli/utils/web_session.py` re-exports from `inspire/cli/utils/_impl/web_session/`.
-  - `inspire/cli/utils/forge.py` imports/re-exports from `inspire/cli/utils/_impl/forge/`.
-  - `inspire/cli/utils/config_loader.py` imports/re-exports from `inspire/cli/utils/_impl/config_loader/`.
-  - `inspire/cli/utils/config_schema.py` imports option groups from `inspire/cli/utils/_impl/config_schema/options/`.
-  - `inspire/cli/utils/browser_api_notebooks_playwright.py` imports internals from `inspire/cli/utils/_impl/browser_api/notebooks/playwright/`.
-  - `inspire/cli/utils/browser_api_notebooks_http.py` imports internals from `inspire/cli/utils/_impl/browser_api/notebooks/http/`.
-  - `inspire/cli/utils/browser_api_availability.py` imports internals from `inspire/cli/utils/_impl/browser_api/availability/`.
-  - `inspire/cli/utils/browser_api_notebooks.py` and `browser_api_legacy.py` re-export from `browser_api_*` modules for backward compatibility.
-  - `inspire/api/openapi_client.py` delegates to `openapi_client_*` modules.
-  - `inspire/api/openapi_resources.py` delegates to `inspire/api/_impl/openapi_resources/`.
+- Internal-only implementations still use `_impl/` in some CLI areas (e.g. `inspire/cli/commands/_impl/`). Prefer moving reusable logic into `inspire/config/`, `inspire/platform/`, `inspire/bridge/`, and `inspire/features/` instead of adding new `_impl` modules.
 - `tests/` contains pytest suites (for example, `tests/test_cli_commands.py` and `tests/test_cli_smoke.py`).
 - `examples/` holds workflow YAMLs for Gitea Actions.
 - `scripts/` contains exploration/automation utilities used during API and UI discovery.
