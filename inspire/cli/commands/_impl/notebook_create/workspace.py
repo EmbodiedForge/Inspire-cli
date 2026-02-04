@@ -8,7 +8,7 @@ from inspire.cli.context import Context, EXIT_CONFIG_ERROR
 from inspire.config import Config, ConfigError
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.platform.web.session import WebSession
-from inspire.cli.utils.workspace import select_workspace_id
+from inspire.config.workspaces import select_workspace_id
 
 _ZERO_WORKSPACE_ID = "ws-00000000-0000-0000-0000-000000000000"
 

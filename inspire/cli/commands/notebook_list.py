@@ -22,7 +22,7 @@ from inspire.cli.utils.notebook_cli import (
 from inspire.platform.web import session as web_session_module
 from inspire.config import ConfigError
 from inspire.cli.utils.errors import exit_with_error as _handle_error
-from inspire.cli.utils.workspace import select_workspace_id
+from inspire.config.workspaces import select_workspace_id
 
 
 @click.command("list")

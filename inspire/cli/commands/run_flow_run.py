@@ -24,7 +24,7 @@ from inspire.cli.utils import job_submit
 from inspire.cli.utils.auth import AuthManager, AuthenticationError
 from inspire.config import Config, ConfigError
 from inspire.cli.utils.errors import exit_with_error as _handle_error
-from inspire.cli.utils.workspace import select_workspace_id
+from inspire.config.workspaces import select_workspace_id
 
 
 def run_flow(

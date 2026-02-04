@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from inspire.config import Config, ConfigError
-from inspire.cli.utils.workspace import select_workspace_id
+from inspire.config.workspaces import select_workspace_id
 
 WS_CPU = "ws-6e6ba362-e98e-45b2-9c5a-311998e93d65"
 WS_GPU = "ws-9dcc0e1f-80a4-4af2-bc2f-0e352e7b17e6"
