@@ -49,14 +49,7 @@ Documentation = "https://gitea.com/cyteena/inspire-cli"
 Repository = "https://gitea.com/cyteena/inspire-cli"
 
 [tool.setuptools]
-packages = [
-    "inspire",
-    "inspire.api",
-    "inspire.cli",
-    "inspire.cli.commands",
-    "inspire.cli.formatters",
-    "inspire.cli.utils",
-]
+packages = {find = {where = ["."], include = ["inspire*"], exclude = ["tests*"]}}
 
 [tool.setuptools.package-data]
 inspire = ["*.md"]
