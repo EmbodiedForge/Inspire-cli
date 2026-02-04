@@ -6,7 +6,7 @@ Provides authenticated API client with token caching.
 import time
 from typing import Optional
 
-from inspire.api import InspireAPI, InspireConfig, AuthenticationError
+from inspire.platform.openapi import AuthenticationError, InspireAPI, InspireConfig
 from inspire.config import Config
 
 

@@ -3,7 +3,7 @@
 """Legacy Inspire API Control script.
 
 This module is kept for backward compatibility.
-New code should import from `inspire.api`.
+New code should import from `inspire.platform.openapi`.
 """
 
 import argparse
@@ -11,7 +11,7 @@ import json
 import logging
 import os
 
-from inspire.api import (
+from inspire.platform.openapi import (
     AuthenticationError,
     DEFAULT_SHM_ENV_VAR,
     InspireAPI,

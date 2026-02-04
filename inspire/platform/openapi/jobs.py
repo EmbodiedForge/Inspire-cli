@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 import requests
 
-from inspire.api.openapi_errors import (
+from inspire.platform.openapi.errors import (
     JobCreationError,
     JobNotFoundError,
     InspireAPIError,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from inspire.api.openapi_models import ComputeGroup, GPUType, ResourceSpec
+from inspire.platform.openapi.models import ComputeGroup, GPUType, ResourceSpec
 
 
 def find_matching_specs(

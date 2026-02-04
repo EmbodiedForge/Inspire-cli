@@ -1,6 +1,10 @@
-"""Inspire API clients and helpers."""
+"""Deprecated API package.
 
-from inspire.api.openapi import (  # noqa: F401
+The OpenAPI client now lives in `inspire.platform.openapi`. This module re-exports the public
+API for internal compatibility (legacy script and older imports).
+"""
+
+from inspire.platform.openapi import (  # noqa: F401
     APIEndpoints,
     API_ERROR_CODES,
     AuthenticationError,

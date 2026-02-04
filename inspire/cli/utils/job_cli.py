@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from inspire.api import _validate_job_id_format
+from inspire.platform.openapi import _validate_job_id_format
 from inspire.cli.context import Context, EXIT_JOB_NOT_FOUND
 from inspire.cli.utils.errors import exit_with_error
 

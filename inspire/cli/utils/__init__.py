@@ -2,6 +2,6 @@
 
 from inspire.config import Config, ConfigError
 from inspire.cli.utils.auth import AuthManager
-from inspire.api import AuthenticationError
+from inspire.platform.openapi import AuthenticationError
 
 __all__ = ["Config", "ConfigError", "AuthManager", "AuthenticationError"]

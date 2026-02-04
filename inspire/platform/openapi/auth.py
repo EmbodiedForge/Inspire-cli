@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from inspire.api.openapi_errors import AuthenticationError
+from inspire.platform.openapi.errors import AuthenticationError
 
 logger = logging.getLogger(__name__)
 

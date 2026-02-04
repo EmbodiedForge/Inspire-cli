@@ -23,20 +23,20 @@ from typing import Any, Dict, Optional
 import requests
 import urllib3
 
-from inspire.api.openapi_client_auth import authenticate as _authenticate
-from inspire.api.openapi_client_auth import check_authentication as _check_authentication
-from inspire.api.openapi_client_http import make_request as _make_request
-from inspire.api.openapi_client_http import make_request_with_retry as _make_request_with_retry
-from inspire.api.openapi_client_jobs import create_training_job_smart as _create_training_job_smart
-from inspire.api.openapi_client_jobs import get_job_detail as _get_job_detail
-from inspire.api.openapi_client_jobs import stop_training_job as _stop_training_job
-from inspire.api.openapi_client_nodes import list_cluster_nodes as _list_cluster_nodes
-from inspire.api.openapi_endpoints import APIEndpoints
-from inspire.api.openapi_errors import (
+from inspire.platform.openapi.auth import authenticate as _authenticate
+from inspire.platform.openapi.auth import check_authentication as _check_authentication
+from inspire.platform.openapi.http import make_request as _make_request
+from inspire.platform.openapi.http import make_request_with_retry as _make_request_with_retry
+from inspire.platform.openapi.jobs import create_training_job_smart as _create_training_job_smart
+from inspire.platform.openapi.jobs import get_job_detail as _get_job_detail
+from inspire.platform.openapi.jobs import stop_training_job as _stop_training_job
+from inspire.platform.openapi.nodes import list_cluster_nodes as _list_cluster_nodes
+from inspire.platform.openapi.endpoints import APIEndpoints
+from inspire.platform.openapi.errors import (
     ValidationError,
 )
-from inspire.api.openapi_models import InspireConfig
-from inspire.api.openapi_resources import ResourceManager
+from inspire.platform.openapi.models import InspireConfig
+from inspire.platform.openapi.resources import ResourceManager
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-from inspire.api.openapi_errors import InspireAPIError, ValidationError
+from inspire.platform.openapi.errors import InspireAPIError, ValidationError
 
 logger = logging.getLogger(__name__)
 

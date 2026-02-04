@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 
 import requests
 
-from inspire.api.openapi_errors import InspireAPIError
+from inspire.platform.openapi.errors import InspireAPIError
 
 logger = logging.getLogger(__name__)
 

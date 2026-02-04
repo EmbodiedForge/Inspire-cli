@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from inspire.api.openapi_models import ComputeGroup, ResourceSpec
+from inspire.platform.openapi.models import ComputeGroup, ResourceSpec
 
 
 def display_available_resources(

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from inspire.api.openapi_models import GPUType, ResourceSpec
+from inspire.platform.openapi.models import GPUType, ResourceSpec
 
 
 def build_default_resource_specs() -> list[ResourceSpec]:

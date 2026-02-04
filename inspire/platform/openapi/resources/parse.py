@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from inspire.api.openapi_models import GPUType
+from inspire.platform.openapi.models import GPUType
 
 
 def parse_resource_request(resource_str: str) -> tuple[GPUType, int]:
