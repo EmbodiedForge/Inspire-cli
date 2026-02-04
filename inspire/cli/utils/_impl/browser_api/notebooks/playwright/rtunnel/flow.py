@@ -8,20 +8,12 @@ from inspire.cli.utils.browser_api_core import (
     _launch_browser,
     _new_context,
 )
-from inspire.cli.utils.browser_api_notebooks_playwright_jupyter import (
-    build_jupyter_proxy_url,
-    open_notebook_lab,
-)
-from inspire.cli.utils.browser_api_notebooks_playwright_rtunnel_commands import (
-    build_rtunnel_setup_commands,
-)
-from inspire.cli.utils.browser_api_notebooks_playwright_rtunnel_probe import (
-    probe_existing_rtunnel_proxy_url,
-)
-from inspire.cli.utils.browser_api_notebooks_playwright_rtunnel_verify import (
-    wait_for_rtunnel_reachable,
-)
 from inspire.cli.utils.web_session import WebSession, get_web_session
+
+from ..jupyter import build_jupyter_proxy_url, open_notebook_lab
+from .commands import build_rtunnel_setup_commands
+from .probe import probe_existing_rtunnel_proxy_url
+from .verify import wait_for_rtunnel_reachable
 
 
 def _setup_notebook_rtunnel_sync(
