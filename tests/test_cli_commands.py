@@ -490,7 +490,7 @@ def test_job_wait_times_out(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     # Force time to jump ahead so we immediately hit timeout
     from importlib import import_module
 
-    job_cmd = import_module("inspire.cli.commands.job")
+    job_deps = import_module("inspire.cli.commands.job.job_deps")
 
     calls: List[int] = []
 
@@ -499,7 +499,7 @@ def test_job_wait_times_out(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         calls.append(1)
         return 0 if len(calls) == 1 else 10
 
-    monkeypatch.setattr(job_cmd.time, "time", fake_time)
+    monkeypatch.setattr(job_deps.time, "time", fake_time)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -516,7 +516,7 @@ def test_job_list_uses_local_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     # Provide a fake JobCache implementation
     from importlib import import_module
 
-    job_cmd = import_module("inspire.cli.commands.job")
+    job_deps = import_module("inspire.cli.commands.job.job_deps")
 
     class FakeCache:
         def __init__(self, path: str) -> None:  # noqa: ARG002
@@ -537,7 +537,7 @@ def test_job_list_uses_local_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
                 }
             ]
 
-    monkeypatch.setattr(job_cmd, "JobCache", FakeCache)
+    monkeypatch.setattr(job_deps, "JobCache", FakeCache)
 
     runner = CliRunner()
     result = runner.invoke(cli_main, ["job", "list", "--limit", "5"])
@@ -606,12 +606,12 @@ def test_job_logs_path_and_tail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     # Mock fetch_remote_log_via_bridge to do nothing (log already cached)
     from importlib import import_module
 
-    job_cmd = import_module("inspire.cli.commands.job")
+    job_deps = import_module("inspire.cli.commands.job.job_deps")
 
     def fake_fetch(config, job_id, remote_log_path, cache_path, refresh):  # noqa: ARG001
         pass  # Log already exists locally
 
-    monkeypatch.setattr(job_cmd, "fetch_remote_log_via_bridge", fake_fetch)
+    monkeypatch.setattr(job_deps, "fetch_remote_log_via_bridge", fake_fetch)
 
     runner = CliRunner()
 
@@ -654,12 +654,12 @@ def test_job_logs_json_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     # Mock fetch_remote_log_via_bridge
     from importlib import import_module
 
-    job_cmd = import_module("inspire.cli.commands.job")
+    job_deps = import_module("inspire.cli.commands.job.job_deps")
 
     def fake_fetch(config, job_id, remote_log_path, cache_path, refresh):  # noqa: ARG001
         pass
 
-    monkeypatch.setattr(job_cmd, "fetch_remote_log_via_bridge", fake_fetch)
+    monkeypatch.setattr(job_deps, "fetch_remote_log_via_bridge", fake_fetch)
 
     runner = CliRunner()
     result = runner.invoke(cli_main, ["--json", "job", "logs", TEST_JOB_ID])
@@ -696,12 +696,12 @@ def test_job_logs_legacy_filename_is_migrated(monkeypatch: pytest.MonkeyPatch, t
 
     from importlib import import_module
 
-    job_cmd = import_module("inspire.cli.commands.job")
+    job_deps = import_module("inspire.cli.commands.job.job_deps")
 
     def fail_fetch(*args, **kwargs):  # noqa: ARG001
         raise AssertionError("fetch should not be called when legacy cache exists")
 
-    monkeypatch.setattr(job_cmd, "fetch_remote_log_via_bridge", fail_fetch)
+    monkeypatch.setattr(job_deps, "fetch_remote_log_via_bridge", fail_fetch)
 
     runner = CliRunner()
     result = runner.invoke(cli_main, ["job", "logs", TEST_JOB_ID, "--tail", "1"])

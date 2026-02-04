@@ -9,32 +9,300 @@ This command:
 3. Returns the synced commit SHA
 """
 
+from __future__ import annotations
+
+import logging
+import subprocess
 import sys
 from typing import Optional
 
 import click
 
-from inspire.cli.commands.sync_git_helpers import (
-    get_commit_message,
-    get_current_branch,
-    get_current_commit_sha,
-    has_uncommitted_changes,
-    push_to_remote,
-)
-from inspire.cli.commands.sync_tunnel_helpers import sync_via_tunnel
-from inspire.cli.commands.sync_workflow_helpers import sync_via_workflow
 from inspire.cli.context import (
     Context,
     pass_context,
     EXIT_CONFIG_ERROR,
     EXIT_GENERAL_ERROR,
+    EXIT_SUCCESS,
 )
 from inspire.config import Config, ConfigError
+from inspire.bridge.forge import (
+    GiteaAuthError,
+    GiteaError,
+    trigger_sync_workflow,
+    wait_for_workflow_completion,
+)
 from inspire.bridge.tunnel import (
     is_tunnel_available,
     load_tunnel_config,
+    sync_via_ssh,
 )
 from inspire.cli.formatters import json_formatter
+
+
+def get_current_branch() -> str:
+    """Get the current git branch name."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        raise click.ClickException(f"Failed to get current branch: {e.stderr}")
+    except FileNotFoundError:
+        raise click.ClickException("git command not found. Please install git.")
+
+
+def get_current_commit_sha() -> str:
+    """Get the current commit SHA."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        raise click.ClickException(f"Failed to get commit SHA: {e.stderr}")
+
+
+def get_commit_message() -> str:
+    """Get the current commit message (first line)."""
+    try:
+        result = subprocess.run(
+            ["git", "log", "-1", "--format=%s"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+    except subprocess.CalledProcessError:
+        return ""
+
+
+def has_uncommitted_changes() -> bool:
+    """Check if there are uncommitted changes."""
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return bool(result.stdout.strip())
+    except subprocess.CalledProcessError:
+        return False
+
+
+def push_to_remote(branch: str, remote: str) -> None:
+    """Push the branch to the remote."""
+    click.echo(f"Pushing {branch} to {remote}...")
+    try:
+        result = subprocess.run(
+            ["git", "push", remote, branch],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        if result.stderr:
+            logging.debug(result.stderr)
+    except subprocess.CalledProcessError as e:
+        error_msg = e.stderr or e.stdout or str(e)
+        raise click.ClickException(f"Failed to push to {remote}: {error_msg}")
+
+
+def sync_via_tunnel(
+    ctx: Context,
+    config: Config,
+    *,
+    branch: str,
+    commit_sha: str,
+    commit_msg: str,
+    remote: str,
+    force: bool,
+    timeout: int,
+    bridge_name: Optional[str] = None,
+    tunnel_config=None,
+) -> int:
+    """Sync code via SSH tunnel (fast path)."""
+    if not ctx.json_output:
+        if bridge_name:
+            click.echo(f"Syncing via SSH tunnel (bridge: {bridge_name})...")
+        else:
+            click.echo("Syncing via SSH tunnel...")
+
+    result = sync_via_ssh(
+        target_dir=config.target_dir,
+        branch=branch,
+        commit_sha=commit_sha,
+        force=force,
+        bridge_name=bridge_name,
+        config=tunnel_config,
+        timeout=timeout,
+    )
+
+    if result.get("success"):
+        synced_sha = result.get("synced_sha") or commit_sha[:7]
+        if ctx.json_output:
+            click.echo(
+                json_formatter.format_json(
+                    {
+                        "status": "success",
+                        "method": "ssh_tunnel",
+                        "branch": branch,
+                        "remote": remote,
+                        "commit": commit_sha[:7],
+                        "commit_full": commit_sha,
+                        "synced_sha": synced_sha,
+                        "message": commit_msg,
+                        "target_dir": config.target_dir,
+                    }
+                )
+            )
+        else:
+            click.echo(
+                click.style("OK", fg="green")
+                + f" Synced branch '{branch}' ({synced_sha[:7]}) to {config.target_dir}"
+            )
+            click.echo(f"  Commit: {commit_msg}")
+            click.echo("  Method: SSH tunnel (fast)")
+        return EXIT_SUCCESS
+
+    if ctx.json_output:
+        click.echo(
+            json_formatter.format_json_error(
+                "SyncError",
+                str(result.get("error")),
+                EXIT_GENERAL_ERROR,
+            ),
+            err=True,
+        )
+    else:
+        click.echo(f"Sync failed: {result.get('error')}", err=True)
+    return EXIT_GENERAL_ERROR
+
+
+def sync_via_workflow(
+    ctx: Context,
+    config: Config,
+    *,
+    branch: str,
+    commit_sha: str,
+    commit_msg: str,
+    remote: str,
+    force: bool,
+    wait: bool,
+    timeout: int,
+) -> int:
+    """Sync code via Gitea Actions workflow (slower fallback)."""
+    if not ctx.json_output:
+        click.echo("Triggering sync workflow...")
+
+    try:
+        run_id = trigger_sync_workflow(config, branch, commit_sha, force)
+    except (GiteaError, GiteaAuthError) as e:
+        if ctx.json_output:
+            click.echo(
+                json_formatter.format_json_error("GiteaError", str(e), EXIT_CONFIG_ERROR),
+                err=True,
+            )
+        else:
+            click.echo(f"Error: {e}", err=True)
+        return EXIT_CONFIG_ERROR
+
+    if wait and run_id:
+        if not ctx.json_output:
+            click.echo("Waiting for sync to complete...")
+
+        try:
+            result = wait_for_workflow_completion(config, run_id, timeout)
+        except TimeoutError:
+            if ctx.json_output:
+                click.echo(
+                    json_formatter.format_json_error(
+                        "Timeout",
+                        f"Sync workflow did not complete within {timeout}s",
+                        EXIT_GENERAL_ERROR,
+                        hint="Check Gitea for sync workflow status.",
+                    ),
+                    err=True,
+                )
+            else:
+                click.echo(f"Sync workflow timed out after {timeout}s", err=True)
+                click.echo("The sync may still complete. Check Gitea for status.", err=True)
+            return EXIT_GENERAL_ERROR
+
+        if result.get("conclusion") == "success":
+            if ctx.json_output:
+                click.echo(
+                    json_formatter.format_json(
+                        {
+                            "status": "success",
+                            "method": "gitea_actions",
+                            "branch": branch,
+                            "remote": remote,
+                            "commit": commit_sha[:7],
+                            "commit_full": commit_sha,
+                            "message": commit_msg,
+                            "target_dir": config.target_dir,
+                            "html_url": result.get("html_url", ""),
+                        }
+                    )
+                )
+            else:
+                click.echo(
+                    click.style("OK", fg="green")
+                    + f" Synced branch '{branch}' ({commit_sha[:7]}) to {config.target_dir}"
+                )
+                click.echo(f"  Commit: {commit_msg}")
+                click.echo(f"  Remote: {remote}")
+            return EXIT_SUCCESS
+
+        if ctx.json_output:
+            hint = result.get("html_url") or None
+            click.echo(
+                json_formatter.format_json_error(
+                    "SyncError",
+                    f"Sync failed: {result.get('conclusion', 'unknown')}",
+                    EXIT_GENERAL_ERROR,
+                    hint=hint,
+                ),
+                err=True,
+            )
+        else:
+            click.echo(f"Sync failed: {result.get('conclusion', 'unknown')}", err=True)
+            if result.get("html_url"):
+                click.echo(f"  See: {result['html_url']}", err=True)
+        return EXIT_GENERAL_ERROR
+
+    if ctx.json_output:
+        click.echo(
+            json_formatter.format_json(
+                {
+                    "status": "triggered",
+                    "method": "gitea_actions",
+                    "branch": branch,
+                    "remote": remote,
+                    "commit": commit_sha[:7],
+                    "commit_full": commit_sha,
+                    "run_id": run_id,
+                }
+            )
+        )
+    else:
+        click.echo(click.style("OK", fg="green") + f" Pushed {branch} to {remote}")
+        click.echo(
+            click.style("OK", fg="green")
+            + " Triggered sync workflow"
+            + (f" (run {run_id})" if run_id else "")
+        )
+        click.echo(f"  Commit: {commit_sha[:7]} - {commit_msg}")
+
+    return EXIT_SUCCESS
 
 
 @click.command()
