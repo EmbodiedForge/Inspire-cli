@@ -8,7 +8,7 @@ from inspire.cli.context import Context, EXIT_API_ERROR, EXIT_AUTH_ERROR, pass_c
 from inspire.cli.formatters import json_formatter
 from inspire.platform.web import browser_api as browser_api_module
 from inspire.cli.utils.errors import exit_with_error as _handle_error
-from inspire.cli.utils.resources import KNOWN_COMPUTE_GROUPS
+from inspire.platform.web.resources import KNOWN_COMPUTE_GROUPS
 from inspire.platform.web.session import SessionExpiredError
 
 

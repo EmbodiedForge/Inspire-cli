@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from inspire.config import Config
-from inspire.cli.utils.resources import KNOWN_COMPUTE_GROUPS
+from inspire.platform.web.resources import KNOWN_COMPUTE_GROUPS
 from inspire.compute_groups import compute_group_name_map, load_compute_groups_from_config
 
 

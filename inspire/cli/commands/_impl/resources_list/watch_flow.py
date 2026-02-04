@@ -14,7 +14,7 @@ from inspire.cli.context import Context, EXIT_AUTH_ERROR
 from inspire.cli.formatters import human_formatter
 from inspire.platform.web import browser_api as browser_api_module
 from inspire.config import Config
-from inspire.cli.utils.resources import clear_availability_cache, fetch_resource_availability
+from inspire.platform.web.resources import clear_availability_cache, fetch_resource_availability
 from inspire.platform.web.session import SessionExpiredError, get_web_session
 
 from .watch_render import render_display

@@ -20,7 +20,7 @@ def find_best_compute_group_accurate(
     """Find the best compute group using accurate browser API data."""
     if prefer_full_nodes:
         try:
-            from inspire.cli.utils.resources import fetch_resource_availability
+            from inspire.platform.web.resources import fetch_resource_availability
 
             node_availability = fetch_resource_availability(known_only=not preferred_groups)
             gpu_type_upper = (gpu_type or "").upper()
