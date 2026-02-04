@@ -17,8 +17,17 @@ Inspire CLI is a command-line tool for the Inspire HPC training platform:
 inspire-cli/
 ├── inspire/
 │   ├── __init__.py              # Package version
-│   ├── inspire_api_control.py   # Low-level OpenAPI client
 │   ├── compute_groups.py        # GPU resource definitions
+│   ├── config/                  # Config models + TOML/env loading
+│   ├── platform/
+│   │   ├── openapi/             # Token-based OpenAPI client + resource selection
+│   │   └── web/                 # Web-session (SSO) + browser-only endpoints
+│   │       ├── session/
+│   │       ├── browser_api/
+│   │       └── resources.py     # Workspace node availability
+│   ├── bridge/
+│   │   ├── forge/               # GitHub/Gitea Actions workflows (fallback path)
+│   │   └── tunnel/              # rtunnel/SSH ProxyCommand support
 │   └── cli/
 │       ├── main.py              # Entry point, Click groups
 │       ├── context.py           # CLI context, exit codes
@@ -32,16 +41,10 @@ inspire-cli/
 │       │   ├── run.py           # quick job submission
 │       │   ├── notebook.py      # notebook list/create/start/stop/ssh
 │       │   └── tunnel.py        # SSH tunnel management
-│       ├── utils/
-│       │   ├── config.py        # Config class, TOML loading
-│       │   ├── config_schema.py # All config options metadata
-│       │   ├── auth.py          # OpenAPI authentication
-│       │   ├── forge.py         # Git forge abstraction (GitHub/Gitea)
-│       │   ├── browser_api.py   # Browser API client (SSO-protected)
-│       │   ├── web_session.py   # Playwright login, session caching
+│       ├── utils/               # CLI-only helpers (keep minimal)
+│       │   ├── auth.py          # OpenAPI authentication wrapper
 │       │   ├── job_cache.py     # Local job metadata cache
-│       │   ├── resources.py     # Resource availability fetching
-│       │   └── tunnel.py        # SSH tunnel/rtunnel profiles
+│       │   └── job_submit.py    # Job submission helpers (CLI)
 │       └── formatters/
 │           ├── json_formatter.py
 │           └── human_formatter.py

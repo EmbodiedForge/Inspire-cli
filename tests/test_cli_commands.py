@@ -22,7 +22,7 @@ from inspire.platform.web import session as web_session_module
 from inspire.cli.utils.auth import AuthenticationError
 from inspire.config import ConfigError
 from inspire.cli.utils.job_cache import JobCache
-from inspire.inspire_api_control import ResourceManager
+from inspire.platform.openapi import ResourceManager
 
 # Valid test job IDs (must match the format: job-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
 TEST_JOB_ID = "job-12345678-1234-1234-1234-123456789abc"

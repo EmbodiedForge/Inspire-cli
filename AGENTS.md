@@ -10,7 +10,7 @@
   - `inspire/core/` small shared utilities (no CLI concerns).
   - `inspire/bridge/` bridge/tunnel/SSH integrations (in progress).
   - `inspire/features/` higher-level workflows (in progress).
-- Legacy: `inspire/inspire_api_control.py` and `inspire/api/` are kept for legacy notes/compat; current CLI behavior is in `inspire/cli/`.
+- Legacy: backward-compat modules have been retired; current code is organized under `inspire/cli/`, `inspire/config/`, `inspire/platform/`, and `inspire/bridge/`.
 - Command groups may be split across modules: `inspire/cli/commands/job.py`, `notebook.py`, `tunnel.py`, and `resources.py` are registries, with subcommands implemented in `<group>_*.py`.
 - Internal-only implementations still use `_impl/` in some CLI areas (e.g. `inspire/cli/commands/_impl/`). Prefer moving reusable logic into `inspire/config/`, `inspire/platform/`, `inspire/bridge/`, and `inspire/features/` instead of adding new `_impl` modules.
 - `tests/` contains pytest suites (for example, `tests/test_cli_commands.py` and `tests/test_cli_smoke.py`).
