@@ -19,13 +19,14 @@
   - `inspire/cli/commands/job_list.py` delegates watch mode to `job_list_watch.py`.
   - `inspire/cli/commands/resources_list_watch.py` delegates to `inspire/cli/commands/_impl/resources_list/`.
   - `inspire/cli/utils/job_cache.py` re-exports from `job_cache_api.py`.
-  - `inspire/cli/utils/tunnel.py` and `inspire/cli/utils/tunnel_ssh.py` re-export from `tunnel_*` and `tunnel_ssh_*` modules.
+  - `inspire/cli/utils/tunnel.py` and `inspire/cli/utils/tunnel_ssh.py` re-export from tunnel helpers under `inspire/cli/utils/_impl/tunnel/`.
   - `inspire/cli/utils/tunnel_ssh_exec.py` re-exports from `inspire/cli/utils/_impl/tunnel/ssh_exec/`.
   - `inspire/cli/utils/web_session.py` re-exports from `inspire/cli/utils/_impl/web_session/`.
   - `inspire/cli/utils/forge.py` imports/re-exports from `inspire/cli/utils/_impl/forge/`.
   - `inspire/cli/utils/config_loader.py` imports/re-exports from `inspire/cli/utils/_impl/config_loader/`.
   - `inspire/cli/utils/config_schema.py` imports option groups from `inspire/cli/utils/_impl/config_schema/options/`.
   - `inspire/cli/utils/browser_api_notebooks_playwright.py` imports internals from `inspire/cli/utils/_impl/browser_api/notebooks/playwright/`.
+  - `inspire/cli/utils/browser_api_notebooks_http.py` imports internals from `inspire/cli/utils/_impl/browser_api/notebooks/http/`.
   - `inspire/cli/utils/browser_api_availability.py` imports internals from `inspire/cli/utils/_impl/browser_api/availability/`.
   - `inspire/cli/utils/browser_api_notebooks.py` and `browser_api_legacy.py` re-export from `browser_api_*` modules for backward compatibility.
   - `inspire/api/openapi_client.py` delegates to `openapi_client_*` modules.
