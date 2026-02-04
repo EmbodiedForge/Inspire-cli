@@ -10,7 +10,7 @@ import click
 from inspire.cli.context import Context, EXIT_GENERAL_ERROR, EXIT_SUCCESS, EXIT_TIMEOUT
 from inspire.cli.formatters import json_formatter
 from inspire.config import Config, build_env_exports
-from inspire.cli.utils.tunnel import TunnelNotAvailableError
+from inspire.bridge.tunnel import TunnelNotAvailableError
 
 
 def _build_remote_command(*, command: str, target_dir: str, remote_env: dict[str, str]) -> str:

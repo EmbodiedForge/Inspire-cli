@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from .tunnel_models import BridgeProfile, TunnelConfig, DEFAULT_SSH_USER
+from .models import BridgeProfile, TunnelConfig, DEFAULT_SSH_USER
 
 
 def load_tunnel_config(config_dir: Optional[Path] = None) -> TunnelConfig:

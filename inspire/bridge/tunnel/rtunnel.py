@@ -6,8 +6,10 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from .tunnel_config import load_tunnel_config
-from .tunnel_models import TunnelConfig, TunnelError
+from inspire.config import Config
+
+from .config import load_tunnel_config
+from .models import TunnelConfig, TunnelError
 
 # nightly release includes stdio:// mode for SSH ProxyCommand support
 DEFAULT_RTUNNEL_DOWNLOAD_URL = (
@@ -28,8 +30,6 @@ def _get_rtunnel_download_url() -> str:
 
     # Try to load from config files
     try:
-        from .config import Config
-
         config, _ = Config.from_files_and_env(require_credentials=False, require_target_dir=False)
         if config.rtunnel_download_url:
             return config.rtunnel_download_url

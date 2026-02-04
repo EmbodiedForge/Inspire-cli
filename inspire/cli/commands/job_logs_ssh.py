@@ -9,7 +9,7 @@ import click
 
 from inspire.cli.utils.auth import AuthManager
 from inspire.config import Config
-from inspire.cli.utils.tunnel import run_ssh_command
+from inspire.bridge.tunnel import run_ssh_command
 
 
 def _fetch_log_via_ssh(
@@ -45,7 +45,7 @@ def _follow_logs_via_ssh(
     import subprocess
     import time
 
-    from inspire.cli.utils.tunnel import get_ssh_command_args, run_ssh_command
+    from inspire.bridge.tunnel import get_ssh_command_args, run_ssh_command
 
     # Suppress API logging during streaming to keep output clean
     api_logger = logging.getLogger("inspire.inspire_api_control")

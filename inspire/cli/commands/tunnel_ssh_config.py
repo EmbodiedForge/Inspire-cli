@@ -10,7 +10,7 @@ import click
 
 from inspire.cli.context import Context, EXIT_GENERAL_ERROR, EXIT_CONFIG_ERROR, pass_context
 from inspire.cli.formatters import human_formatter, json_formatter
-from inspire.cli.utils.tunnel import (
+from inspire.bridge.tunnel import (
     TunnelError,
     generate_all_ssh_configs,
     generate_ssh_config,

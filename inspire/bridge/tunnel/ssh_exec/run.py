@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 from typing import Optional
 
-from inspire.cli.utils.tunnel_models import TunnelConfig
+from ..models import TunnelConfig
 from .core import (
     _build_ssh_base_args,
     _resolve_bridge_and_proxy,

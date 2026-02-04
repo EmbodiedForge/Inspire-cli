@@ -22,7 +22,7 @@ from inspire.cli.utils.gitea import (
     download_bridge_artifact,
     fetch_bridge_output_log,
 )
-from inspire.cli.utils.tunnel import (
+from inspire.bridge.tunnel import (
     is_tunnel_available,
     run_ssh_command,
     run_ssh_command_streaming,

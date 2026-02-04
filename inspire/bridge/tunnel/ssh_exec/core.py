@@ -5,15 +5,15 @@ from __future__ import annotations
 import shlex
 from typing import Optional
 
-from inspire.cli.utils.tunnel_config import load_tunnel_config
-from inspire.cli.utils.tunnel_models import (
+from ..config import load_tunnel_config
+from ..models import (
     BridgeNotFoundError,
     BridgeProfile,
     TunnelConfig,
     TunnelNotAvailableError,
 )
-from inspire.cli.utils.tunnel_rtunnel import _ensure_rtunnel_binary
-from inspire.cli.utils._impl.tunnel.ssh.proxy import _get_proxy_command
+from ..rtunnel import _ensure_rtunnel_binary
+from ..ssh.proxy import _get_proxy_command
 
 
 def _resolve_bridge_and_proxy(

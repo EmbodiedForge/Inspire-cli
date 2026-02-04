@@ -6,9 +6,9 @@ import subprocess
 import time
 from typing import Optional
 
-from inspire.cli.utils.tunnel_config import load_tunnel_config
-from inspire.cli.utils.tunnel_models import BridgeProfile, TunnelConfig, TunnelError
-from inspire.cli.utils.tunnel_rtunnel import _ensure_rtunnel_binary
+from ..config import load_tunnel_config
+from ..models import BridgeProfile, TunnelConfig, TunnelError
+from ..rtunnel import _ensure_rtunnel_binary
 
 from .proxy import _get_proxy_command
 

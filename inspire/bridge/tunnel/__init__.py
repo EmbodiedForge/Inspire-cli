@@ -1,13 +1,13 @@
-"""SSH tunnel utility façade.
+"""SSH tunnel utilities (ProxyCommand + rtunnel).
 
-Historically all tunnel logic lived in this module. The implementation is now split into smaller
-modules; this file re-exports the public API to keep import paths stable.
+This package contains the tunnel domain logic used by the CLI (tunnel management, ssh execution,
+and optional ssh-config generation).
 """
 
 from __future__ import annotations
 
-from inspire.cli.utils.tunnel_config import load_tunnel_config, save_tunnel_config
-from inspire.cli.utils.tunnel_models import (
+from .config import load_tunnel_config, save_tunnel_config
+from .models import (
     BridgeNotFoundError,
     BridgeProfile,
     DEFAULT_SSH_PORT,
@@ -17,29 +17,27 @@ from inspire.cli.utils.tunnel_models import (
     TunnelNotAvailableError,
     has_internet_for_gpu_type,
 )
-from inspire.cli.utils.tunnel_rtunnel import (
+from .rtunnel import (
     DEFAULT_RTUNNEL_DOWNLOAD_URL,
     _ensure_rtunnel_binary,
     _get_rtunnel_download_url,
     get_rtunnel_path,
 )
-from inspire.cli.utils.tunnel_ssh import (
-    _get_proxy_command,
-    _test_ssh_connection,
-    get_ssh_command_args,
-    get_tunnel_status,
-    is_tunnel_available,
-    run_ssh_command,
-    run_ssh_command_streaming,
-)
-from inspire.cli.utils._impl.tunnel.ssh.ssh_config import (
+from .ssh.connection import _test_ssh_connection, is_tunnel_available
+from .ssh.proxy import _get_proxy_command
+from .ssh.ssh_config import (
     generate_all_ssh_configs,
     generate_ssh_config,
     install_ssh_config,
 )
-from inspire.cli.utils.tunnel_sync import sync_via_ssh
+from .ssh.status import get_tunnel_status
+from .ssh_exec.args import get_ssh_command_args
+from .ssh_exec.run import run_ssh_command
+from .ssh_exec.stream import run_ssh_command_streaming
+from .sync import sync_via_ssh
 
 __all__ = [
+    # Models / errors
     "BridgeNotFoundError",
     "BridgeProfile",
     "DEFAULT_SSH_PORT",
@@ -48,12 +46,15 @@ __all__ = [
     "TunnelError",
     "TunnelNotAvailableError",
     "has_internet_for_gpu_type",
+    # Config
     "load_tunnel_config",
     "save_tunnel_config",
+    # rtunnel
     "DEFAULT_RTUNNEL_DOWNLOAD_URL",
     "_ensure_rtunnel_binary",
     "_get_rtunnel_download_url",
     "get_rtunnel_path",
+    # SSH helpers
     "_get_proxy_command",
     "_test_ssh_connection",
     "get_ssh_command_args",
@@ -61,8 +62,10 @@ __all__ = [
     "is_tunnel_available",
     "run_ssh_command",
     "run_ssh_command_streaming",
+    # ssh-config
     "generate_all_ssh_configs",
     "generate_ssh_config",
     "install_ssh_config",
+    # Sync
     "sync_via_ssh",
 ]

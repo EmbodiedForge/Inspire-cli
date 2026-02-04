@@ -5,9 +5,9 @@ from __future__ import annotations
 import subprocess
 from typing import Optional
 
-from .tunnel_config import load_tunnel_config
-from .tunnel_models import TunnelConfig
-from .tunnel_ssh import run_ssh_command
+from .config import load_tunnel_config
+from .models import TunnelConfig
+from .ssh_exec.run import run_ssh_command
 
 
 def sync_via_ssh(

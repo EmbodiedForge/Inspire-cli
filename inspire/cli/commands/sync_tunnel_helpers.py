@@ -9,7 +9,7 @@ import click
 from inspire.cli.context import Context, EXIT_GENERAL_ERROR, EXIT_SUCCESS
 from inspire.cli.formatters import json_formatter
 from inspire.config import Config
-from inspire.cli.utils.tunnel import sync_via_ssh
+from inspire.bridge.tunnel import sync_via_ssh
 
 
 def sync_via_tunnel(

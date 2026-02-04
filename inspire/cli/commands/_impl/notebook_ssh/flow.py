@@ -29,7 +29,7 @@ def run_notebook_ssh(
     debug_playwright: bool,
     setup_timeout: int,
 ) -> None:
-    from inspire.cli.utils.tunnel import (
+    from inspire.bridge.tunnel import (
         BridgeProfile,
         get_ssh_command_args,
         has_internet_for_gpu_type,

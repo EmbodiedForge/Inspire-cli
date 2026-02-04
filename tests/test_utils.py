@@ -12,7 +12,7 @@ from inspire.config import (
     _parse_remote_timeout,
     build_env_exports,
 )
-from inspire.cli.utils.tunnel import (
+from inspire.bridge.tunnel import (
     BridgeProfile,
     TunnelConfig,
     load_tunnel_config,

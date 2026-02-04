@@ -29,7 +29,7 @@ def build_rtunnel_setup_commands(
     dropbear_deb_dir = os.environ.get("INSPIRE_DROPBEAR_DEB_DIR")
 
     try:
-        from inspire.cli.utils.tunnel import _get_rtunnel_download_url
+        from inspire.bridge.tunnel import _get_rtunnel_download_url
 
         rtunnel_download_url = _get_rtunnel_download_url()
     except Exception:

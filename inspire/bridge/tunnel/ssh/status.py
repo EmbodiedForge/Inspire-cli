@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Optional
 
-from inspire.cli.utils.tunnel_config import load_tunnel_config
-from inspire.cli.utils.tunnel_models import TunnelConfig, TunnelError
-from inspire.cli.utils.tunnel_rtunnel import _ensure_rtunnel_binary
+from ..config import load_tunnel_config
+from ..models import TunnelConfig, TunnelError
+from ..rtunnel import _ensure_rtunnel_binary
 
 from .connection import _test_ssh_connection
 

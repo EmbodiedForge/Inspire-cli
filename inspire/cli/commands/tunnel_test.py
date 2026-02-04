@@ -8,7 +8,7 @@ import click
 
 from inspire.cli.context import Context, EXIT_GENERAL_ERROR, EXIT_CONFIG_ERROR, pass_context
 from inspire.cli.formatters import human_formatter, json_formatter
-from inspire.cli.utils.tunnel import TunnelNotAvailableError, load_tunnel_config, run_ssh_command
+from inspire.bridge.tunnel import TunnelNotAvailableError, load_tunnel_config, run_ssh_command
 
 
 @click.command("test")
