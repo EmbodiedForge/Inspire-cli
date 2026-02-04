@@ -18,20 +18,20 @@ from inspire.cli.utils.config_schema_models import (  # noqa: F401
     _parse_list,
     parse_value,
 )
-from inspire.cli.utils.config_schema_options_api import API_OPTIONS
-from inspire.cli.utils.config_schema_options_auth import AUTH_OPTIONS
-from inspire.cli.utils.config_schema_options_bridge import BRIDGE_OPTIONS
-from inspire.cli.utils.config_schema_options_git_platform import GIT_PLATFORM_OPTIONS
-from inspire.cli.utils.config_schema_options_gitea import GITEA_OPTIONS
-from inspire.cli.utils.config_schema_options_github import GITHUB_OPTIONS
-from inspire.cli.utils.config_schema_options_job import JOB_OPTIONS
-from inspire.cli.utils.config_schema_options_mirrors import MIRRORS_OPTIONS
-from inspire.cli.utils.config_schema_options_notebook import NOTEBOOK_OPTIONS
-from inspire.cli.utils.config_schema_options_paths import PATHS_OPTIONS
-from inspire.cli.utils.config_schema_options_ssh import SSH_OPTIONS
-from inspire.cli.utils.config_schema_options_sync import SYNC_OPTIONS
-from inspire.cli.utils.config_schema_options_tunnel import TUNNEL_OPTIONS
-from inspire.cli.utils.config_schema_options_workspaces import WORKSPACES_OPTIONS
+from inspire.cli.utils._impl.config_schema.options.api import API_OPTIONS
+from inspire.cli.utils._impl.config_schema.options.authentication import AUTH_OPTIONS
+from inspire.cli.utils._impl.config_schema.options.bridge import BRIDGE_OPTIONS
+from inspire.cli.utils._impl.config_schema.options.git_platform import GIT_PLATFORM_OPTIONS
+from inspire.cli.utils._impl.config_schema.options.gitea import GITEA_OPTIONS
+from inspire.cli.utils._impl.config_schema.options.github import GITHUB_OPTIONS
+from inspire.cli.utils._impl.config_schema.options.job import JOB_OPTIONS
+from inspire.cli.utils._impl.config_schema.options.mirrors import MIRRORS_OPTIONS
+from inspire.cli.utils._impl.config_schema.options.notebook import NOTEBOOK_OPTIONS
+from inspire.cli.utils._impl.config_schema.options.paths import PATHS_OPTIONS
+from inspire.cli.utils._impl.config_schema.options.ssh import SSH_OPTIONS
+from inspire.cli.utils._impl.config_schema.options.sync import SYNC_OPTIONS
+from inspire.cli.utils._impl.config_schema.options.tunnel import TUNNEL_OPTIONS
+from inspire.cli.utils._impl.config_schema.options.workspaces import WORKSPACES_OPTIONS
 
 # All configuration options organized by category.
 CONFIG_OPTIONS: list[ConfigOption] = [

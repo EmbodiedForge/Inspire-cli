@@ -1,0 +1,1 @@
+"""Internal config schema implementation."""
