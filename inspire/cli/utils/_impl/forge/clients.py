@@ -13,8 +13,8 @@ from urllib import request as urlrequest
 
 from inspire.cli.utils.config import Config
 
-from .forge_config import _get_active_server, _get_active_token, _resolve_platform
-from .forge_models import ForgeError, GitPlatform
+from .config import _get_active_server, _get_active_token, _resolve_platform
+from .models import ForgeError, GitPlatform
 
 
 @dataclass

@@ -7,10 +7,10 @@ from typing import Optional
 
 from inspire.cli.utils.config import Config
 
-from .forge_clients import create_forge_client
-from .forge_config import _get_active_repo, _get_active_workflow_file
-from .forge_helpers import _extract_total_count, _find_run_by_inputs
-from .forge_models import ForgeError
+from .clients import create_forge_client
+from .config import _get_active_repo, _get_active_workflow_file
+from .helpers import _extract_total_count, _find_run_by_inputs
+from .models import ForgeError
 
 
 def trigger_workflow_dispatch(

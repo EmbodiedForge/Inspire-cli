@@ -10,7 +10,7 @@ import os
 
 from inspire.cli.utils.config import Config
 
-from .forge_models import ForgeAuthError, GitPlatform
+from .models import ForgeAuthError, GitPlatform
 
 
 def _sanitize_token(token: str) -> str:

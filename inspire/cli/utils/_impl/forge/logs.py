@@ -8,8 +8,8 @@ from pathlib import Path
 
 from inspire.cli.utils.config import Config
 
-from .forge_artifacts import wait_for_log_artifact
-from .forge_workflows import trigger_log_retrieval_workflow
+from .artifacts import wait_for_log_artifact
+from .workflows import trigger_log_retrieval_workflow
 
 
 def _prune_old_logs(cache_dir: Path, max_age_days: int = 7) -> None:

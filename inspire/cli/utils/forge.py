@@ -15,19 +15,19 @@ import time
 from typing import Optional
 
 from inspire.cli.utils.config import Config
-from inspire.cli.utils.forge_artifacts import (
+from inspire.cli.utils._impl.forge.artifacts import (
     _find_artifact_by_name,
     download_bridge_artifact,
     fetch_bridge_output_log,
     wait_for_log_artifact,
 )
-from inspire.cli.utils.forge_clients import (
+from inspire.cli.utils._impl.forge.clients import (
     ForgeClient,
     GiteaClient,
     GitHubClient,
     create_forge_client,
 )
-from inspire.cli.utils.forge_config import (
+from inspire.cli.utils._impl.forge.config import (
     _get_active_repo,
     _get_active_server,
     _get_active_token,
@@ -35,26 +35,26 @@ from inspire.cli.utils.forge_config import (
     _resolve_platform,
     _sanitize_token,
 )
-from inspire.cli.utils.forge_helpers import (
+from inspire.cli.utils._impl.forge.helpers import (
     _artifact_name,
     _extract_total_count,
     _find_run_by_inputs,
     _matches_inputs,
     _parse_event_inputs,
 )
-from inspire.cli.utils.forge_logs import (
+from inspire.cli.utils._impl.forge.logs import (
     _prune_old_logs,
     fetch_remote_log_incremental,
     fetch_remote_log_via_bridge,
 )
-from inspire.cli.utils.forge_models import (
+from inspire.cli.utils._impl.forge.models import (
     ForgeAuthError,
     ForgeError,
     GitPlatform,
     GiteaAuthError,
     GiteaError,
 )
-from inspire.cli.utils.forge_workflows import (
+from inspire.cli.utils._impl.forge.workflows import (
     get_workflow_run,
     get_workflow_runs,
     trigger_bridge_action_workflow,

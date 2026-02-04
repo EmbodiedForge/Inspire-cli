@@ -10,10 +10,10 @@ from typing import Optional
 
 from inspire.cli.utils.config import Config
 
-from .forge_clients import create_forge_client
-from .forge_config import _get_active_repo
-from .forge_helpers import _artifact_name
-from .forge_models import ForgeError
+from .clients import create_forge_client
+from .config import _get_active_repo
+from .helpers import _artifact_name
+from .models import ForgeError
 
 
 def _find_artifact_by_name(
