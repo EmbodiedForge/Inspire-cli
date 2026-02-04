@@ -15,12 +15,12 @@ from inspire.cli.context import (
     EXIT_JOB_NOT_FOUND,
 )
 
-from inspire.cli.utils import config as config_module
+from inspire import config as config_module
 from inspire.cli.utils import auth as auth_module
 from inspire.cli.utils import browser_api as browser_api_module
 from inspire.cli.utils import web_session as web_session_module
 from inspire.cli.utils.auth import AuthenticationError
-from inspire.cli.utils.config import ConfigError
+from inspire.config import ConfigError
 from inspire.cli.utils.job_cache import JobCache
 from inspire.inspire_api_control import ResourceManager
 

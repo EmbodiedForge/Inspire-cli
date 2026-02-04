@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-from inspire.cli.utils.config import Config
+from inspire.config import Config
 
 from .clients import create_forge_client
 from .config import _get_active_repo, _get_active_workflow_file

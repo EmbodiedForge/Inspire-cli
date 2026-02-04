@@ -7,7 +7,7 @@ from pathlib import Path
 import click
 
 from inspire.cli.context import Context, pass_context
-from inspire.cli.utils.config_schema import get_categories, get_options_by_category
+from inspire.config import get_categories, get_options_by_category
 
 
 @click.command("env")

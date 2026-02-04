@@ -10,7 +10,7 @@ import os
 
 from inspire.cli.context import Context, EXIT_CONFIG_ERROR
 from inspire.cli.utils import web_session as web_session_module
-from inspire.cli.utils.config import Config, ConfigError
+from inspire.config import Config, ConfigError
 from inspire.cli.utils.errors import exit_with_error
 
 

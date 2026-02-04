@@ -8,7 +8,7 @@ from typing import Generator
 import pytest
 from click.testing import CliRunner
 
-from inspire.cli.utils.config import (
+from inspire.config import (
     Config,
     ConfigError,
     SOURCE_DEFAULT,
@@ -18,7 +18,7 @@ from inspire.cli.utils.config import (
     PROJECT_CONFIG_DIR,
     CONFIG_FILENAME,
 )
-from inspire.cli.utils.config_schema import (
+from inspire.config import (
     CONFIG_OPTIONS,
     get_categories,
     get_options_by_category,

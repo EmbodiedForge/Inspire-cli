@@ -9,7 +9,7 @@ from click.testing import CliRunner
 
 from inspire.cli.main import main as cli_main
 from inspire.cli.context import EXIT_GENERAL_ERROR, EXIT_SUCCESS, EXIT_TIMEOUT
-from inspire.cli.utils.config import Config
+from inspire.config import Config
 
 # Import the module itself, not the click group
 bridge_module = importlib.import_module("inspire.cli.commands.bridge")

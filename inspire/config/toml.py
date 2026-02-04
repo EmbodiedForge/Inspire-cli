@@ -10,8 +10,8 @@ try:
 except ImportError:  # pragma: no cover
     import tomli as tomllib
 
-from inspire.cli.utils.config_models import CONFIG_FILENAME, PROJECT_CONFIG_DIR
-from inspire.cli.utils.config_schema import get_option_by_toml
+from inspire.config.models import CONFIG_FILENAME, PROJECT_CONFIG_DIR
+from inspire.config.schema import get_option_by_toml
 
 
 def _find_project_config() -> Path | None:

@@ -8,7 +8,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
-from inspire.cli.utils.config import Config
+from inspire.config import Config
 
 from .clients import create_forge_client
 from .config import _get_active_repo

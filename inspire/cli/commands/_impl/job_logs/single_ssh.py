@@ -6,7 +6,7 @@ import click
 
 from inspire.cli.commands.job_logs_helpers import _fetch_log_via_ssh, _follow_logs_via_ssh
 from inspire.cli.context import Context, EXIT_GENERAL_ERROR, EXIT_SUCCESS
-from inspire.cli.utils.config import Config
+from inspire.config import Config
 from inspire.cli.utils.tunnel import TunnelNotAvailableError, is_tunnel_available
 
 from .single_output import echo_log_path, echo_ssh_content

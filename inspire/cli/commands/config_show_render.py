@@ -7,14 +7,14 @@ from pathlib import Path
 
 import click
 
-from inspire.cli.utils.config import (
+from inspire.config import (
     Config,
     SOURCE_DEFAULT,
     SOURCE_ENV,
     SOURCE_GLOBAL,
     SOURCE_PROJECT,
 )
-from inspire.cli.utils.config_schema import ConfigOption, get_categories, get_options_by_category
+from inspire.config import ConfigOption, get_categories, get_options_by_category
 
 # Source display labels with color
 SOURCE_LABELS = {

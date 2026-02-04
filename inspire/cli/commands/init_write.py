@@ -7,8 +7,7 @@ from pathlib import Path
 import click
 
 from inspire.cli.commands.init_env import _generate_toml_content
-from inspire.cli.utils.config import CONFIG_FILENAME, PROJECT_CONFIG_DIR
-from inspire.cli.utils.config_schema import ConfigOption
+from inspire.config import CONFIG_FILENAME, PROJECT_CONFIG_DIR, ConfigOption
 
 
 def _write_single_file(

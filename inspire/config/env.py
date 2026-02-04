@@ -7,7 +7,7 @@ import re
 import shlex
 from typing import Optional
 
-from inspire.cli.utils.config_models import ConfigError
+from inspire.config.models import ConfigError
 
 
 def _parse_remote_timeout(value: str) -> int:

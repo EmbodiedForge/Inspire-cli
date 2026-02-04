@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from inspire.cli.utils.config_schema_models import ConfigOption
+from inspire.config.schema_models import ConfigOption
 
 WORKSPACES_OPTIONS: list[ConfigOption] = [
     ConfigOption(

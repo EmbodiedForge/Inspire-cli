@@ -8,7 +8,7 @@ from typing import Optional
 import click
 
 from inspire.cli.utils.auth import AuthManager
-from inspire.cli.utils.config import Config
+from inspire.config import Config
 from inspire.cli.utils.tunnel import run_ssh_command
 
 

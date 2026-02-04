@@ -34,7 +34,7 @@ from inspire.cli.context import (
     EXIT_SUCCESS,
     EXIT_TIMEOUT,
 )
-from inspire.cli.utils.config import Config, ConfigError
+from inspire.config import Config, ConfigError
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.gitea import GiteaAuthError, GiteaError
 

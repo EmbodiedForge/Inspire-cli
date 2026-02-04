@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from inspire.cli.utils.config_schema import CONFIG_OPTIONS, ConfigOption, parse_value
+from inspire.config import CONFIG_OPTIONS, ConfigOption, parse_value
 
 
 def _detect_env_vars() -> list[tuple[ConfigOption, str]]:

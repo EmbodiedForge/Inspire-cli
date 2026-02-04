@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 
-from inspire.cli.utils.config import Config
+from inspire.config import Config
 
 from .models import ForgeAuthError, GitPlatform
 

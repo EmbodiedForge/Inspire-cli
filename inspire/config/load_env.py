@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import os
 
-from inspire.cli.utils.config_env import _parse_denylist, _parse_remote_timeout
-from inspire.cli.utils.config_models import Config, ConfigError
+from inspire.config.env import _parse_denylist, _parse_remote_timeout
+from inspire.config.models import Config, ConfigError
 
 
 def config_from_env(*, require_target_dir: bool = False) -> Config:

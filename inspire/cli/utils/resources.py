@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 from enum import Enum
 
-from inspire.cli.utils.config import Config
+from inspire.config import Config
 from inspire.cli.utils.web_session import get_web_session, fetch_workspace_availability
 from inspire.compute_groups import compute_group_name_map, load_compute_groups_from_config
 

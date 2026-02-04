@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import click
 
-from inspire.cli.utils.config_schema import CATEGORY_ORDER, ConfigOption
+from inspire.config import CATEGORY_ORDER, ConfigOption
 
 
 def _format_preview_by_scope(

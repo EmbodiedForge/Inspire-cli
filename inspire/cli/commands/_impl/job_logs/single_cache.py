@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from inspire.cli.utils.config import Config
+from inspire.config import Config
 
 
 class _JobCacheProtocol(Protocol):

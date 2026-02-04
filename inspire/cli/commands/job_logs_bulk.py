@@ -10,7 +10,7 @@ import click
 
 from inspire.cli.context import Context, EXIT_CONFIG_ERROR, EXIT_GENERAL_ERROR
 from inspire.cli.formatters import json_formatter
-from inspire.cli.utils.config import Config, ConfigError
+from inspire.config import Config, ConfigError
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.gitea import GiteaAuthError, GiteaError
 

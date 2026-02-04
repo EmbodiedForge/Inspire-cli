@@ -7,7 +7,7 @@ import click
 from inspire.cli.commands.resources_list_format import _format_availability_table
 from inspire.cli.context import Context, EXIT_API_ERROR, EXIT_AUTH_ERROR
 from inspire.cli.formatters import human_formatter, json_formatter
-from inspire.cli.utils.config import Config
+from inspire.config import Config
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.resources import clear_availability_cache, fetch_resource_availability
 from inspire.cli.utils.web_session import SessionExpiredError

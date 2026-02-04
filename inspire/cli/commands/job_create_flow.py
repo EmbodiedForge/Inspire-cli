@@ -16,7 +16,7 @@ from inspire.cli.formatters import human_formatter, json_formatter
 from inspire.cli.utils import job_submit
 from inspire.cli.utils.auth import AuthManager, AuthenticationError
 from inspire.cli.utils.compute_group_autoselect import find_best_compute_group_location
-from inspire.cli.utils.config import Config, ConfigError
+from inspire.config import Config, ConfigError
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.workspace import select_workspace_id
 

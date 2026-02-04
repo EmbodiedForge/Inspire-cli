@@ -135,37 +135,37 @@ class Config:
 
     @classmethod
     def _find_project_config(cls) -> Path | None:
-        from inspire.cli.utils.config_loader import _find_project_config
+        from inspire.config.toml import _find_project_config
 
         return _find_project_config()
 
     @staticmethod
     def _load_toml(path: Path) -> dict[str, Any]:
-        from inspire.cli.utils.config_loader import _load_toml
+        from inspire.config.toml import _load_toml
 
         return _load_toml(path)
 
     @staticmethod
     def _flatten_toml(data: dict[str, Any], prefix: str = "") -> dict[str, Any]:
-        from inspire.cli.utils.config_loader import _flatten_toml
+        from inspire.config.toml import _flatten_toml
 
         return _flatten_toml(data, prefix)
 
     @classmethod
     def _toml_key_to_field(cls, toml_key: str) -> str | None:
-        from inspire.cli.utils.config_loader import _toml_key_to_field
+        from inspire.config.toml import _toml_key_to_field
 
         return _toml_key_to_field(toml_key)
 
     @classmethod
     def from_env(cls, require_target_dir: bool = False) -> "Config":
-        from inspire.cli.utils.config_loader import config_from_env
+        from inspire.config.load_env import config_from_env
 
         return config_from_env(require_target_dir=require_target_dir)
 
     @classmethod
     def from_env_for_sync(cls) -> "Config":
-        from inspire.cli.utils.config_loader import config_from_env_for_sync
+        from inspire.config.load_env import config_from_env_for_sync
 
         return config_from_env_for_sync()
 
@@ -173,7 +173,7 @@ class Config:
     def from_files_and_env(
         cls, require_target_dir: bool = False, require_credentials: bool = True
     ) -> tuple["Config", dict[str, str]]:
-        from inspire.cli.utils.config_loader import config_from_files_and_env
+        from inspire.config.load import config_from_files_and_env
 
         return config_from_files_and_env(
             require_target_dir=require_target_dir, require_credentials=require_credentials
@@ -181,6 +181,6 @@ class Config:
 
     @classmethod
     def get_config_paths(cls) -> tuple[Path | None, Path | None]:
-        from inspire.cli.utils.config_loader import get_config_paths
+        from inspire.config.load import get_config_paths
 
         return get_config_paths()

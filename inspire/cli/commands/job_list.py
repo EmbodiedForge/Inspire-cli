@@ -14,7 +14,7 @@ from inspire.cli.context import (
     pass_context,
 )
 from inspire.cli.formatters import human_formatter, json_formatter
-from inspire.cli.utils.config import Config, ConfigError
+from inspire.config import Config, ConfigError
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 
 

@@ -13,7 +13,7 @@ from inspire.cli.commands.resources_list_known_groups import _known_compute_grou
 from inspire.cli.context import Context, EXIT_AUTH_ERROR
 from inspire.cli.formatters import human_formatter
 from inspire.cli.utils import browser_api as browser_api_module
-from inspire.cli.utils.config import Config
+from inspire.config import Config
 from inspire.cli.utils.resources import clear_availability_cache, fetch_resource_availability
 from inspire.cli.utils.web_session import SessionExpiredError, get_web_session
 

@@ -7,7 +7,7 @@ import time
 from typing import Optional
 
 from inspire.api import InspireAPI, InspireConfig, AuthenticationError
-from inspire.cli.utils.config import Config
+from inspire.config import Config
 
 
 class AuthManager:

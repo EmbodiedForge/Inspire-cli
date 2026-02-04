@@ -15,7 +15,7 @@ from inspire.cli.context import (
     EXIT_CONFIG_ERROR,
     pass_context,
 )
-from inspire.cli.utils.config import Config, ConfigError, build_env_exports
+from inspire.config import Config, ConfigError, build_env_exports
 from inspire.cli.utils.gitea import (
     trigger_bridge_action_workflow,
     wait_for_bridge_action_completion,

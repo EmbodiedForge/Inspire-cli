@@ -6,7 +6,7 @@ from pathlib import Path
 
 import click
 
-from inspire.cli.utils.config import CONFIG_FILENAME, PROJECT_CONFIG_DIR, Config
+from inspire.config import CONFIG_FILENAME, PROJECT_CONFIG_DIR, Config
 
 # TOML configuration template (used when no env vars detected or --template flag)
 CONFIG_TEMPLATE = """# Inspire CLI Configuration

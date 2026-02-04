@@ -4,7 +4,7 @@ import json
 import pytest
 
 from inspire.cli.utils import forge as forge_module
-from inspire.cli.utils.config import Config
+from inspire.config import Config
 from inspire.cli.utils.forge import (
     GitPlatform,
     GiteaClient,

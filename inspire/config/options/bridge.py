@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from inspire.cli.utils.config_schema_models import ConfigOption, _parse_int, _parse_list
+from inspire.config.schema_models import ConfigOption, _parse_int, _parse_list
 
 BRIDGE_OPTIONS: list[ConfigOption] = [
     ConfigOption(

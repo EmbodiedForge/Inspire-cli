@@ -13,8 +13,7 @@ from inspire.cli.commands.init_env import _detect_env_vars
 from inspire.cli.commands.init_preview import _format_preview_by_scope
 from inspire.cli.commands.init_template import _init_template_mode
 from inspire.cli.commands.init_write import _write_auto_split, _write_single_file
-from inspire.cli.utils.config import CONFIG_FILENAME, PROJECT_CONFIG_DIR, Config
-from inspire.cli.utils.config_schema import ConfigOption
+from inspire.config import CONFIG_FILENAME, PROJECT_CONFIG_DIR, Config, ConfigOption
 
 
 def _init_smart_mode(

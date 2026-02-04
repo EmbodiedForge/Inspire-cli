@@ -6,7 +6,7 @@ import click
 
 from inspire.cli.commands.config_show_render import _show_env, _show_json, _show_table
 from inspire.cli.context import Context, EXIT_CONFIG_ERROR, EXIT_GENERAL_ERROR, pass_context
-from inspire.cli.utils.config import Config, ConfigError
+from inspire.config import Config, ConfigError
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 
 

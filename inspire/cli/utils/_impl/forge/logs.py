@@ -6,7 +6,7 @@ import os
 import time
 from pathlib import Path
 
-from inspire.cli.utils.config import Config
+from inspire.config import Config
 
 from .artifacts import wait_for_log_artifact
 from .workflows import trigger_log_retrieval_workflow

@@ -13,7 +13,7 @@ import click
 from inspire.cli.context import Context, EXIT_AUTH_ERROR, EXIT_SUCCESS
 from inspire.cli.formatters import human_formatter, json_formatter
 from inspire.cli.utils.auth import AuthManager, AuthenticationError
-from inspire.cli.utils.config import Config
+from inspire.config import Config
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 
 

@@ -14,7 +14,7 @@ import logging
 import time
 from typing import Optional
 
-from inspire.cli.utils.config import Config
+from inspire.config import Config
 from inspire.cli.utils._impl.forge.artifacts import (
     _find_artifact_by_name,
     download_bridge_artifact,

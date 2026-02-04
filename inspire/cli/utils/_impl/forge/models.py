@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from inspire.cli.utils.config import ConfigError
+from inspire.config import ConfigError
 
 
 class GitPlatform(Enum):

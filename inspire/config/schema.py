@@ -1,16 +1,15 @@
-"""Configuration schema for Inspire CLI (façade).
+"""Configuration schema for Inspire CLI.
 
 Defines all environment variables and TOML configuration keys with metadata for documentation,
 validation, and config file generation.
 
-The option list is split across smaller per-category modules; this file re-exports the public API
-to keep import paths stable.
+The option list is split across smaller per-category modules for readability.
 """
 
 from __future__ import annotations
 
-from inspire.cli.utils.config_schema_categories import CATEGORY_ORDER  # noqa: F401
-from inspire.cli.utils.config_schema_models import (  # noqa: F401
+from inspire.config.schema_categories import CATEGORY_ORDER  # noqa: F401
+from inspire.config.schema_models import (  # noqa: F401
     ConfigOption,
     _parse_bool,
     _parse_float,
@@ -18,20 +17,20 @@ from inspire.cli.utils.config_schema_models import (  # noqa: F401
     _parse_list,
     parse_value,
 )
-from inspire.cli.utils._impl.config_schema.options.api import API_OPTIONS
-from inspire.cli.utils._impl.config_schema.options.authentication import AUTH_OPTIONS
-from inspire.cli.utils._impl.config_schema.options.bridge import BRIDGE_OPTIONS
-from inspire.cli.utils._impl.config_schema.options.git_platform import GIT_PLATFORM_OPTIONS
-from inspire.cli.utils._impl.config_schema.options.gitea import GITEA_OPTIONS
-from inspire.cli.utils._impl.config_schema.options.github import GITHUB_OPTIONS
-from inspire.cli.utils._impl.config_schema.options.job import JOB_OPTIONS
-from inspire.cli.utils._impl.config_schema.options.mirrors import MIRRORS_OPTIONS
-from inspire.cli.utils._impl.config_schema.options.notebook import NOTEBOOK_OPTIONS
-from inspire.cli.utils._impl.config_schema.options.paths import PATHS_OPTIONS
-from inspire.cli.utils._impl.config_schema.options.ssh import SSH_OPTIONS
-from inspire.cli.utils._impl.config_schema.options.sync import SYNC_OPTIONS
-from inspire.cli.utils._impl.config_schema.options.tunnel import TUNNEL_OPTIONS
-from inspire.cli.utils._impl.config_schema.options.workspaces import WORKSPACES_OPTIONS
+from inspire.config.options.api import API_OPTIONS
+from inspire.config.options.authentication import AUTH_OPTIONS
+from inspire.config.options.bridge import BRIDGE_OPTIONS
+from inspire.config.options.git_platform import GIT_PLATFORM_OPTIONS
+from inspire.config.options.gitea import GITEA_OPTIONS
+from inspire.config.options.github import GITHUB_OPTIONS
+from inspire.config.options.job import JOB_OPTIONS
+from inspire.config.options.mirrors import MIRRORS_OPTIONS
+from inspire.config.options.notebook import NOTEBOOK_OPTIONS
+from inspire.config.options.paths import PATHS_OPTIONS
+from inspire.config.options.ssh import SSH_OPTIONS
+from inspire.config.options.sync import SYNC_OPTIONS
+from inspire.config.options.tunnel import TUNNEL_OPTIONS
+from inspire.config.options.workspaces import WORKSPACES_OPTIONS
 
 # All configuration options organized by category.
 CONFIG_OPTIONS: list[ConfigOption] = [

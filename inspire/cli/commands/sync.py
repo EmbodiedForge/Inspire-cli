@@ -29,7 +29,7 @@ from inspire.cli.context import (
     EXIT_CONFIG_ERROR,
     EXIT_GENERAL_ERROR,
 )
-from inspire.cli.utils.config import Config, ConfigError
+from inspire.config import Config, ConfigError
 from inspire.cli.utils.tunnel import (
     is_tunnel_available,
     load_tunnel_config,

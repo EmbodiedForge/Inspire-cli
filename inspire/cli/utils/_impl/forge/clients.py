@@ -11,7 +11,7 @@ from typing import Optional
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
-from inspire.cli.utils.config import Config
+from inspire.config import Config
 
 from .config import _get_active_server, _get_active_token, _resolve_platform
 from .models import ForgeError, GitPlatform

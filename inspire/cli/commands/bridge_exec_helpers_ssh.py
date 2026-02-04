@@ -9,7 +9,7 @@ import click
 
 from inspire.cli.context import Context, EXIT_GENERAL_ERROR, EXIT_SUCCESS, EXIT_TIMEOUT
 from inspire.cli.formatters import json_formatter
-from inspire.cli.utils.config import Config, build_env_exports
+from inspire.config import Config, build_env_exports
 from inspire.cli.utils.tunnel import TunnelNotAvailableError
 
 

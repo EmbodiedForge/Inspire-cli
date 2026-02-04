@@ -5,11 +5,11 @@ from pathlib import Path
 import pytest
 
 from inspire.cli.utils.job_cache import JobCache
-from inspire.cli.utils.config import (
+from inspire.config import (
     Config,
     ConfigError,
-    _parse_remote_timeout,
     _parse_denylist,
+    _parse_remote_timeout,
     build_env_exports,
 )
 from inspire.cli.utils.tunnel import (

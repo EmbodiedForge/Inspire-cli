@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from inspire.cli.utils.config_models import (
+from inspire.config.models import (
     SOURCE_DEFAULT,
     SOURCE_ENV,
     SOURCE_GLOBAL,
@@ -14,8 +14,8 @@ from inspire.cli.utils.config_models import (
     Config,
     ConfigError,
 )
-from inspire.cli.utils.config_schema import CONFIG_OPTIONS
-from inspire.cli.utils._impl.config_loader.toml import (
+from inspire.config.schema import CONFIG_OPTIONS
+from inspire.config.toml import (
     _find_project_config,
     _flatten_toml,
     _load_toml,

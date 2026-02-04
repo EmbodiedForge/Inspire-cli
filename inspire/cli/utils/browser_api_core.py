@@ -42,7 +42,7 @@ def _get_browser_api_prefix() -> str:
 
     # Try to load from config files
     try:
-        from inspire.cli.utils.config import Config
+        from inspire.config import Config
 
         config, _ = Config.from_files_and_env(require_credentials=False, require_target_dir=False)
         if config.browser_api_prefix:

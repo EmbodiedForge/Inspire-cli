@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from inspire.cli.utils.config import Config, ConfigError
+from inspire.config import Config, ConfigError
 from inspire.cli.utils.workspace import select_workspace_id
 
 WS_CPU = "ws-6e6ba362-e98e-45b2-9c5a-311998e93d65"

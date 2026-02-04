@@ -1,1 +1,0 @@
-"""Internal config loader implementation."""

@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from inspire.cli.utils.config import Config, ConfigError
+from inspire.config import Config, ConfigError
 
 _WORKSPACE_ID_RE = re.compile(
     r"^ws-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",

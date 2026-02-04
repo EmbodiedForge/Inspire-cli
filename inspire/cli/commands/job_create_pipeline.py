@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from inspire.cli.utils import job_submit
-from inspire.cli.utils.config import Config
+from inspire.config import Config
 
 
 @dataclass(frozen=True)
