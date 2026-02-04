@@ -8,7 +8,7 @@ from inspire.cli.context import Context, EXIT_API_ERROR
 from inspire.cli.formatters import json_formatter
 from inspire.cli.utils import browser_api as browser_api_module
 from inspire.cli.utils.errors import exit_with_error as _handle_error
-from inspire.cli.utils.web_session import WebSession
+from inspire.platform.web.session import WebSession
 
 
 def create_notebook_and_report(

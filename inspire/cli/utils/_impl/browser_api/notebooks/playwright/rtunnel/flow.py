@@ -8,7 +8,7 @@ from inspire.cli.utils.browser_api_core import (
     _launch_browser,
     _new_context,
 )
-from inspire.cli.utils.web_session import WebSession, get_web_session
+from inspire.platform.web.session import WebSession, get_web_session
 
 from ..jupyter import build_jupyter_proxy_url, open_notebook_lab
 from .commands import build_rtunnel_setup_commands

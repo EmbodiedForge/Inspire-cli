@@ -10,7 +10,7 @@ from inspire.cli.formatters import human_formatter, json_formatter
 from inspire.config import Config
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.resources import clear_availability_cache, fetch_resource_availability
-from inspire.cli.utils.web_session import SessionExpiredError
+from inspire.platform.web.session import SessionExpiredError
 
 
 def _list_workspace_resources(ctx: Context, show_all: bool, no_cache: bool) -> None:

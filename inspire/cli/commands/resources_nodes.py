@@ -9,7 +9,7 @@ from inspire.cli.formatters import json_formatter
 from inspire.cli.utils import browser_api as browser_api_module
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.resources import KNOWN_COMPUTE_GROUPS
-from inspire.cli.utils.web_session import SessionExpiredError
+from inspire.platform.web.session import SessionExpiredError
 
 
 @click.command("nodes")

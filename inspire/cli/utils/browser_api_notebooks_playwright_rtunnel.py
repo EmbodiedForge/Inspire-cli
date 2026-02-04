@@ -15,7 +15,7 @@ from inspire.cli.utils.browser_api_core import (
 from inspire.cli.utils._impl.browser_api.notebooks.playwright.rtunnel.flow import (
     _setup_notebook_rtunnel_sync,
 )
-from inspire.cli.utils.web_session import WebSession
+from inspire.platform.web.session import WebSession
 
 
 def setup_notebook_rtunnel(

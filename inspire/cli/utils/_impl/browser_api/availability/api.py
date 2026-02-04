@@ -6,7 +6,7 @@ from typing import Optional
 
 from .models import FullFreeNodeCount, GPUAvailability
 from inspire.cli.utils.browser_api_core import BASE_URL, _browser_api_path, _request_json
-from inspire.cli.utils.web_session import (
+from inspire.platform.web.session import (
     DEFAULT_WORKSPACE_ID,
     SessionExpiredError,
     WebSession,

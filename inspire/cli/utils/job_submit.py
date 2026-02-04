@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 
 from inspire.cli.utils import browser_api as browser_api_module
-from inspire.cli.utils import web_session as web_session_module
+from inspire.platform.web import session as web_session_module
 from inspire.cli.utils.browser_api import ProjectInfo
 from inspire.config import Config, ConfigError, build_env_exports
 from inspire.cli.utils.job_cache import JobCache

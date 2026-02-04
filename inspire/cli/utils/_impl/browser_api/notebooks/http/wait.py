@@ -6,7 +6,7 @@ import time
 from typing import Optional
 
 from .api import get_notebook_detail
-from inspire.cli.utils.web_session import WebSession, get_web_session
+from inspire.platform.web.session import WebSession, get_web_session
 
 
 def wait_for_notebook_running(

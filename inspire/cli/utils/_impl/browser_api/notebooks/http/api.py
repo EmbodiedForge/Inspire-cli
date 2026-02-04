@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 from inspire.cli.utils.browser_api_core import BASE_URL, _browser_api_path, _request_json
 from .models import ImageInfo
-from inspire.cli.utils.web_session import DEFAULT_WORKSPACE_ID, WebSession, get_web_session
+from inspire.platform.web.session import DEFAULT_WORKSPACE_ID, WebSession, get_web_session
 
 _NOTEBOOKS_REFERER = f"{BASE_URL}/jobs/interactiveModeling"
 

@@ -18,7 +18,7 @@ from inspire.cli.context import (
 from inspire import config as config_module
 from inspire.cli.utils import auth as auth_module
 from inspire.cli.utils import browser_api as browser_api_module
-from inspire.cli.utils import web_session as web_session_module
+from inspire.platform.web import session as web_session_module
 from inspire.cli.utils.auth import AuthenticationError
 from inspire.config import ConfigError
 from inspire.cli.utils.job_cache import JobCache

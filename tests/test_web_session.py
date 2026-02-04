@@ -1,8 +1,8 @@
 import json
 import pytest
 
-from inspire.cli.utils import web_session as ws
-from inspire.cli.utils.web_session import WebSession
+from inspire.platform.web import session as ws
+from inspire.platform.web.session import WebSession
 
 
 class DummyResponse:

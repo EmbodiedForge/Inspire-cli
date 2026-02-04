@@ -20,7 +20,7 @@ from inspire.cli.utils.browser_api_core import (  # noqa: F401
     _request_json,
     _run_in_thread,
 )
-from inspire.cli.utils.web_session import (  # noqa: F401
+from inspire.platform.web.session import (  # noqa: F401
     DEFAULT_WORKSPACE_ID,
     WebSession,
     build_requests_session,

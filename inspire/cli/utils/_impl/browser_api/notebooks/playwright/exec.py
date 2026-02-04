@@ -10,7 +10,7 @@ from inspire.cli.utils.browser_api_core import (
     _new_context,
     _run_in_thread,
 )
-from inspire.cli.utils.web_session import WebSession, get_web_session
+from inspire.platform.web.session import WebSession, get_web_session
 
 from .jupyter import open_notebook_lab
 

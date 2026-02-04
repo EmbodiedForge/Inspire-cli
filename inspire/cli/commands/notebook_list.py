@@ -19,7 +19,7 @@ from inspire.cli.utils.notebook_cli import (
     require_web_session,
     resolve_json_output,
 )
-from inspire.cli.utils import web_session as web_session_module
+from inspire.platform.web import session as web_session_module
 from inspire.config import ConfigError
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.workspace import select_workspace_id

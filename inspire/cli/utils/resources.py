@@ -13,7 +13,7 @@ from typing import Callable, Optional
 from enum import Enum
 
 from inspire.config import Config
-from inspire.cli.utils.web_session import get_web_session, fetch_workspace_availability
+from inspire.platform.web.session import fetch_workspace_availability, get_web_session
 from inspire.compute_groups import compute_group_name_map, load_compute_groups_from_config
 
 

@@ -12,7 +12,7 @@ import os
 import threading
 from typing import Any, Optional
 
-from inspire.cli.utils.web_session import WebSession, get_playwright_proxy, request_json
+from inspire.platform.web.session import WebSession, get_playwright_proxy, request_json
 
 BASE_URL = os.environ.get("INSPIRE_BASE_URL", "https://api.example.com")
 

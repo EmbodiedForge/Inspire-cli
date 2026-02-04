@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from inspire.cli.utils.browser_api_core import BASE_URL, _browser_api_path, _request_json
-from inspire.cli.utils.web_session import DEFAULT_WORKSPACE_ID, WebSession, get_web_session
+from inspire.platform.web.session import DEFAULT_WORKSPACE_ID, WebSession, get_web_session
 
 __all__ = [
     "ProjectInfo",

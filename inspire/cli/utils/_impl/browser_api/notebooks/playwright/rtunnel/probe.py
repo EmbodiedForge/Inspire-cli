@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Optional
 
 from inspire.cli.utils.browser_api_core import BASE_URL, _browser_api_path
-from inspire.cli.utils.web_session import WebSession, build_requests_session
+from inspire.platform.web.session import WebSession, build_requests_session
 
 
 def probe_existing_rtunnel_proxy_url(
