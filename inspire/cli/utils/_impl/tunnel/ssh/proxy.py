@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .tunnel_models import BridgeProfile
+from inspire.cli.utils.tunnel_models import BridgeProfile
 
 
 def _get_proxy_command(bridge: BridgeProfile, rtunnel_bin: Path, quiet: bool = False) -> str:

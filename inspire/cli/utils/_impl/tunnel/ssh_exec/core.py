@@ -13,7 +13,7 @@ from inspire.cli.utils.tunnel_models import (
     TunnelNotAvailableError,
 )
 from inspire.cli.utils.tunnel_rtunnel import _ensure_rtunnel_binary
-from inspire.cli.utils.tunnel_ssh_proxy import _get_proxy_command
+from inspire.cli.utils._impl.tunnel.ssh.proxy import _get_proxy_command
 
 
 def _resolve_bridge_and_proxy(

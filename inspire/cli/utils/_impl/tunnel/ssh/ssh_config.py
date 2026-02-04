@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from .tunnel_models import BridgeProfile, TunnelConfig
-from .tunnel_rtunnel import _ensure_rtunnel_binary
+from inspire.cli.utils.tunnel_models import BridgeProfile, TunnelConfig
+from inspire.cli.utils.tunnel_rtunnel import _ensure_rtunnel_binary
 
 
 def generate_ssh_config(

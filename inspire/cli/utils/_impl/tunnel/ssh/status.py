@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .tunnel_config import load_tunnel_config
-from .tunnel_models import TunnelConfig, TunnelError
-from .tunnel_rtunnel import _ensure_rtunnel_binary
-from .tunnel_ssh_connection import _test_ssh_connection
+from inspire.cli.utils.tunnel_config import load_tunnel_config
+from inspire.cli.utils.tunnel_models import TunnelConfig, TunnelError
+from inspire.cli.utils.tunnel_rtunnel import _ensure_rtunnel_binary
+
+from .connection import _test_ssh_connection
 
 
 def get_tunnel_status(

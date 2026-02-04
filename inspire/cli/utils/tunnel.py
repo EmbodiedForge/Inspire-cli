@@ -32,7 +32,7 @@ from inspire.cli.utils.tunnel_ssh import (
     run_ssh_command,
     run_ssh_command_streaming,
 )
-from inspire.cli.utils.tunnel_ssh_config import (
+from inspire.cli.utils._impl.tunnel.ssh.ssh_config import (
     generate_all_ssh_configs,
     generate_ssh_config,
     install_ssh_config,

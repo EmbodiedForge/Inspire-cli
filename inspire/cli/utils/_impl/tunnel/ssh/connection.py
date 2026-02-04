@@ -6,10 +6,11 @@ import subprocess
 import time
 from typing import Optional
 
-from .tunnel_config import load_tunnel_config
-from .tunnel_models import BridgeProfile, TunnelConfig, TunnelError
-from .tunnel_rtunnel import _ensure_rtunnel_binary
-from .tunnel_ssh_proxy import _get_proxy_command
+from inspire.cli.utils.tunnel_config import load_tunnel_config
+from inspire.cli.utils.tunnel_models import BridgeProfile, TunnelConfig, TunnelError
+from inspire.cli.utils.tunnel_rtunnel import _ensure_rtunnel_binary
+
+from .proxy import _get_proxy_command
 
 
 def _test_ssh_connection(
