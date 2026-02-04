@@ -23,6 +23,26 @@ from inspire.config.workspaces import select_workspace_id
 from inspire.platform.web import browser_api as browser_api_module
 from inspire.platform.web import session as web_session_module
 
+_ZERO_WORKSPACE_ID = "ws-00000000-0000-0000-0000-000000000000"
+
+
+def _unique_workspace_ids(values: list[str]) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        value = value.strip()
+        if not value or value == _ZERO_WORKSPACE_ID:
+            continue
+        if value in seen:
+            continue
+        seen.add(value)
+        unique.append(value)
+    return unique
+
+
+def _sort_notebook_items(items: list[dict]) -> list[dict]:
+    return sorted(items, key=lambda item: str(item.get("created_at") or ""), reverse=True)
+
 
 @click.command("create")
 @click.option(
@@ -386,6 +406,11 @@ def _print_notebook_detail(notebook: dict) -> None:
     help="Show all notebooks (not just your own)",
 )
 @click.option(
+    "--all-workspaces",
+    is_flag=True,
+    help="List notebooks across all configured workspaces (cpu/gpu/internet)",
+)
+@click.option(
     "--json",
     "json_output",
     is_flag=True,
@@ -397,6 +422,7 @@ def list_notebooks(
     workspace: Optional[str],
     workspace_id: Optional[str],
     show_all: bool,
+    all_workspaces: bool,
     json_output: bool,
 ) -> None:
     """List notebook/interactive instances.
@@ -406,6 +432,8 @@ def list_notebooks(
         inspire notebook list
         inspire notebook list --all
         inspire notebook list --workspace-id ws-xxx
+        inspire notebook list --workspace gpu
+        inspire notebook list --all-workspaces
         inspire notebook list --json
     """
     json_output = resolve_json_output(ctx, json_output)
@@ -419,34 +447,62 @@ def list_notebooks(
     )
     config = load_config(ctx)
 
-    if not workspace_id:
+    workspace_ids: list[str] = []
+    if workspace_id:
+        workspace_ids = [workspace_id]
+    elif workspace:
         try:
-            if workspace:
-                workspace_id = select_workspace_id(config, explicit_workspace_name=workspace)
-            else:
-                workspace_id = select_workspace_id(config)
+            resolved = select_workspace_id(config, explicit_workspace_name=workspace)
+        except ConfigError as e:
+            _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
+            return
+        if resolved:
+            workspace_ids = [resolved]
+    elif all_workspaces:
+        candidates: list[str] = []
+        for ws_id in (
+            config.workspace_cpu_id,
+            config.workspace_gpu_id,
+            config.workspace_internet_id,
+            config.job_workspace_id,
+        ):
+            if ws_id:
+                candidates.append(ws_id)
+        if config.workspaces:
+            candidates.extend(config.workspaces.values())
+        if getattr(session, "workspace_id", None):
+            candidates.append(str(session.workspace_id))
+
+        workspace_ids = _unique_workspace_ids(candidates)
+        for ws_id in workspace_ids:
+            try:
+                select_workspace_id(config, explicit_workspace_id=ws_id)
+            except ConfigError as e:
+                _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
+                return
+
+    if not workspace_ids:
+        try:
+            resolved = select_workspace_id(config)
         except ConfigError as e:
             _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
             return
 
-        if not workspace_id:
-            workspace_id = session.workspace_id
-
-        if workspace_id == "ws-00000000-0000-0000-0000-000000000000":
-            workspace_id = None
-
-        if not workspace_id:
+        resolved = resolved or getattr(session, "workspace_id", None)
+        resolved = None if resolved == _ZERO_WORKSPACE_ID else resolved
+        if not resolved:
             _handle_error(
                 ctx,
                 "ConfigError",
                 "No workspace_id configured or provided.",
                 EXIT_CONFIG_ERROR,
                 hint=(
-                    "Use --workspace-id, set [workspaces].cpu in config.toml, or set "
-                    "INSPIRE_WORKSPACE_ID."
+                    "Use --workspace-id, set [workspaces].cpu/[workspaces].gpu in config.toml, "
+                    "or set INSPIRE_WORKSPACE_ID."
                 ),
             )
             return
+        workspace_ids = [str(resolved)]
 
     base_url = get_base_url()
 
@@ -465,46 +521,71 @@ def list_notebooks(
         except Exception:
             pass
 
-    body = {
-        "workspace_id": workspace_id,
-        "page": 1,
-        "page_size": 100,
-        "filter_by": {
-            "keyword": "",
-            "user_id": user_ids,
-            "logic_compute_group_id": [],
-            "status": [],
-            "mirror_url": [],
-        },
-        "order_by": [{"field": "created_at", "order": "desc"}],
-    }
+    all_items: list[dict] = []
+    for ws_id in workspace_ids:
+        body = {
+            "workspace_id": ws_id,
+            "page": 1,
+            "page_size": 100,
+            "filter_by": {
+                "keyword": "",
+                "user_id": user_ids,
+                "logic_compute_group_id": [],
+                "status": [],
+                "mirror_url": [],
+            },
+            "order_by": [{"field": "created_at", "order": "desc"}],
+        }
 
-    try:
-        data = web_session_module.request_json(
-            session,
-            "POST",
-            f"{base_url}/api/v1/notebook/list",
-            body=body,
-            timeout=30,
-        )
+        try:
+            data = web_session_module.request_json(
+                session,
+                "POST",
+                f"{base_url}/api/v1/notebook/list",
+                body=body,
+                timeout=30,
+            )
 
-        if data.get("code") != 0:
-            message = data.get("message", "Unknown error")
-            _handle_error(ctx, "APIError", f"API error: {message}", EXIT_API_ERROR)
-            return
+            if data.get("code") != 0:
+                message = data.get("message", "Unknown error")
+                raise ValueError(f"API error: {message}")
 
-        items = data.get("data", {}).get("list", [])
-        _print_notebook_list(items, json_output)
+            items = data.get("data", {}).get("list", [])
+            if isinstance(items, list):
+                all_items.extend(items)
 
-    except ValueError as e:
+        except ValueError as e:
+            if len(workspace_ids) == 1:
+                _handle_error(
+                    ctx,
+                    "APIError",
+                    str(e),
+                    EXIT_API_ERROR,
+                    hint="Check auth and proxy configuration.",
+                )
+                return
+            if not ctx.json_output:
+                click.echo(f"Warning: workspace {ws_id} failed: {e}", err=True)
+            continue
+        except Exception as e:
+            if len(workspace_ids) == 1:
+                _handle_error(ctx, "APIError", str(e), EXIT_API_ERROR)
+                return
+            if not ctx.json_output:
+                click.echo(f"Warning: workspace {ws_id} failed: {e}", err=True)
+            continue
+
+    if not all_items and len(workspace_ids) > 1:
         _handle_error(
             ctx,
             "APIError",
-            str(e),
+            "Failed to list notebooks from configured workspaces.",
             EXIT_API_ERROR,
-            hint="Check auth and proxy configuration.",
         )
         return
+
+    all_items = _sort_notebook_items(all_items)
+    _print_notebook_list(all_items, json_output)
 
 
 def _print_notebook_list(items: list, json_output: bool) -> None:

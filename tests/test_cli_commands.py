@@ -834,3 +834,97 @@ def test_config_check_config_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     payload = json.loads(result.output)
     assert payload["success"] is False
     assert payload["error"]["type"] == "ConfigError"
+
+
+def test_notebook_list_all_workspaces_combines_results(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ws_cpu = "ws-6e6ba362-e98e-45b2-9c5a-311998e93d65"
+    ws_gpu = "ws-9dcc0e1f-80a4-4af2-bc2f-0e352e7b17e6"
+
+    config = config_module.Config(
+        username="user",
+        password="pass",
+        base_url="https://example.invalid",
+        target_dir=str(tmp_path / "logs"),
+        job_cache_path=str(tmp_path / "jobs.json"),
+        log_cache_dir=str(tmp_path / "log_cache"),
+        job_workspace_id=None,
+        workspace_cpu_id=ws_cpu,
+        workspace_gpu_id=ws_gpu,
+        workspace_internet_id=None,
+        timeout=5,
+        max_retries=0,
+        retry_delay=0.0,
+    )
+
+    def fake_from_files_and_env(
+        cls, require_target_dir: bool = False, require_credentials: bool = True
+    ):  # type: ignore[override]
+        return config, {}
+
+    monkeypatch.setattr(
+        config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env)
+    )
+
+    class FakeSession:
+        workspace_id = "ws-00000000-0000-0000-0000-000000000000"
+        storage_state = {}
+
+    monkeypatch.setattr(web_session_module, "get_web_session", lambda: FakeSession())
+
+    cpu_item = {
+        "id": "nb-cpu",
+        "name": "cpu-notebook",
+        "status": "RUNNING",
+        "created_at": "2026-02-01T10:00:00Z",
+        "quota": {"cpu_count": 4, "gpu_count": 0},
+    }
+    gpu_item = {
+        "id": "nb-gpu",
+        "name": "gpu-notebook",
+        "status": "RUNNING",
+        "created_at": "2026-02-02T10:00:00Z",
+        "quota": {"cpu_count": 8, "gpu_count": 1},
+        "resource_spec_price": {"gpu_info": {"gpu_product_simple": "H200"}},
+    }
+
+    calls: list[str] = []
+
+    def fake_request_json(
+        session,
+        method: str,
+        url: str,
+        *,
+        headers: Optional[dict[str, str]] = None,
+        body: Optional[dict] = None,
+        timeout: int = 30,
+        _retry_count: int = 0,
+    ) -> dict:
+        assert headers is None or isinstance(headers, dict)
+        assert timeout
+        assert _retry_count >= 0
+
+        assert method.upper() == "POST"
+        assert url.endswith("/api/v1/notebook/list")
+        assert body and "workspace_id" in body
+
+        ws_id = str(body["workspace_id"])
+        calls.append(ws_id)
+
+        if ws_id == ws_cpu:
+            return {"code": 0, "data": {"list": [cpu_item]}}
+        if ws_id == ws_gpu:
+            return {"code": 0, "data": {"list": [gpu_item]}}
+        return {"code": 0, "data": {"list": []}}
+
+    monkeypatch.setattr(web_session_module, "request_json", fake_request_json)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["notebook", "list", "--all-workspaces", "--all", "--json"])
+
+    assert result.exit_code == EXIT_SUCCESS
+    payload = json.loads(result.output)
+    items = payload["data"]["items"]
+    assert [item["id"] for item in items] == ["nb-gpu", "nb-cpu"]
+    assert calls == [ws_cpu, ws_gpu]
