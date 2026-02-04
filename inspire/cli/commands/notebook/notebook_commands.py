@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
 import click
 
 from .notebook_create_flow import run_notebook_create
-from inspire.cli.context import Context, EXIT_API_ERROR, EXIT_CONFIG_ERROR, pass_context
+from inspire.cli.context import (
+    Context,
+    EXIT_API_ERROR,
+    EXIT_CONFIG_ERROR,
+    EXIT_VALIDATION_ERROR,
+    pass_context,
+)
 from inspire.cli.formatters import json_formatter
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.notebook_cli import (
@@ -24,6 +31,11 @@ from inspire.platform.web import browser_api as browser_api_module
 from inspire.platform.web import session as web_session_module
 
 _ZERO_WORKSPACE_ID = "ws-00000000-0000-0000-0000-000000000000"
+
+_NOTEBOOK_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 
 def _unique_workspace_ids(values: list[str]) -> list[str]:
@@ -42,6 +54,234 @@ def _unique_workspace_ids(values: list[str]) -> list[str]:
 
 def _sort_notebook_items(items: list[dict]) -> list[dict]:
     return sorted(items, key=lambda item: str(item.get("created_at") or ""), reverse=True)
+
+
+def _looks_like_notebook_id(value: str) -> bool:
+    value = value.strip()
+    if not value:
+        return False
+    if value.startswith("notebook-"):
+        return True
+    return bool(_NOTEBOOK_UUID_RE.match(value))
+
+
+def _notebook_id_from_item(item: dict) -> str | None:
+    notebook_id = item.get("notebook_id") or item.get("id")
+    if not notebook_id:
+        return None
+    return str(notebook_id)
+
+
+def _format_notebook_resource(item: dict) -> str:
+    quota = item.get("quota") or {}
+    gpu_count = quota.get("gpu_count", 0)
+
+    if gpu_count and gpu_count > 0:
+        gpu_info = (item.get("resource_spec_price") or {}).get("gpu_info") or {}
+        gpu_type = gpu_info.get("gpu_product_simple") or quota.get("gpu_type") or "GPU"
+        return f"{gpu_count}x{gpu_type}"
+
+    cpu_count = quota.get("cpu_count", 0)
+    if cpu_count:
+        return f"{cpu_count}xCPU"
+    return "N/A"
+
+
+def _try_get_current_user_ids(
+    session: web_session_module.WebSession, *, base_url: str
+) -> list[str]:
+    try:
+        user_data = web_session_module.request_json(
+            session,
+            "GET",
+            f"{base_url}/api/v1/user/detail",
+            timeout=30,
+        )
+        user_id = user_data.get("data", {}).get("id")
+        if user_id:
+            return [str(user_id)]
+    except Exception:
+        pass
+    return []
+
+
+def _list_notebooks_for_workspace(
+    session: web_session_module.WebSession,
+    *,
+    base_url: str,
+    workspace_id: str,
+    user_ids: list[str],
+    keyword: str = "",
+) -> list[dict]:
+    body = {
+        "workspace_id": workspace_id,
+        "page": 1,
+        "page_size": 100,
+        "filter_by": {
+            "keyword": keyword,
+            "user_id": user_ids,
+            "logic_compute_group_id": [],
+            "status": [],
+            "mirror_url": [],
+        },
+        "order_by": [{"field": "created_at", "order": "desc"}],
+    }
+
+    data = web_session_module.request_json(
+        session,
+        "POST",
+        f"{base_url}/api/v1/notebook/list",
+        body=body,
+        timeout=30,
+    )
+
+    if data.get("code") != 0:
+        message = data.get("message", "Unknown error")
+        raise ValueError(f"API error: {message}")
+
+    items = data.get("data", {}).get("list", [])
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _resolve_notebook_id(
+    ctx: Context,
+    *,
+    session: web_session_module.WebSession,
+    config,
+    base_url: str,
+    identifier: str,
+    json_output: bool,
+) -> tuple[str, str | None]:
+    identifier = identifier.strip()
+    if not identifier:
+        _handle_error(
+            ctx,
+            "ValidationError",
+            "Notebook identifier cannot be empty",
+            EXIT_VALIDATION_ERROR,
+        )
+
+    if _looks_like_notebook_id(identifier):
+        return identifier, None
+
+    candidates: list[str] = []
+    for ws_id in (
+        getattr(config, "workspace_cpu_id", None),
+        getattr(config, "workspace_gpu_id", None),
+        getattr(config, "workspace_internet_id", None),
+        getattr(config, "job_workspace_id", None),
+    ):
+        if ws_id:
+            candidates.append(str(ws_id))
+    workspaces_map = getattr(config, "workspaces", None)
+    if isinstance(workspaces_map, dict):
+        candidates.extend(str(v) for v in workspaces_map.values() if v)
+    if getattr(session, "workspace_id", None):
+        candidates.append(str(session.workspace_id))
+
+    workspace_ids = _unique_workspace_ids(candidates)
+    if not workspace_ids:
+        resolved = None
+        try:
+            resolved = select_workspace_id(config)
+        except Exception:
+            resolved = None
+
+        resolved = resolved or getattr(session, "workspace_id", None)
+        resolved = None if resolved == _ZERO_WORKSPACE_ID else resolved
+        if resolved:
+            workspace_ids = [str(resolved)]
+
+    if not workspace_ids:
+        _handle_error(
+            ctx,
+            "ConfigError",
+            "No workspace_id configured or available for notebook lookup.",
+            EXIT_CONFIG_ERROR,
+            hint=(
+                "Set [workspaces].cpu/[workspaces].gpu in config.toml, set INSPIRE_WORKSPACE_ID, "
+                "or pass a notebook ID directly."
+            ),
+        )
+
+    user_ids = _try_get_current_user_ids(session, base_url=base_url)
+
+    matches: list[tuple[str, dict]] = []
+    for ws_id in workspace_ids:
+        try:
+            items = _list_notebooks_for_workspace(
+                session,
+                base_url=base_url,
+                workspace_id=ws_id,
+                user_ids=user_ids,
+                keyword=identifier,
+            )
+        except Exception:
+            continue
+
+        for item in items:
+            if str(item.get("name") or "") == identifier:
+                matches.append((ws_id, item))
+
+    matches.sort(key=lambda m: str(m[1].get("created_at") or ""), reverse=True)
+
+    if not matches:
+        _handle_error(
+            ctx,
+            "APIError",
+            f"Notebook not found: {identifier}",
+            EXIT_API_ERROR,
+            hint="Run 'inspire notebook list --all-workspaces' to find the notebook ID.",
+        )
+
+    if len(matches) == 1:
+        ws_id, item = matches[0]
+        notebook_id = _notebook_id_from_item(item)
+        if not notebook_id:
+            _handle_error(
+                ctx,
+                "APIError",
+                f"Notebook '{identifier}' is missing an ID in API response.",
+                EXIT_API_ERROR,
+            )
+        return notebook_id, ws_id
+
+    if json_output:
+        ids = [(_notebook_id_from_item(item) or "?") for _, item in matches]
+        _handle_error(
+            ctx,
+            "ValidationError",
+            f"Multiple notebooks match name '{identifier}': {', '.join(ids)}",
+            EXIT_VALIDATION_ERROR,
+            hint="Use a notebook ID instead of a name.",
+        )
+
+    click.echo(f"Multiple notebooks named '{identifier}' found:")
+    for idx, (ws_id, item) in enumerate(matches, start=1):
+        notebook_id = _notebook_id_from_item(item) or "N/A"
+        status = str(item.get("status") or "Unknown")
+        resource = _format_notebook_resource(item)
+        created_at = str(item.get("created_at") or "")
+        click.echo(f"  [{idx}] {status:<12} {resource:<12} {notebook_id}  {created_at}  ws={ws_id}")
+
+    choice = click.prompt(
+        "Select notebook",
+        type=click.IntRange(1, len(matches)),
+        default=1,
+        show_default=True,
+    )
+    ws_id, item = matches[choice - 1]
+    notebook_id = _notebook_id_from_item(item)
+    if not notebook_id:
+        _handle_error(
+            ctx,
+            "APIError",
+            f"Notebook '{identifier}' is missing an ID in API response.",
+            EXIT_API_ERROR,
+        )
+    return notebook_id, ws_id
 
 
 @click.command("create")
@@ -157,7 +397,7 @@ def create_notebook_cmd(
 
 
 @click.command("stop")
-@click.argument("notebook_id")
+@click.argument("notebook")
 @click.option(
     "--json",
     "json_output",
@@ -167,7 +407,7 @@ def create_notebook_cmd(
 @pass_context
 def stop_notebook_cmd(
     ctx: Context,
-    notebook_id: str,
+    notebook: str,
     json_output: bool,
 ) -> None:
     """Stop a running notebook instance.
@@ -184,6 +424,17 @@ def stop_notebook_cmd(
             "Stopping notebooks requires web authentication. "
             "Set INSPIRE_USERNAME and INSPIRE_PASSWORD."
         ),
+    )
+
+    base_url = get_base_url()
+    config = load_config(ctx)
+    notebook_id, _ = _resolve_notebook_id(
+        ctx,
+        session=session,
+        config=config,
+        base_url=base_url,
+        identifier=notebook,
+        json_output=json_output,
     )
 
     try:
@@ -209,7 +460,7 @@ def stop_notebook_cmd(
 
 
 @click.command("start")
-@click.argument("notebook_id")
+@click.argument("notebook")
 @click.option(
     "--wait/--no-wait",
     default=False,
@@ -224,7 +475,7 @@ def stop_notebook_cmd(
 @pass_context
 def start_notebook_cmd(
     ctx: Context,
-    notebook_id: str,
+    notebook: str,
     wait: bool,
     json_output: bool,
 ) -> None:
@@ -232,8 +483,9 @@ def start_notebook_cmd(
 
     \b
     Examples:
-        inspire notebook start abc123-def456
-        inspire notebook start abc123-def456 --wait
+        inspire notebook start 78822a57-3830-44e7-8d45-e8b0d674fc44
+        inspire notebook start ring-8h100-test
+        inspire notebook start ring-8h100-test --wait
     """
     json_output = resolve_json_output(ctx, json_output)
 
@@ -243,6 +495,17 @@ def start_notebook_cmd(
             "Starting notebooks requires web authentication. "
             "Set INSPIRE_USERNAME and INSPIRE_PASSWORD."
         ),
+    )
+
+    base_url = get_base_url()
+    config = load_config(ctx)
+    notebook_id, _ = _resolve_notebook_id(
+        ctx,
+        session=session,
+        config=config,
+        base_url=base_url,
+        identifier=notebook,
+        json_output=json_output,
     )
 
     try:
@@ -286,7 +549,7 @@ def start_notebook_cmd(
 
 
 @click.command("status")
-@click.argument("instance_id")
+@click.argument("notebook")
 @click.option(
     "--json",
     "json_output",
@@ -296,7 +559,7 @@ def start_notebook_cmd(
 @pass_context
 def notebook_status(
     ctx: Context,
-    instance_id: str,
+    notebook: str,
     json_output: bool,
 ) -> None:
     """Get status of a notebook instance.
@@ -317,11 +580,21 @@ def notebook_status(
 
     base_url = get_base_url()
 
+    config = load_config(ctx)
+    notebook_id, _ = _resolve_notebook_id(
+        ctx,
+        session=session,
+        config=config,
+        base_url=base_url,
+        identifier=notebook,
+        json_output=json_output,
+    )
+
     try:
         data = web_session_module.request_json(
             session,
             "GET",
-            f"{base_url}/api/v1/notebook/{instance_id}",
+            f"{base_url}/api/v1/notebook/{notebook_id}",
             headers={"Accept": "application/json"},
             timeout=30,
         )
@@ -331,7 +604,7 @@ def notebook_status(
             _handle_error(
                 ctx,
                 "NotFound",
-                f"Notebook instance '{instance_id}' not found",
+                f"Notebook instance '{notebook_id}' not found",
                 EXIT_API_ERROR,
             )
         else:
@@ -679,6 +952,17 @@ def run_notebook_ssh(
         ),
     )
 
+    base_url = get_base_url()
+    config = load_config(ctx)
+    notebook_id, _ = _resolve_notebook_id(
+        ctx,
+        session=session,
+        config=config,
+        base_url=base_url,
+        identifier=notebook_id,
+        json_output=False,
+    )
+
     try:
         if wait:
             notebook_detail = browser_api_module.wait_for_notebook_running(
@@ -785,7 +1069,7 @@ def run_notebook_ssh(
 
 
 @click.command("ssh")
-@click.argument("notebook_id")
+@click.argument("notebook")
 @click.option(
     "--wait/--no-wait",
     default=True,
@@ -840,7 +1124,7 @@ def run_notebook_ssh(
 @pass_context
 def ssh_notebook_cmd(
     ctx: Context,
-    notebook_id: str,
+    notebook: str,
     wait: bool,
     pubkey: Optional[str],
     save_as: Optional[str],
@@ -854,7 +1138,7 @@ def ssh_notebook_cmd(
     """SSH into a running notebook instance via rtunnel ProxyCommand."""
     run_notebook_ssh(
         ctx,
-        notebook_id=notebook_id,
+        notebook_id=notebook,
         wait=wait,
         pubkey=pubkey,
         save_as=save_as,
