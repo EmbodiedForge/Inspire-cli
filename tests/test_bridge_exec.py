@@ -7,6 +7,7 @@ import importlib
 import pytest
 from click.testing import CliRunner
 
+from inspire.bridge.tunnel import BridgeProfile, TunnelConfig
 from inspire.cli.main import main as cli_main
 from inspire.cli.context import EXIT_GENERAL_ERROR, EXIT_SUCCESS, EXIT_TIMEOUT
 from inspire.config import Config
@@ -334,3 +335,99 @@ def test_bridge_exec_ssh_streaming_failure(monkeypatch: pytest.MonkeyPatch, tmp_
 
     assert result.exit_code == EXIT_GENERAL_ERROR
     assert "Command failed with exit code 1" in result.output
+
+
+def test_bridge_exec_errors_when_bridge_configured_but_not_responding(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_sync_config(tmp_path)
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+
+    def fake_is_tunnel_available(*args: Any, **kwargs: Any) -> bool:
+        return False
+
+    tunnel_config = TunnelConfig()
+    tunnel_config.add_bridge(BridgeProfile(name="ring8h100", proxy_url="https://proxy.example.com"))
+
+    monkeypatch.setattr(bridge_module, "is_tunnel_available", fake_is_tunnel_available)
+    monkeypatch.setattr(bridge_module, "load_tunnel_config", lambda: tunnel_config)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["bridge", "exec", "echo test"])
+
+    assert result.exit_code == EXIT_GENERAL_ERROR
+    assert "SSH tunnel not available" in result.output
+    assert "ring8h100" in result.output
+
+
+def test_bridge_exec_json_errors_when_bridge_configured_but_not_responding(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_sync_config(tmp_path)
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+
+    def fake_is_tunnel_available(*args: Any, **kwargs: Any) -> bool:
+        return False
+
+    tunnel_config = TunnelConfig()
+    tunnel_config.add_bridge(BridgeProfile(name="ring8h100", proxy_url="https://proxy.example.com"))
+
+    monkeypatch.setattr(bridge_module, "is_tunnel_available", fake_is_tunnel_available)
+    monkeypatch.setattr(bridge_module, "load_tunnel_config", lambda: tunnel_config)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["--json", "bridge", "exec", "echo test"])
+
+    assert result.exit_code == EXIT_GENERAL_ERROR
+    payload = json.loads(result.output)
+    assert payload["success"] is False
+    assert payload["error"]["type"] == "TunnelError"
+
+
+def test_bridge_exec_falls_back_to_workflow_when_no_bridge_configured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_sync_config(tmp_path)
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+
+    called: Dict[str, Any] = {}
+
+    def fake_is_tunnel_available(*args: Any, **kwargs: Any) -> bool:
+        return False
+
+    def fake_load_tunnel_config() -> TunnelConfig:
+        return TunnelConfig()
+
+    def fake_trigger(
+        config: Config,
+        raw_command: str,
+        artifact_paths: List[str],
+        request_id: str,
+        denylist: Optional[List[str]] = None,
+    ) -> None:
+        called["trigger"] = True
+
+    monkeypatch.setattr(bridge_module, "is_tunnel_available", fake_is_tunnel_available)
+    monkeypatch.setattr(bridge_module, "load_tunnel_config", fake_load_tunnel_config)
+    monkeypatch.setattr(bridge_module, "trigger_bridge_action_workflow", fake_trigger)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--no-wait"])
+
+    assert result.exit_code == EXIT_SUCCESS
+    assert called["trigger"] is True

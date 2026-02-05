@@ -81,6 +81,37 @@ def try_exec_via_ssh_tunnel(
             retries=config.tunnel_retries,
             retry_pause=config.tunnel_retry_pause,
         ):
+            tunnel_config = load_tunnel_config()
+            bridge = tunnel_config.get_bridge()
+            if bridge:
+                hint = (
+                    "Run 'inspire tunnel status' to troubleshoot. "
+                    "If you intended to run via Git Actions instead, pass '--no-tunnel'."
+                )
+                if ctx.json_output:
+                    click.echo(
+                        json_formatter.format_json_error(
+                            "TunnelError",
+                            (
+                                "SSH tunnel not available. "
+                                f"Bridge '{bridge.name}' is not responding (notebook may be stopped)."
+                            ),
+                            EXIT_GENERAL_ERROR,
+                            hint=hint,
+                        ),
+                        err=True,
+                    )
+                else:
+                    click.echo(
+                        (
+                            "Error: SSH tunnel not available. "
+                            f"Bridge '{bridge.name}' is not responding (notebook may be stopped)."
+                        ),
+                        err=True,
+                    )
+                    click.echo(f"Hint: {hint}", err=True)
+                return EXIT_GENERAL_ERROR
+
             return None
 
         full_command = _build_remote_command(
@@ -377,7 +408,8 @@ def exec_command(
 ) -> None:
     """Execute a command on the Bridge runner.
 
-    Uses SSH tunnel if available (instant), otherwise falls back to Gitea Actions.
+    Uses SSH tunnel if available (instant). If a bridge is configured but not responding,
+    exits with an error (the notebook may be stopped). Use --no-tunnel to force Git Actions.
 
     COMMAND is the shell command to run on Bridge (in INSPIRE_TARGET_DIR).
     Command output (stdout/stderr) is automatically displayed after completion.
