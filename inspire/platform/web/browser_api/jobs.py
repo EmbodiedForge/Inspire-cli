@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from inspire.platform.web.browser_api.core import BASE_URL, _browser_api_path, _request_json
+from inspire.platform.web.browser_api.core import _browser_api_path, _get_base_url, _request_json
 from inspire.platform.web.session import DEFAULT_WORKSPACE_ID, WebSession, get_web_session
 
 __all__ = [
@@ -94,7 +94,7 @@ def list_jobs(
         session,
         "POST",
         _browser_api_path("/train_job/list"),
-        referer=f"{BASE_URL}/jobs/distributedTraining",
+        referer=f"{_get_base_url()}/jobs/distributedTraining",
         body=body,
         timeout=30,
     )
@@ -118,7 +118,7 @@ def get_current_user(session: Optional[WebSession] = None) -> dict:
         session,
         "GET",
         _browser_api_path("/user/detail"),
-        referer=f"{BASE_URL}/jobs/distributedTraining",
+        referer=f"{_get_base_url()}/jobs/distributedTraining",
         timeout=30,
     )
     return data.get("data", {})
@@ -139,7 +139,7 @@ def list_job_users(
         session,
         "POST",
         _browser_api_path("/train_job/users"),
-        referer=f"{BASE_URL}/jobs/distributedTraining",
+        referer=f"{_get_base_url()}/jobs/distributedTraining",
         body={"workspace_id": workspace_id},
         timeout=30,
     )

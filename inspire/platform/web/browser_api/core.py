@@ -14,13 +14,38 @@ from typing import Any, Optional
 
 from inspire.platform.web.session import WebSession, get_playwright_proxy, request_json
 
-BASE_URL = os.environ.get("INSPIRE_BASE_URL", "https://api.example.com")
+DEFAULT_BASE_URL = "https://api.example.com"
+# Backward-compatible constant (legacy imports). Prefer _get_base_url() for runtime use.
+BASE_URL = DEFAULT_BASE_URL
 
 # Default browser API prefix (fallback if not configured)
 DEFAULT_BROWSER_API_PREFIX = "/api/v1"
 
+# Cached base URL and browser API prefix (loaded once at module import)
+_cached_base_url: str | None = None
 # Cached browser API prefix (loaded once at module import)
 _cached_browser_api_prefix: str | None = None
+
+
+def _get_base_url() -> str:
+    """Get base URL from layered config with sane fallback."""
+    global _cached_base_url
+
+    if _cached_base_url is not None:
+        return _cached_base_url
+
+    try:
+        from inspire.config import Config
+
+        config, _ = Config.from_files_and_env(require_credentials=False, require_target_dir=False)
+        if config.base_url:
+            _cached_base_url = config.base_url
+            return _cached_base_url
+    except Exception:
+        pass
+
+    _cached_base_url = os.environ.get("INSPIRE_BASE_URL", DEFAULT_BASE_URL)
+    return _cached_base_url
 
 
 def _get_browser_api_prefix() -> str:
@@ -79,7 +104,7 @@ def _request_json(
     body: Optional[dict] = None,
     timeout: int = 30,
 ) -> dict:
-    url = f"{BASE_URL}{path}"
+    url = f"{_get_base_url()}{path}"
     headers = {"Referer": referer}
     return request_json(
         session,
@@ -129,3 +154,7 @@ def _new_context(browser, *, storage_state=None):  # noqa: ANN001
             storage_state=storage_state, proxy=proxy, ignore_https_errors=True
         )
     return browser.new_context(proxy=proxy, ignore_https_errors=True)
+
+
+# Keep BASE_URL in sync for legacy imports.
+BASE_URL = _get_base_url()

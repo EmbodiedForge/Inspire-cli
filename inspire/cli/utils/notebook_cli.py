@@ -15,7 +15,11 @@ from inspire.cli.utils.errors import exit_with_error
 
 
 def get_base_url() -> str:
-    return os.environ.get("INSPIRE_BASE_URL", "https://api.example.com")
+    try:
+        config, _ = Config.from_files_and_env(require_credentials=False, require_target_dir=False)
+        return config.base_url
+    except Exception:
+        return os.environ.get("INSPIRE_BASE_URL", "https://api.example.com")
 
 
 def resolve_json_output(ctx: Context, json_output: bool) -> bool:
@@ -27,7 +31,7 @@ def resolve_json_output(ctx: Context, json_output: bool) -> bool:
 def require_web_session(ctx: Context, *, hint: str) -> web_session_module.WebSession:
     try:
         return web_session_module.get_web_session()
-    except ValueError as e:
+    except (ValueError, ConfigError) as e:
         exit_with_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR, hint=hint)
         raise  # pragma: no cover
 

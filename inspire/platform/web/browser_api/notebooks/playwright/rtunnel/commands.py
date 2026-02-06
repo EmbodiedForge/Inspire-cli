@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
-import os
 from typing import Optional
+
+from inspire.config.ssh_runtime import (
+    DEFAULT_RTUNNEL_DOWNLOAD_URL,
+    SshRuntimeConfig,
+    resolve_ssh_runtime_config,
+)
 
 
 def build_rtunnel_setup_commands(
@@ -11,8 +16,12 @@ def build_rtunnel_setup_commands(
     port: int,
     ssh_port: int,
     ssh_public_key: Optional[str],
+    ssh_runtime: Optional[SshRuntimeConfig] = None,
 ) -> list[str]:
     import shlex
+
+    if ssh_runtime is None:
+        ssh_runtime = resolve_ssh_runtime_config()
 
     if ssh_public_key:
         ssh_public_key_escaped = ssh_public_key.replace("'", "'\"'\"'")
@@ -24,19 +33,10 @@ def build_rtunnel_setup_commands(
     else:
         key_line = "mkdir -p /root/.ssh && chmod 700 /root/.ssh"
 
-    rtunnel_bin = os.environ.get("INSPIRE_RTUNNEL_BIN")
-    sshd_deb_dir = os.environ.get("INSPIRE_SSHD_DEB_DIR")
-    dropbear_deb_dir = os.environ.get("INSPIRE_DROPBEAR_DEB_DIR")
-
-    try:
-        from inspire.bridge.tunnel import _get_rtunnel_download_url
-
-        rtunnel_download_url = _get_rtunnel_download_url()
-    except Exception:
-        rtunnel_download_url = (
-            "https://github.com/Sarfflow/rtunnel/releases/download/nightly/"
-            "rtunnel-linux-amd64.tar.gz"
-        )
+    rtunnel_bin = ssh_runtime.rtunnel_bin
+    sshd_deb_dir = ssh_runtime.sshd_deb_dir
+    dropbear_deb_dir = ssh_runtime.dropbear_deb_dir
+    rtunnel_download_url = ssh_runtime.rtunnel_download_url or DEFAULT_RTUNNEL_DOWNLOAD_URL
 
     cmd_lines = [
         f"PORT={port}",
@@ -57,13 +57,13 @@ def build_rtunnel_setup_commands(
         cmd_lines.append(f"DROPBEAR_DEB_DIR={shlex.quote(dropbear_deb_dir)}")
 
     if dropbear_deb_dir:
-        setup_script = os.environ.get("INSPIRE_SETUP_SCRIPT")
+        setup_script = ssh_runtime.setup_script
         if not setup_script:
             raise ValueError(
-                "INSPIRE_SETUP_SCRIPT environment variable is required when using dropbear. "
-                "It should point to a script that installs dropbear and starts rtunnel."
+                "ssh.setup_script (or INSPIRE_SETUP_SCRIPT) is required when using "
+                "ssh.dropbear_deb_dir."
             )
-        rtunnel_bin_arg = shlex.quote(rtunnel_bin) if rtunnel_bin else ""
+        rtunnel_bin_arg = rtunnel_bin or ""
         cmd_lines.append(
             f"bash {shlex.quote(setup_script)} {shlex.quote(dropbear_deb_dir)} "
             f'{shlex.quote(rtunnel_bin_arg)} "$SSH_PORT" "$PORT" '

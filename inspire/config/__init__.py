@@ -15,6 +15,11 @@ from inspire.config.models import (
     Config,
     ConfigError,
 )
+from inspire.config.ssh_runtime import (
+    DEFAULT_RTUNNEL_DOWNLOAD_URL,
+    SshRuntimeConfig,
+    resolve_ssh_runtime_config,
+)
 from inspire.config.schema import (  # noqa: F401
     CATEGORY_ORDER,
     CONFIG_OPTIONS,
@@ -47,6 +52,8 @@ __all__ = [
     "Config",
     "ConfigError",
     "ConfigOption",
+    "DEFAULT_RTUNNEL_DOWNLOAD_URL",
+    "SshRuntimeConfig",
     "_parse_bool",
     "_parse_denylist",
     "_parse_float",
@@ -66,4 +73,5 @@ __all__ = [
     "get_required_options",
     "get_secret_options",
     "parse_value",
+    "resolve_ssh_runtime_config",
 ]

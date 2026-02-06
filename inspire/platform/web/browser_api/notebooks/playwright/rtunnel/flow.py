@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from inspire.config.ssh_runtime import SshRuntimeConfig
 from inspire.platform.web.browser_api.core import (
     _launch_browser,
     _new_context,
@@ -21,6 +22,7 @@ def _setup_notebook_rtunnel_sync(
     port: int = 31337,
     ssh_port: int = 22222,
     ssh_public_key: Optional[str] = None,
+    ssh_runtime: Optional[SshRuntimeConfig] = None,
     session: Optional[WebSession] = None,
     headless: bool = True,
     timeout: int = 120,
@@ -158,6 +160,7 @@ def _setup_notebook_rtunnel_sync(
                 port=port,
                 ssh_port=ssh_port,
                 ssh_public_key=ssh_public_key,
+                ssh_runtime=ssh_runtime,
             )
 
             _sys.stderr.write("  Executing setup commands in notebook terminal...\n")

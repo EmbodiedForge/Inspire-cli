@@ -26,6 +26,7 @@ from inspire.cli.utils.notebook_cli import (
     resolve_json_output,
 )
 from inspire.config import ConfigError
+from inspire.config.ssh_runtime import resolve_ssh_runtime_config
 from inspire.config.workspaces import select_workspace_id
 from inspire.platform.web import browser_api as browser_api_module
 from inspire.platform.web import session as web_session_module
@@ -422,7 +423,8 @@ def stop_notebook_cmd(
         ctx,
         hint=(
             "Stopping notebooks requires web authentication. "
-            "Set INSPIRE_USERNAME and INSPIRE_PASSWORD."
+            "Set [auth].username/password in config.toml or "
+            "INSPIRE_USERNAME/INSPIRE_PASSWORD."
         ),
     )
 
@@ -493,7 +495,8 @@ def start_notebook_cmd(
         ctx,
         hint=(
             "Starting notebooks requires web authentication. "
-            "Set INSPIRE_USERNAME and INSPIRE_PASSWORD."
+            "Set [auth].username/password in config.toml or "
+            "INSPIRE_USERNAME/INSPIRE_PASSWORD."
         ),
     )
 
@@ -574,7 +577,8 @@ def notebook_status(
         ctx,
         hint=(
             "Notebook status requires web authentication. "
-            "Set INSPIRE_USERNAME and INSPIRE_PASSWORD."
+            "Set [auth].username/password in config.toml or "
+            "INSPIRE_USERNAME/INSPIRE_PASSWORD."
         ),
     )
 
@@ -715,7 +719,8 @@ def list_notebooks(
         ctx,
         hint=(
             "Listing notebooks requires web authentication. "
-            "Set INSPIRE_USERNAME and INSPIRE_PASSWORD."
+            "Set [auth].username/password in config.toml or "
+            "INSPIRE_USERNAME/INSPIRE_PASSWORD."
         ),
     )
     config = load_config(ctx)
@@ -948,7 +953,8 @@ def run_notebook_ssh(
         ctx,
         hint=(
             "Notebook SSH requires web authentication. "
-            "Set INSPIRE_USERNAME and INSPIRE_PASSWORD."
+            "Set [auth].username/password in config.toml or "
+            "INSPIRE_USERNAME/INSPIRE_PASSWORD."
         ),
     )
 
@@ -1024,8 +1030,27 @@ def run_notebook_ssh(
         _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
         return
 
-    if rtunnel_bin:
-        os.environ["INSPIRE_RTUNNEL_BIN"] = rtunnel_bin
+    try:
+        ssh_runtime = resolve_ssh_runtime_config(
+            cli_overrides={"rtunnel_bin": rtunnel_bin},
+        )
+    except ConfigError as e:
+        _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
+        return
+
+    if ssh_runtime.dropbear_deb_dir and not ssh_runtime.setup_script:
+        _handle_error(
+            ctx,
+            "ConfigError",
+            "Missing SSH setup script: ssh.setup_script (or INSPIRE_SETUP_SCRIPT) is required "
+            "when ssh.dropbear_deb_dir is configured.",
+            EXIT_CONFIG_ERROR,
+            hint=(
+                "Set [ssh].setup_script in config.toml or export INSPIRE_SETUP_SCRIPT to the "
+                "setup script path on the cluster."
+            ),
+        )
+        return
 
     try:
         proxy_url = browser_api_module.setup_notebook_rtunnel(
@@ -1033,6 +1058,7 @@ def run_notebook_ssh(
             port=port,
             ssh_port=ssh_port,
             ssh_public_key=ssh_public_key,
+            ssh_runtime=ssh_runtime,
             session=session,
             headless=not debug_playwright,
             timeout=setup_timeout,

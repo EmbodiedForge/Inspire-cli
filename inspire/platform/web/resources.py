@@ -106,7 +106,14 @@ def fetch_resource_availability(
     if config is not None:
         base_url = getattr(config, "base_url", None)
     if not base_url:
-        base_url = os.environ.get("INSPIRE_BASE_URL", "https://api.example.com")
+        try:
+            resolved_config, _ = Config.from_files_and_env(
+                require_credentials=False,
+                require_target_dir=False,
+            )
+            base_url = resolved_config.base_url
+        except Exception:
+            base_url = os.environ.get("INSPIRE_BASE_URL", "https://api.example.com")
 
     session = get_web_session(require_workspace=True)
     nodes = fetch_workspace_availability(session, base_url=base_url)

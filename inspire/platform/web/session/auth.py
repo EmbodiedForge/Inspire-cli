@@ -6,19 +6,50 @@ import os
 import time
 from typing import Optional
 
+from inspire.config import Config
+
 from .models import DEFAULT_WORKSPACE_ID, WebSession
 from .proxy import get_playwright_proxy
 
 
+def _load_runtime_config() -> Config:
+    config, _ = Config.from_files_and_env(require_credentials=False, require_target_dir=False)
+    return config
+
+
+def _session_matches_username(cached: WebSession, username: str) -> bool:
+    if not username:
+        return True
+    if not cached.login_username:
+        return False
+    return cached.login_username == username
+
+
+def _maybe_apply_workspace_override(
+    cached: WebSession,
+    env_workspace_id: Optional[str],
+) -> None:
+    if not env_workspace_id:
+        return
+    if cached.workspace_id == env_workspace_id:
+        return
+    cached.workspace_id = env_workspace_id
+    try:
+        cached.save()
+    except Exception:
+        pass
+
+
 def get_credentials() -> tuple[str, str]:
-    """Get web credentials from environment."""
-    username = os.environ.get("INSPIRE_USERNAME")
-    password = os.environ.get("INSPIRE_PASSWORD")
+    """Get web credentials from layered config (env/project/global/default)."""
+    config = _load_runtime_config()
+    username = (config.username or "").strip()
+    password = config.password or ""
 
     if not username or not password:
         raise ValueError(
-            "INSPIRE_USERNAME and INSPIRE_PASSWORD must be set in environment. "
-            "These are used for web login to get accurate GPU availability."
+            "Missing web authentication credentials. Set [auth].username/password in "
+            "config.toml or export INSPIRE_USERNAME/INSPIRE_PASSWORD."
         )
 
     return username, password
@@ -157,6 +188,7 @@ def login_with_playwright(
             storage_state=storage_state,
             cookies=cookie_dict,
             workspace_id=workspace_id,
+            login_username=username,
             created_at=time.time(),
         )
         session.save()
@@ -174,49 +206,53 @@ def get_web_session(force_refresh: bool = False, require_workspace: bool = False
     Returns:
         A valid WebSession with storage_state and optionally workspace_id.
     """
+    # Check for workspace override from environment
+    env_workspace_id = os.environ.get("INSPIRE_WORKSPACE_ID")
+
+    # Resolve credentials early so we can avoid reusing a cache from another user.
+    credentials_error: Optional[ValueError] = None
+    try:
+        username, password = get_credentials()
+    except ValueError as e:
+        credentials_error = e
+        username = ""
+        password = ""
+
     if not force_refresh:
         cached = WebSession.load()
         if cached and cached.storage_state.get("cookies"):
+            _maybe_apply_workspace_override(cached, env_workspace_id)
             if require_workspace and not cached.workspace_id:
-                # Need workspace_id, force re-login
+                pass
+            elif username and not _session_matches_username(cached, username):
+                # Credentials are available and don't match the cached login user.
+                # Force fresh login so the active account follows current config.
                 pass
             else:
                 return cached
 
-    # Check for workspace override from environment
-    env_workspace_id = os.environ.get("INSPIRE_WORKSPACE_ID")
-
     # If we can't refresh (missing credentials), try the cached session anyway.
-    try:
-        username, password = get_credentials()
-    except ValueError:
+    if credentials_error is not None:
         cached = WebSession.load(allow_expired=True)
         if cached and cached.storage_state.get("cookies"):
-            if env_workspace_id and cached.workspace_id != env_workspace_id:
-                cached.workspace_id = env_workspace_id
-                try:
-                    cached.save()
-                except Exception:
-                    pass
+            _maybe_apply_workspace_override(cached, env_workspace_id)
 
             if require_workspace and not cached.workspace_id:
-                raise
+                raise credentials_error
             return cached
-        raise
+        raise credentials_error
 
     # Use cached session if available and has cookies, even if beyond TTL.
     # The session cookies may still be valid server-side; let API calls determine validity.
     cached = WebSession.load(allow_expired=True)
     if cached and cached.storage_state.get("cookies"):
-        if env_workspace_id and cached.workspace_id != env_workspace_id:
-            cached.workspace_id = env_workspace_id
-            try:
-                cached.save()
-            except Exception:
-                pass
-        # Use cached session; server will reject if truly invalid
-        return cached
+        _maybe_apply_workspace_override(cached, env_workspace_id)
+        if (not require_workspace or cached.workspace_id) and _session_matches_username(
+            cached, username
+        ):
+            # Use cached session; server will reject if truly invalid.
+            return cached
 
     # Session is missing or has no cookies, perform fresh login
-    base_url = os.environ.get("INSPIRE_BASE_URL", "https://api.example.com")
+    base_url = _load_runtime_config().base_url
     return login_with_playwright(username, password, base_url=base_url)

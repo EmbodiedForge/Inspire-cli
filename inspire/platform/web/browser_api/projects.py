@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from inspire.platform.web.browser_api.core import BASE_URL, _browser_api_path, _request_json
+from inspire.platform.web.browser_api.core import _browser_api_path, _get_base_url, _request_json
 from inspire.platform.web.session import DEFAULT_WORKSPACE_ID, WebSession, get_web_session
 
 __all__ = [
@@ -76,7 +76,7 @@ def list_projects(
         session,
         "POST",
         _browser_api_path("/project/list"),
-        referer=f"{BASE_URL}/jobs/interactiveModeling",
+        referer=f"{_get_base_url()}/jobs/interactiveModeling",
         body=body,
         timeout=30,
     )

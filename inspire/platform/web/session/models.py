@@ -34,6 +34,7 @@ class WebSession:
     storage_state: dict[str, Any]
     created_at: float
     workspace_id: Optional[str] = None
+    login_username: Optional[str] = None
 
     # Back-compat: older cache stored only name->value cookies
     cookies: Optional[dict[str, str]] = None
@@ -47,6 +48,7 @@ class WebSession:
             "storage_state": self.storage_state,
             "cookies": self.cookies,
             "workspace_id": self.workspace_id,
+            "login_username": self.login_username,
             "created_at": self.created_at,
         }
 
@@ -61,6 +63,7 @@ class WebSession:
             storage_state=storage_state,
             cookies=cookies,
             workspace_id=data.get("workspace_id"),
+            login_username=data.get("login_username"),
             created_at=data["created_at"],
         )
 

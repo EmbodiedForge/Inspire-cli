@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from inspire.platform.web.browser_api.core import BASE_URL, _browser_api_path, _request_json
+from inspire.config import Config
+from inspire.platform.web.browser_api.core import _browser_api_path, _get_base_url, _request_json
 from .models import ImageInfo
 from inspire.platform.web.session import DEFAULT_WORKSPACE_ID, WebSession, get_web_session
 
-_NOTEBOOKS_REFERER = f"{BASE_URL}/jobs/interactiveModeling"
+
+def _notebooks_referer() -> str:
+    return f"{_get_base_url()}/jobs/interactiveModeling"
 
 
 def _get_session_and_workspace_id(
@@ -38,7 +41,7 @@ def _request_notebooks_data(
         session,
         method,
         _browser_api_path(endpoint_path),
-        referer=_NOTEBOOKS_REFERER,
+        referer=_notebooks_referer(),
         body=body,
         timeout=timeout,
     )
@@ -119,7 +122,11 @@ def list_notebook_compute_groups(
     workspace_id: Optional[str] = None,
     session: Optional[WebSession] = None,
 ) -> list[dict]:
-    """List notebook compute groups."""
+    """List notebook compute groups.
+
+    Falls back to config-based compute groups when the API endpoint
+    is unavailable (404).
+    """
     session, workspace_id = _get_session_and_workspace_id(
         workspace_id=workspace_id, session=session
     )
@@ -128,14 +135,53 @@ def list_notebook_compute_groups(
         "workspace_id": workspace_id,
     }
 
-    return _request_notebooks_data(
-        session,
-        "POST",
-        "/notebook/compute_groups",
-        body=body,
-        timeout=30,
-        default_data=[],
-    )
+    try:
+        return _request_notebooks_data(
+            session,
+            "POST",
+            "/notebook/compute_groups",
+            body=body,
+            timeout=30,
+            default_data=[],
+        )
+    except ValueError as e:
+        if "404" not in str(e):
+            raise
+        # API endpoint missing — fall back to config-based compute groups
+        return _config_compute_groups_fallback()
+
+
+def _config_compute_groups_fallback() -> list[dict]:
+    """Build synthetic compute group list from inspire-cli config."""
+    try:
+        cfg, _ = Config.from_files_and_env(require_credentials=False, require_target_dir=False)
+    except Exception:
+        return []
+
+    groups = cfg.compute_groups
+    result = []
+    for g in groups:
+        gpu_type = g.get("gpu_type", "")
+        result.append(
+            {
+                "logic_compute_group_id": g.get("id", ""),
+                "name": g.get("name", ""),
+                "gpu_type_stats": (
+                    [
+                        {
+                            "gpu_info": {
+                                "gpu_type": gpu_type,
+                                "gpu_type_display": gpu_type,
+                                "brand_name": gpu_type,
+                            },
+                        }
+                    ]
+                    if gpu_type
+                    else []
+                ),
+            }
+        )
+    return result
 
 
 def create_notebook(
@@ -160,15 +206,15 @@ def create_notebook(
         workspace_id=workspace_id, session=session
     )
 
+    # Use proto-compatible field names (mirror_id/mirror_url, not image_id/image_url)
     body = {
         "name": name,
         "project_id": project_id,
         "project_name": project_name,
-        "image_id": image_id,
-        "image_url": image_url,
+        "mirror_id": image_id,
+        "mirror_url": image_url,
         "logic_compute_group_id": logic_compute_group_id,
         "quota_id": quota_id,
-        "gpu_type": gpu_type,
         "gpu_count": gpu_count,
         "cpu_count": cpu_count,
         "memory_size": memory_size,

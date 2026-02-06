@@ -7,6 +7,7 @@ from click.testing import CliRunner
 
 from inspire.cli.main import main as cli_main
 from inspire.cli.context import (
+    Context,
     EXIT_SUCCESS,
     EXIT_CONFIG_ERROR,
     EXIT_AUTH_ERROR,
@@ -16,11 +17,14 @@ from inspire.cli.context import (
 )
 
 from inspire import config as config_module
+from inspire.bridge import tunnel as tunnel_module
+from inspire.cli.commands.notebook import notebook_commands as notebook_cmd_module
 from inspire.cli.utils import auth as auth_module
 from inspire.platform.web import browser_api as browser_api_module
 from inspire.platform.web import session as web_session_module
 from inspire.cli.utils.auth import AuthenticationError
 from inspire.config import ConfigError
+from inspire.config.ssh_runtime import SshRuntimeConfig
 from inspire.cli.utils.job_cache import JobCache
 from inspire.platform.openapi import ResourceManager
 
@@ -1113,3 +1117,178 @@ def test_notebook_start_name_conflict_prompts_selection(
 
     assert result.exit_code == EXIT_SUCCESS
     assert started["notebook_id"] == "nb-gpu"
+
+
+def test_run_notebook_ssh_validates_dropbear_setup_script(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class FakeSession:
+        workspace_id = "ws-test"
+        storage_state = {}
+
+    class FakeTunnelConfig:
+        def __init__(self) -> None:
+            self.bridges: dict[str, object] = {}
+            self.default_bridge = None
+
+        def add_bridge(self, profile: object) -> None:
+            self.bridges[str(getattr(profile, "name", "default"))] = profile
+
+    captured: dict[str, str] = {}
+
+    def fake_handle_error(
+        ctx: Context,
+        error_type: str,
+        message: str,
+        exit_code: int,
+        *,
+        hint: Optional[str] = None,
+    ) -> None:
+        assert ctx is not None
+        captured["type"] = error_type
+        captured["message"] = message
+        captured["hint"] = hint or ""
+        raise SystemExit(exit_code)
+
+    monkeypatch.setattr(notebook_cmd_module, "_handle_error", fake_handle_error)
+    monkeypatch.setattr(notebook_cmd_module, "require_web_session", lambda ctx, hint: FakeSession())
+    monkeypatch.setattr(notebook_cmd_module, "load_config", lambda ctx: make_test_config(tmp_path))
+    monkeypatch.setattr(
+        notebook_cmd_module,
+        "_resolve_notebook_id",
+        lambda *args, **kwargs: ("notebook-12345678", None),
+    )
+    monkeypatch.setattr(
+        browser_api_module,
+        "wait_for_notebook_running",
+        lambda notebook_id, session=None: {
+            "resource_spec_price": {"gpu_info": {"gpu_product_simple": "H200"}}
+        },
+    )
+    monkeypatch.setattr(
+        notebook_cmd_module, "load_ssh_public_key", lambda pubkey: "ssh-ed25519 AAA"
+    )
+    monkeypatch.setattr(
+        notebook_cmd_module,
+        "resolve_ssh_runtime_config",
+        lambda cli_overrides=None: SshRuntimeConfig(
+            dropbear_deb_dir="/project/dropbear",
+            setup_script=None,
+        ),
+    )
+    monkeypatch.setattr(
+        browser_api_module,
+        "setup_notebook_rtunnel",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("should not be called")),
+    )
+
+    fake_tunnel_config = FakeTunnelConfig()
+    monkeypatch.setattr(tunnel_module, "load_tunnel_config", lambda: fake_tunnel_config)
+    monkeypatch.setattr(tunnel_module, "has_internet_for_gpu_type", lambda gpu_type: False)
+
+    with pytest.raises(SystemExit) as exc:
+        notebook_cmd_module.run_notebook_ssh(
+            Context(),
+            notebook_id="nb-name",
+            wait=True,
+            pubkey=None,
+            save_as=None,
+            port=31337,
+            ssh_port=22222,
+            command=None,
+            rtunnel_bin=None,
+            debug_playwright=False,
+            setup_timeout=60,
+        )
+
+    assert exc.value.code == EXIT_CONFIG_ERROR
+    assert captured["type"] == "ConfigError"
+    assert "setup_script" in captured["message"]
+
+
+def test_run_notebook_ssh_passes_resolved_runtime_to_setup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class FakeSession:
+        workspace_id = "ws-test"
+        storage_state = {}
+
+    class FakeTunnelConfig:
+        def __init__(self) -> None:
+            self.bridges: dict[str, object] = {}
+            self.default_bridge = None
+
+        def add_bridge(self, profile: object) -> None:
+            self.bridges[str(getattr(profile, "name", "default"))] = profile
+
+    resolved_runtime = SshRuntimeConfig(
+        rtunnel_bin="/project/rtunnel",
+        rtunnel_download_url="https://project.example/rtunnel.tgz",
+    )
+    setup_kwargs: dict[str, object] = {}
+    fake_tunnel_config = FakeTunnelConfig()
+    execvp_args: dict[str, object] = {}
+
+    monkeypatch.setattr(notebook_cmd_module, "require_web_session", lambda ctx, hint: FakeSession())
+    monkeypatch.setattr(notebook_cmd_module, "load_config", lambda ctx: make_test_config(tmp_path))
+    monkeypatch.setattr(
+        notebook_cmd_module,
+        "_resolve_notebook_id",
+        lambda *args, **kwargs: ("notebook-12345678", None),
+    )
+    monkeypatch.setattr(
+        browser_api_module,
+        "wait_for_notebook_running",
+        lambda notebook_id, session=None: {
+            "resource_spec_price": {"gpu_info": {"gpu_product_simple": "CPU"}}
+        },
+    )
+    monkeypatch.setattr(
+        notebook_cmd_module, "load_ssh_public_key", lambda pubkey: "ssh-ed25519 AAA"
+    )
+    monkeypatch.setattr(
+        notebook_cmd_module,
+        "resolve_ssh_runtime_config",
+        lambda cli_overrides=None: resolved_runtime,
+    )
+
+    def fake_setup_notebook_rtunnel(**kwargs):  # type: ignore[no-untyped-def]
+        setup_kwargs.update(kwargs)
+        return "wss://proxy.example/notebook/"
+
+    monkeypatch.setattr(browser_api_module, "setup_notebook_rtunnel", fake_setup_notebook_rtunnel)
+
+    monkeypatch.setattr(tunnel_module, "load_tunnel_config", lambda: fake_tunnel_config)
+    monkeypatch.setattr(tunnel_module, "save_tunnel_config", lambda config: None)
+    monkeypatch.setattr(tunnel_module, "has_internet_for_gpu_type", lambda gpu_type: True)
+    monkeypatch.setattr(
+        tunnel_module,
+        "get_ssh_command_args",
+        lambda bridge_name, config, remote_command=None: ["ssh", "root@localhost"],
+    )
+
+    def fake_execvp(file: str, args: list[str]) -> None:
+        execvp_args["file"] = file
+        execvp_args["args"] = args
+        raise SystemExit(0)
+
+    monkeypatch.setattr(notebook_cmd_module.os, "execvp", fake_execvp)
+
+    with pytest.raises(SystemExit) as exc:
+        notebook_cmd_module.run_notebook_ssh(
+            Context(),
+            notebook_id="nb-name",
+            wait=True,
+            pubkey=None,
+            save_as=None,
+            port=31337,
+            ssh_port=22222,
+            command=None,
+            rtunnel_bin="/cli/rtunnel",
+            debug_playwright=False,
+            setup_timeout=60,
+        )
+
+    assert exc.value.code == 0
+    assert setup_kwargs["ssh_runtime"] is resolved_runtime
+    assert execvp_args["file"] == "ssh"

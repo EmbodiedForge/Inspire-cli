@@ -6,33 +6,26 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from inspire.config import Config
+from inspire.config.ssh_runtime import (
+    DEFAULT_RTUNNEL_DOWNLOAD_URL as CONFIG_DEFAULT_RTUNNEL_DOWNLOAD_URL,
+    resolve_ssh_runtime_config,
+)
 
 from .config import load_tunnel_config
 from .models import TunnelConfig, TunnelError
 
 # nightly release includes stdio:// mode for SSH ProxyCommand support
-DEFAULT_RTUNNEL_DOWNLOAD_URL = (
-    "https://github.com/Sarfflow/rtunnel/releases/download/nightly/rtunnel-linux-amd64.tar.gz"
-)
+DEFAULT_RTUNNEL_DOWNLOAD_URL = CONFIG_DEFAULT_RTUNNEL_DOWNLOAD_URL
 
 
 def _get_rtunnel_download_url() -> str:
-    """Get the rtunnel download URL from config or environment.
+    """Get the rtunnel download URL from resolved SSH runtime config.
 
     Returns:
         Download URL for rtunnel binary
     """
-    # Check environment variable first (highest priority)
-    env_url = os.environ.get("INSPIRE_RTUNNEL_DOWNLOAD_URL")
-    if env_url:
-        return env_url
-
-    # Try to load from config files
     try:
-        config, _ = Config.from_files_and_env(require_credentials=False, require_target_dir=False)
-        if config.rtunnel_download_url:
-            return config.rtunnel_download_url
+        return resolve_ssh_runtime_config().rtunnel_download_url
     except Exception:
         pass
 

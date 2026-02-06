@@ -111,12 +111,31 @@ action_timeout = 600
 name = "H100 Cluster"
 id = "lcg-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 gpu_type = "H100"
+
+[ssh]
+# Optional: use a pre-cached rtunnel binary
+# rtunnel_bin = "/inspire/shared/bin/rtunnel"
+# Optional: custom rtunnel download URL
+# rtunnel_download_url = "https://..."
+# Optional: use dropbear packages from shared storage
+# dropbear_deb_dir = "/inspire/shared/debs/dropbear"
+# Required when dropbear_deb_dir is set
+# setup_script = "/inspire/shared/scripts/setup_ssh_dropbear.sh"
 ```
 
 View current config:
 ```bash
 inspire config show
 ```
+
+SSH config precedence for `inspire notebook ssh` and tunnel rtunnel download settings:
+- `--rtunnel-bin` CLI flag (only for `rtunnel_bin`)
+- Project TOML or env, based on `[cli].prefer_source`
+- Global TOML
+- Built-in defaults
+
+When `[cli].prefer_source = "toml"`, project `./.inspire/config.toml` wins over environment
+variables for fields defined in project TOML.
 
 ## Environment Variables
 

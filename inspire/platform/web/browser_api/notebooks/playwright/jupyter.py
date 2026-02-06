@@ -5,13 +5,14 @@ from __future__ import annotations
 import time
 from urllib.parse import urlsplit, urlunsplit
 
-from inspire.platform.web.browser_api.core import BASE_URL, _browser_api_path
+from inspire.platform.web.browser_api.core import _browser_api_path, _get_base_url
 
 
 def open_notebook_lab(page, *, notebook_id: str):  # noqa: ANN001
     """Open the notebook's JupyterLab and return the lab frame/page handle."""
+    base_url = _get_base_url()
     page.goto(
-        f"{BASE_URL}/ide?notebook_id={notebook_id}",
+        f"{base_url}/ide?notebook_id={notebook_id}",
         timeout=60000,
         wait_until="domcontentloaded",
     )
@@ -34,7 +35,7 @@ def open_notebook_lab(page, *, notebook_id: str):  # noqa: ANN001
 
     if lab_frame is None:
         notebook_lab_prefix = _browser_api_path("/notebook/lab").rstrip("/")
-        direct_lab_url = f"{BASE_URL}{notebook_lab_prefix}/{notebook_id}/"
+        direct_lab_url = f"{base_url}{notebook_lab_prefix}/{notebook_id}/"
         page.goto(
             direct_lab_url,
             timeout=60000,

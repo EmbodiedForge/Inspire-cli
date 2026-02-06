@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Optional
 
 from .models import FullFreeNodeCount, GPUAvailability
-from inspire.platform.web.browser_api.core import BASE_URL, _browser_api_path, _request_json
+from inspire.platform.web.browser_api.core import _browser_api_path, _get_base_url, _request_json
 from inspire.platform.web.session import (
     DEFAULT_WORKSPACE_ID,
     SessionExpiredError,
@@ -36,7 +36,7 @@ def list_compute_groups(
         session,
         "POST",
         _browser_api_path("/logic_compute_groups/list"),
-        referer=f"{BASE_URL}/jobs/distributedTraining",
+        referer=f"{_get_base_url()}/jobs/distributedTraining",
         body=body,
         timeout=30,
     )
@@ -78,7 +78,7 @@ def get_accurate_gpu_availability(
                 session,
                 "GET",
                 _browser_api_path(f"/compute_resources/logic_compute_groups/{group_id}"),
-                referer=f"{BASE_URL}/jobs/distributedTraining",
+                referer=f"{_get_base_url()}/jobs/distributedTraining",
                 timeout=30,
             )
         except SessionExpiredError:
@@ -138,7 +138,7 @@ def get_full_free_node_counts(
                 session,
                 "POST",
                 _browser_api_path("/cluster_nodes/list"),
-                referer=f"{BASE_URL}/jobs/distributedTraining",
+                referer=f"{_get_base_url()}/jobs/distributedTraining",
                 body=body,
                 timeout=30,
             )

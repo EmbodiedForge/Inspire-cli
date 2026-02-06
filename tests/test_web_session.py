@@ -1,7 +1,11 @@
 import json
+from pathlib import Path
+
 import pytest
 
+from inspire.config import Config
 from inspire.platform.web import session as ws
+from inspire.platform.web.session import auth as ws_auth
 from inspire.platform.web.session import WebSession
 
 
@@ -164,3 +168,73 @@ def test_browser_request_context_posts_json_bytes():
     assert json.loads(data) == {"a": 1}
     header_keys = {key.lower() for key in (headers or {})}
     assert "content-type" in header_keys
+
+
+def test_get_credentials_prefers_project_toml_when_prefer_source_toml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    project_dir = tmp_path / ".inspire"
+    project_dir.mkdir()
+    (project_dir / "config.toml").write_text("""
+[cli]
+prefer_source = "toml"
+
+[auth]
+username = "toml-user"
+password = "toml-pass"
+""")
+    monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "missing" / "config.toml")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("INSPIRE_USERNAME", "env-user")
+    monkeypatch.setenv("INSPIRE_PASSWORD", "env-pass")
+
+    username, password = ws.get_credentials()
+
+    assert username == "toml-user"
+    assert password == "toml-pass"
+
+
+def test_get_web_session_reauths_when_cached_user_mismatch(monkeypatch: pytest.MonkeyPatch):
+    cached = WebSession(
+        storage_state={"cookies": [{"name": "session", "value": "abc"}]},
+        cookies={"session": "abc"},
+        workspace_id="ws-test",
+        login_username="old-user",
+        created_at=0,
+    )
+    refreshed = WebSession(
+        storage_state={"cookies": [{"name": "session", "value": "new"}]},
+        cookies={"session": "new"},
+        workspace_id="ws-test",
+        login_username="new-user",
+        created_at=1,
+    )
+    calls: dict[str, str] = {}
+
+    monkeypatch.setattr(
+        ws_auth.WebSession,
+        "load",
+        classmethod(lambda cls, allow_expired=False: cached),
+    )
+    monkeypatch.setattr(ws_auth, "get_credentials", lambda: ("new-user", "new-pass"))
+    monkeypatch.setattr(
+        ws_auth,
+        "_load_runtime_config",
+        lambda: type("Cfg", (), {"base_url": "https://example.invalid"})(),
+    )
+
+    def fake_login(username: str, password: str, base_url: str = "", headless: bool = True):
+        calls["username"] = username
+        calls["password"] = password
+        calls["base_url"] = base_url
+        calls["headless"] = str(headless)
+        return refreshed
+
+    monkeypatch.setattr(ws_auth, "login_with_playwright", fake_login)
+
+    session = ws_auth.get_web_session(force_refresh=False, require_workspace=False)
+
+    assert session is refreshed
+    assert calls["username"] == "new-user"
+    assert calls["password"] == "new-pass"
+    assert calls["base_url"] == "https://example.invalid"

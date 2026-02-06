@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from inspire.config.ssh_runtime import SshRuntimeConfig
 from inspire.platform.web.browser_api.core import _in_asyncio_loop, _run_in_thread
 from inspire.platform.web.session import WebSession
 
@@ -15,6 +16,7 @@ def setup_notebook_rtunnel(
     port: int = 31337,
     ssh_port: int = 22222,
     ssh_public_key: Optional[str] = None,
+    ssh_runtime: Optional[SshRuntimeConfig] = None,
     session: Optional[WebSession] = None,
     headless: bool = True,
     timeout: int = 120,
@@ -27,6 +29,7 @@ def setup_notebook_rtunnel(
             port=port,
             ssh_port=ssh_port,
             ssh_public_key=ssh_public_key,
+            ssh_runtime=ssh_runtime,
             session=session,
             headless=headless,
             timeout=timeout,
@@ -36,6 +39,7 @@ def setup_notebook_rtunnel(
         port=port,
         ssh_port=ssh_port,
         ssh_public_key=ssh_public_key,
+        ssh_runtime=ssh_runtime,
         session=session,
         headless=headless,
         timeout=timeout,
