@@ -685,6 +685,104 @@ class TestTunnelConfigPersistence:
         assert bridge.ssh_user == "testuser"
         assert bridge.ssh_port == 12345
 
+    def test_load_tunnel_config_prefers_resolved_username(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "bridges-canonical-user.json").write_text(
+            """
+{
+  "default": "canonical",
+  "bridges": [
+    {"name": "canonical", "proxy_url": "https://canonical.example.com"}
+  ]
+}
+""".strip()
+        )
+        (tmp_path / "bridges-primary.json").write_text(
+            """
+{
+  "default": "legacy",
+  "bridges": [
+    {"name": "legacy", "proxy_url": "https://legacy.example.com"}
+  ]
+}
+""".strip()
+        )
+
+        monkeypatch.setenv("INSPIRE_ACCOUNT", "primary")
+        monkeypatch.setattr(
+            Config,
+            "from_files_and_env",
+            classmethod(
+                lambda cls, require_target_dir=False, require_credentials=True: (
+                    Config(username="canonical-user", password=""),
+                    {},
+                )
+            ),
+        )
+
+        loaded = load_tunnel_config(tmp_path)
+
+        assert loaded.account == "canonical-user"
+        assert "canonical" in loaded.bridges
+        assert loaded.default_bridge == "canonical"
+
+    def test_load_tunnel_config_merges_account_alias_and_legacy(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "bridges-canonical-user.json").write_text(
+            """
+{
+  "default": "canonical",
+  "bridges": [
+    {"name": "canonical", "proxy_url": "https://canonical.example.com"},
+    {"name": "shared", "proxy_url": "https://primary-wins.example.com"}
+  ]
+}
+""".strip()
+        )
+        (tmp_path / "bridges-primary.json").write_text(
+            """
+{
+  "default": "legacy-alias",
+  "bridges": [
+    {"name": "shared", "proxy_url": "https://alias-should-not-win.example.com"},
+    {"name": "alias-only", "proxy_url": "https://alias-only.example.com"}
+  ]
+}
+""".strip()
+        )
+        (tmp_path / "bridges.json").write_text(
+            """
+{
+  "default": "legacy",
+  "bridges": [
+    {"name": "legacy-only", "proxy_url": "https://legacy-only.example.com"}
+  ]
+}
+""".strip()
+        )
+
+        monkeypatch.setenv("INSPIRE_ACCOUNT", "primary")
+        monkeypatch.setattr(
+            Config,
+            "from_files_and_env",
+            classmethod(
+                lambda cls, require_target_dir=False, require_credentials=True: (
+                    Config(username="canonical-user", password=""),
+                    {},
+                )
+            ),
+        )
+
+        loaded = load_tunnel_config(tmp_path)
+
+        assert loaded.default_bridge == "canonical"
+        assert "canonical" in loaded.bridges
+        assert "alias-only" in loaded.bridges
+        assert "legacy-only" in loaded.bridges
+        assert loaded.bridges["shared"].proxy_url == "https://primary-wins.example.com"
+
 
 class TestProxyCommand:
     """Tests for SSH proxy command building."""

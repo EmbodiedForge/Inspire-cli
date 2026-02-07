@@ -64,6 +64,7 @@ def try_exec_via_ssh_tunnel(
     ctx: Context,
     *,
     command: str,
+    bridge_name: Optional[str],
     config: Config,
     timeout_s: int,
     is_tunnel_available_fn: Callable[..., bool],
@@ -78,11 +79,30 @@ def try_exec_via_ssh_tunnel(
     """
     try:
         if not is_tunnel_available_fn(
+            bridge_name=bridge_name,
             retries=config.tunnel_retries,
             retry_pause=config.tunnel_retry_pause,
         ):
             tunnel_config = load_tunnel_config()
-            bridge = tunnel_config.get_bridge()
+            bridge = tunnel_config.get_bridge(bridge_name)
+            if bridge_name and bridge is None:
+                message = f"Bridge '{bridge_name}' not found."
+                hint = "Run 'inspire tunnel list' to see available bridge profiles."
+                if ctx.json_output:
+                    click.echo(
+                        json_formatter.format_json_error(
+                            "ConfigError",
+                            message,
+                            EXIT_GENERAL_ERROR,
+                            hint=hint,
+                        ),
+                        err=True,
+                    )
+                else:
+                    click.echo(f"Error: {message}", err=True)
+                    click.echo(f"Hint: {hint}", err=True)
+                return EXIT_GENERAL_ERROR
+
             if bridge:
                 hint = (
                     "Run 'inspire tunnel status' to troubleshoot. "
@@ -123,6 +143,7 @@ def try_exec_via_ssh_tunnel(
         if ctx.json_output:
             result = run_ssh_command_fn(
                 command=full_command,
+                bridge_name=bridge_name,
                 timeout=timeout_s,
                 capture_output=True,
             )
@@ -154,6 +175,8 @@ def try_exec_via_ssh_tunnel(
             return EXIT_SUCCESS
 
         click.echo("Using SSH tunnel (fast path)")
+        if bridge_name:
+            click.echo(f"Bridge: {bridge_name}")
         click.echo(f"Command: {command}")
         click.echo(f"Working dir: {config.target_dir}")
         click.echo("")
@@ -161,6 +184,7 @@ def try_exec_via_ssh_tunnel(
 
         exit_code = run_ssh_command_streaming_fn(
             command=full_command,
+            bridge_name=bridge_name,
             timeout=timeout_s,
         )
 
@@ -394,6 +418,12 @@ def exec_via_workflow(
     default=None,
     help="Timeout in seconds (default: config value)",
 )
+@click.option(
+    "bridge",
+    "--bridge",
+    "-b",
+    help="Bridge profile to use for SSH tunnel execution",
+)
 @click.option("--no-tunnel", is_flag=True, help="Force use of Gitea workflow (skip SSH tunnel)")
 @pass_context
 def exec_command(
@@ -404,6 +434,7 @@ def exec_command(
     download: Optional[str],
     wait: bool,
     timeout: Optional[int],
+    bridge: Optional[str],
     no_tunnel: bool,
 ) -> None:
     """Execute a command on the Bridge runner.
@@ -421,6 +452,7 @@ def exec_command(
         inspire bridge exec "uv venv .venv" \\
             --artifact-path .venv --download ./local
         inspire bridge exec "python train.py" --no-wait
+        inspire bridge exec "hostname" --bridge qz-bridge
         inspire bridge exec "ls" --no-tunnel  # Force Gitea workflow
     """
 
@@ -443,6 +475,7 @@ def exec_command(
         ssh_exit_code = try_exec_via_ssh_tunnel(
             ctx,
             command=command,
+            bridge_name=bridge,
             config=config,
             timeout_s=action_timeout,
             is_tunnel_available_fn=is_tunnel_available,
@@ -470,8 +503,9 @@ def exec_command(
 
 
 @bridge.command("ssh")
+@click.option("--bridge", "-b", help="Bridge profile to connect")
 @pass_context
-def bridge_ssh(ctx: Context) -> None:
+def bridge_ssh(ctx: Context, bridge: Optional[str]) -> None:
     """Open an interactive SSH shell to Bridge.
 
     Requires an active SSH tunnel. Start with: inspire tunnel start
@@ -495,7 +529,7 @@ def bridge_ssh(ctx: Context) -> None:
 
     tunnel_config = load_tunnel_config()
 
-    if not is_tunnel_available(config=tunnel_config):
+    if not is_tunnel_available(bridge_name=bridge, config=tunnel_config):
         if ctx.json_output:
             click.echo(
                 json_formatter.format_json_error(
@@ -514,12 +548,15 @@ def bridge_ssh(ctx: Context) -> None:
     # Build interactive SSH command with env exports and cd to target dir
     env_exports = build_env_exports(config.remote_env)
     ssh_args = get_ssh_command_args(
+        bridge_name=bridge,
         config=tunnel_config,
         remote_command=f'{env_exports}cd "{config.target_dir}" && exec $SHELL -l',
     )
 
     if not ctx.json_output:
         click.echo("Opening SSH connection to Bridge...")
+        if bridge:
+            click.echo(f"Bridge: {bridge}")
         click.echo(f"Working directory: {config.target_dir}")
         click.echo("Press Ctrl+D or type 'exit' to disconnect")
         click.echo("")

@@ -431,3 +431,111 @@ def test_bridge_exec_falls_back_to_workflow_when_no_bridge_configured(
 
     assert result.exit_code == EXIT_SUCCESS
     assert called["trigger"] is True
+
+
+def test_bridge_exec_passes_requested_bridge_to_ssh(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_sync_config(tmp_path)
+    captured: Dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+
+    def fake_is_tunnel_available(*args: Any, **kwargs: Any) -> bool:
+        captured["available_bridge"] = kwargs.get("bridge_name")
+        return True
+
+    def fake_run_ssh_command_streaming(*args: Any, **kwargs: Any) -> int:
+        captured["stream_bridge"] = kwargs.get("bridge_name")
+        return 0
+
+    monkeypatch.setattr(bridge_module, "is_tunnel_available", fake_is_tunnel_available)
+    monkeypatch.setattr(bridge_module, "run_ssh_command_streaming", fake_run_ssh_command_streaming)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--bridge", "gpu-main"])
+
+    assert result.exit_code == EXIT_SUCCESS
+    assert captured["available_bridge"] == "gpu-main"
+    assert captured["stream_bridge"] == "gpu-main"
+
+
+def test_bridge_exec_errors_when_requested_bridge_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_sync_config(tmp_path)
+    workflow_called = {"value": False}
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+
+    def fake_is_tunnel_available(*args: Any, **kwargs: Any) -> bool:
+        return False
+
+    tunnel_config = TunnelConfig()
+    tunnel_config.add_bridge(BridgeProfile(name="other-bridge", proxy_url="https://proxy.example.com"))
+
+    def fake_trigger(*args: Any, **kwargs: Any) -> None:
+        workflow_called["value"] = True
+
+    monkeypatch.setattr(bridge_module, "is_tunnel_available", fake_is_tunnel_available)
+    monkeypatch.setattr(bridge_module, "load_tunnel_config", lambda: tunnel_config)
+    monkeypatch.setattr(bridge_module, "trigger_bridge_action_workflow", fake_trigger)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--bridge", "missing"])
+
+    assert result.exit_code == EXIT_GENERAL_ERROR
+    assert "Bridge 'missing' not found" in result.output
+    assert workflow_called["value"] is False
+
+
+def test_bridge_ssh_uses_requested_bridge(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_sync_config(tmp_path)
+    config.target_dir = str(tmp_path / "project")
+    captured: Dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+
+    tunnel_config = TunnelConfig()
+    tunnel_config.add_bridge(BridgeProfile(name="gpu-main", proxy_url="https://proxy.example.com"))
+
+    monkeypatch.setattr(bridge_module, "load_tunnel_config", lambda: tunnel_config)
+
+    def fake_is_tunnel_available(*args: Any, **kwargs: Any) -> bool:
+        captured["available_bridge"] = kwargs.get("bridge_name")
+        return True
+
+    def fake_get_ssh_command_args(*args: Any, **kwargs: Any) -> List[str]:
+        captured["ssh_bridge"] = kwargs.get("bridge_name")
+        return ["ssh", "root@localhost"]
+
+    def fake_execvp(file: str, args: List[str]) -> None:
+        captured["execvp_file"] = file
+        captured["execvp_args"] = args
+        raise SystemExit(0)
+
+    monkeypatch.setattr(bridge_module, "is_tunnel_available", fake_is_tunnel_available)
+    monkeypatch.setattr(bridge_module, "get_ssh_command_args", fake_get_ssh_command_args)
+    monkeypatch.setattr(bridge_module.os, "execvp", fake_execvp)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["bridge", "ssh", "--bridge", "gpu-main"])
+
+    assert result.exit_code == 0
+    assert captured["available_bridge"] == "gpu-main"
+    assert captured["ssh_bridge"] == "gpu-main"
+    assert captured["execvp_file"] == "ssh"
