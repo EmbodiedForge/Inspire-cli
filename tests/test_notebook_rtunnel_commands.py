@@ -63,7 +63,11 @@ def test_dropbear_command_contains_setup_script_and_args() -> None:
         ssh_runtime=runtime,
     )
 
+    joined = "\n".join(commands)
     assert any(line.startswith("DROPBEAR_DEB_DIR=/project/dropbear") for line in commands)
-    assert any(
-        "bash /project/setup_ssh.sh /project/dropbear /project/rtunnel" in line for line in commands
-    )
+    assert any(line.startswith("SETUP_SCRIPT=/project/setup_ssh.sh") for line in commands)
+    assert 'bash "$SETUP_SCRIPT" "$DROPBEAR_DEB_DIR" "$RTUNNEL_BIN_PATH"' in joined
+    # Verify the long single-line command is gone — setup invocation should be its own line
+    assert not any(
+        ">/tmp/setup_ssh.log 2>&1; tail" in line for line in commands
+    ), "setup + tail should be separate commands, not chained with ;"

@@ -1166,6 +1166,16 @@ def test_run_notebook_ssh_validates_dropbear_setup_script(
         },
     )
     monkeypatch.setattr(
+        notebook_cmd_module,
+        "_get_current_user_detail",
+        lambda session, base_url: {"id": "user-1", "username": "user"},
+    )
+    monkeypatch.setattr(
+        notebook_cmd_module,
+        "_validate_notebook_account_access",
+        lambda current_user, notebook_detail: (True, ""),
+    )
+    monkeypatch.setattr(
         notebook_cmd_module, "load_ssh_public_key", lambda pubkey: "ssh-ed25519 AAA"
     )
     monkeypatch.setattr(
@@ -1183,7 +1193,9 @@ def test_run_notebook_ssh_validates_dropbear_setup_script(
     )
 
     fake_tunnel_config = FakeTunnelConfig()
-    monkeypatch.setattr(tunnel_module, "load_tunnel_config", lambda: fake_tunnel_config)
+    monkeypatch.setattr(
+        tunnel_module, "load_tunnel_config", lambda account=None: fake_tunnel_config
+    )
     monkeypatch.setattr(tunnel_module, "has_internet_for_gpu_type", lambda gpu_type: False)
 
     with pytest.raises(SystemExit) as exc:
@@ -1204,6 +1216,76 @@ def test_run_notebook_ssh_validates_dropbear_setup_script(
     assert exc.value.code == EXIT_CONFIG_ERROR
     assert captured["type"] == "ConfigError"
     assert "setup_script" in captured["message"]
+
+
+def test_run_notebook_ssh_fails_fast_on_account_mismatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class FakeSession:
+        workspace_id = "ws-test"
+        storage_state = {}
+
+    captured: dict[str, str] = {}
+
+    def fake_handle_error(
+        ctx: Context,
+        error_type: str,
+        message: str,
+        exit_code: int,
+        *,
+        hint: Optional[str] = None,
+    ) -> None:
+        assert ctx is not None
+        captured["type"] = error_type
+        captured["message"] = message
+        captured["hint"] = hint or ""
+        raise SystemExit(exit_code)
+
+    monkeypatch.setattr(notebook_cmd_module, "_handle_error", fake_handle_error)
+    monkeypatch.setattr(notebook_cmd_module, "require_web_session", lambda ctx, hint: FakeSession())
+    monkeypatch.setattr(notebook_cmd_module, "load_config", lambda ctx: make_test_config(tmp_path))
+    monkeypatch.setattr(
+        notebook_cmd_module,
+        "_resolve_notebook_id",
+        lambda *args, **kwargs: ("notebook-12345678", None),
+    )
+    monkeypatch.setattr(
+        browser_api_module,
+        "wait_for_notebook_running",
+        lambda notebook_id, session=None: {
+            "user_id": "other-user",
+            "resource_spec_price": {"gpu_info": {"gpu_product_simple": "H200"}},
+        },
+    )
+    monkeypatch.setattr(
+        notebook_cmd_module,
+        "_get_current_user_detail",
+        lambda session, base_url: {"id": "current-user", "username": "current"},
+    )
+    monkeypatch.setattr(
+        browser_api_module,
+        "setup_notebook_rtunnel",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("should not be called")),
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        notebook_cmd_module.run_notebook_ssh(
+            Context(),
+            notebook_id="nb-name",
+            wait=True,
+            pubkey=None,
+            save_as=None,
+            port=31337,
+            ssh_port=22222,
+            command=None,
+            rtunnel_bin=None,
+            debug_playwright=False,
+            setup_timeout=60,
+        )
+
+    assert exc.value.code == EXIT_CONFIG_ERROR
+    assert captured["type"] == "ConfigError"
+    assert "Notebook/account mismatch" in captured["message"]
 
 
 def test_run_notebook_ssh_passes_resolved_runtime_to_setup(
@@ -1244,6 +1326,16 @@ def test_run_notebook_ssh_passes_resolved_runtime_to_setup(
         },
     )
     monkeypatch.setattr(
+        notebook_cmd_module,
+        "_get_current_user_detail",
+        lambda session, base_url: {"id": "user-1", "username": "user"},
+    )
+    monkeypatch.setattr(
+        notebook_cmd_module,
+        "_validate_notebook_account_access",
+        lambda current_user, notebook_detail: (True, ""),
+    )
+    monkeypatch.setattr(
         notebook_cmd_module, "load_ssh_public_key", lambda pubkey: "ssh-ed25519 AAA"
     )
     monkeypatch.setattr(
@@ -1258,7 +1350,9 @@ def test_run_notebook_ssh_passes_resolved_runtime_to_setup(
 
     monkeypatch.setattr(browser_api_module, "setup_notebook_rtunnel", fake_setup_notebook_rtunnel)
 
-    monkeypatch.setattr(tunnel_module, "load_tunnel_config", lambda: fake_tunnel_config)
+    monkeypatch.setattr(
+        tunnel_module, "load_tunnel_config", lambda account=None: fake_tunnel_config
+    )
     monkeypatch.setattr(tunnel_module, "save_tunnel_config", lambda config: None)
     monkeypatch.setattr(tunnel_module, "has_internet_for_gpu_type", lambda gpu_type: True)
     monkeypatch.setattr(

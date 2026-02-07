@@ -190,5 +190,11 @@ def fetch_gpu_availability(
 
 def clear_session_cache() -> None:
     """Clear the cached web session."""
-    if SESSION_CACHE_FILE.exists():
-        SESSION_CACHE_FILE.unlink()
+    cache_dir = SESSION_CACHE_FILE.parent
+    if not cache_dir.exists():
+        return
+    for cache_file in cache_dir.glob("web_session*.json"):
+        try:
+            cache_file.unlink()
+        except Exception:
+            continue

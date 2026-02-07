@@ -308,11 +308,24 @@ def resolve_notebook_quota(
                     break
     else:
         for quota in quota_list:
-            if quota.get("gpu_type") == selected_gpu_type and quota.get("gpu_count") == gpu_count:
+            quota_gpu_type = quota.get("gpu_type", "")
+            if quota.get("gpu_count") == gpu_count and (
+                quota_gpu_type == selected_gpu_type
+                or match_gpu_type(selected_gpu_type, quota_gpu_type)
+                or match_gpu_type(gpu_pattern, quota_gpu_type)
+            ):
                 selected_quota = quota
                 break
 
     if not selected_quota:
+        # When the schedule API is unavailable, quota_list will be empty.
+        # Use reasonable defaults so notebook creation can proceed.
+        if not quota_list:
+            cpu_count = requested_cpu_count or (20 if gpu_count > 0 else 4)
+            memory_size = 200 if gpu_count > 0 else 32
+            resource_display = format_resource_display(gpu_count, gpu_pattern, cpu_count)
+            return "", cpu_count, memory_size, selected_gpu_type, resource_display
+
         if gpu_count == 0:
             requested_label = (
                 f"{requested_cpu_count}xCPU" if requested_cpu_count is not None else "CPU"
@@ -384,6 +397,19 @@ def resolve_notebook_project(
     return selected_project
 
 
+def _find_image_match(images: list, image: str) -> object | None:
+    """Find an image matching the query string (case-insensitive name/URL or exact ID)."""
+    image_lower = image.lower()
+    for img in images:
+        if (
+            image_lower in img.name.lower()
+            or image_lower in img.url.lower()
+            or img.image_id == image
+        ):
+            return img
+    return None
+
+
 def resolve_notebook_image(
     ctx: Context,
     *,
@@ -394,15 +420,7 @@ def resolve_notebook_image(
     selected_image = None
 
     if image:
-        image_lower = image.lower()
-        for img in images:
-            if (
-                image_lower in img.name.lower()
-                or image_lower in img.url.lower()
-                or img.image_id == image
-            ):
-                selected_image = img
-                break
+        selected_image = _find_image_match(images, image)
         if not selected_image:
             hint = "Available images:\n" + "\n".join(f"  - {img.name}" for img in images[:20])
             _handle_error(
@@ -471,6 +489,8 @@ def create_notebook_and_report(
     workspace_id: str,
     session: WebSession,
     json_output: bool,
+    task_priority: Optional[int] = None,
+    resource_spec_price: Optional[dict] = None,
 ) -> str | None:
     try:
         result = browser_api_module.create_notebook(
@@ -489,6 +509,8 @@ def create_notebook_and_report(
             auto_stop=auto_stop,
             workspace_id=workspace_id,
             session=session,
+            task_priority=task_priority,
+            resource_spec_price=resource_spec_price,
         )
 
         notebook_id = result.get("notebook_id", "")
@@ -598,6 +620,7 @@ def run_notebook_create(
     wait: bool,
     keepalive: bool,
     json_output: bool,
+    priority: Optional[int] = None,
 ) -> None:
     json_output = resolve_json_output(ctx, json_output)
 
@@ -672,6 +695,80 @@ def run_notebook_create(
 
     quota_id, cpu_count, memory_size, selected_gpu_type, resource_display = quota_selection
 
+    # --- Fetch resource prices (needed for resource_spec_price in create body) ---
+    resource_spec_price: Optional[dict] = None
+    resource_prices: list[dict] = []
+    if logic_compute_group_id:
+        try:
+            resource_prices = browser_api_module.get_resource_prices(
+                workspace_id=workspace_id,
+                logic_compute_group_id=logic_compute_group_id,
+                session=session,
+            )
+        except Exception as e:
+            if not json_output:
+                click.echo(f"Warning: Failed to fetch resource prices: {e}", err=True)
+
+    # Build resource_spec_price matching the exact structure the platform UI sends.
+    # Captured via Playwright: {cpu_type, cpu_count, gpu_type, gpu_count,
+    #                           memory_size_gib, logic_compute_group_id, quota_id}
+    # The pricing API response has nested gpu_info/cpu_info — we extract the
+    # relevant fields into the flat structure the create proto expects.
+    if resource_prices:
+        for price_entry in resource_prices:
+            entry_gpu_count = price_entry.get("gpu_count", 0)
+            entry_gpu_info = price_entry.get("gpu_info", {})
+            entry_gpu_type = entry_gpu_info.get("gpu_type", "")
+            entry_cpu_info = price_entry.get("cpu_info", {})
+
+            if entry_gpu_count == gpu_count and (
+                not selected_gpu_type
+                or entry_gpu_type == selected_gpu_type
+                or match_gpu_type(selected_gpu_type, entry_gpu_type)
+                or match_gpu_type(gpu_pattern, entry_gpu_type)
+            ):
+                resource_spec_price = {
+                    "cpu_type": entry_cpu_info.get("cpu_type", ""),
+                    "cpu_count": price_entry.get("cpu_count", cpu_count),
+                    "gpu_type": entry_gpu_type,
+                    "gpu_count": entry_gpu_count,
+                    "memory_size_gib": price_entry.get("memory_size_gib", memory_size),
+                    "logic_compute_group_id": logic_compute_group_id,
+                    "quota_id": price_entry.get("quota_id", quota_id),
+                }
+                # Also pick up quota_id and resource sizes from the price entry
+                if not quota_id:
+                    quota_id = price_entry.get("quota_id", "")
+                cpu_count = price_entry.get("cpu_count", cpu_count)
+                mem_gib = price_entry.get("memory_size_gib")
+                if mem_gib is not None:
+                    memory_size = mem_gib
+                if not json_output:
+                    click.echo(
+                        f"Using resource spec: "
+                        f"{gpu_count}x{entry_gpu_info.get('gpu_product_simple', selected_gpu_type)}, "
+                        f"{cpu_count} CPU, {memory_size}GB RAM"
+                    )
+                break
+
+    # If we couldn't find a matching price entry, build a minimal resource_spec_price
+    # from the already-resolved quota info.  GPU notebooks require non-nil spec price.
+    if resource_spec_price is None and gpu_count > 0:
+        resource_spec_price = {
+            "cpu_type": "",
+            "cpu_count": cpu_count,
+            "gpu_type": selected_gpu_type or "",
+            "gpu_count": gpu_count,
+            "memory_size_gib": memory_size,
+            "logic_compute_group_id": logic_compute_group_id,
+            "quota_id": quota_id,
+        }
+
+    # --- Resolve task priority ---
+    task_priority = priority
+    if task_priority is None:
+        task_priority = config.job_priority if hasattr(config, "job_priority") else None
+
     try:
         projects = browser_api_module.list_projects(workspace_id=workspace_id, session=session)
     except Exception as e:
@@ -698,6 +795,20 @@ def run_notebook_create(
     except Exception as e:
         _handle_error(ctx, "APIError", f"Failed to fetch images: {e}", EXIT_API_ERROR)
         return
+
+    # When a specific image is requested and not found in official images,
+    # also search public images before giving up.
+    if image and not _find_image_match(images, image):
+        try:
+            public_images = browser_api_module.list_images(
+                workspace_id=workspace_id, source="SOURCE_PUBLIC", session=session
+            )
+            if public_images:
+                if not json_output:
+                    click.echo("Searching public images...")
+                images = images + public_images
+        except Exception:
+            pass
 
     if not images:
         _handle_error(ctx, "ConfigError", "No images available", EXIT_CONFIG_ERROR)
@@ -737,6 +848,8 @@ def run_notebook_create(
         workspace_id=workspace_id,
         session=session,
         json_output=json_output,
+        task_priority=task_priority,
+        resource_spec_price=resource_spec_price,
     )
     if not notebook_id:
         return

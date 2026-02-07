@@ -23,6 +23,26 @@ from inspire.config.toml import (
 )
 
 
+def _parse_global_accounts(raw_accounts: Any) -> dict[str, str]:
+    """Parse global [accounts.\"<username>\"] password entries."""
+    if not isinstance(raw_accounts, dict):
+        return {}
+
+    parsed: dict[str, str] = {}
+    for raw_username, raw_value in raw_accounts.items():
+        username = str(raw_username).strip()
+        if not username or not isinstance(raw_value, dict):
+            continue
+        password = raw_value.get("password")
+        if password is None:
+            continue
+        password_str = str(password)
+        if not password_str:
+            continue
+        parsed[username] = password_str
+    return parsed
+
+
 def config_from_files_and_env(
     *,
     require_target_dir: bool = False,
@@ -91,6 +111,7 @@ def config_from_files_and_env(
         "shm_size": None,
         "compute_groups": [],
         "remote_env": {},
+        "accounts": {},
     }
 
     for key in config_dict:
@@ -100,11 +121,13 @@ def config_from_files_and_env(
     global_compute_groups: list[dict] = []
     global_remote_env: dict[str, str] = {}
     global_workspaces: dict[str, str] = {}
+    global_accounts: dict[str, str] = {}
     if Config.GLOBAL_CONFIG_PATH.exists():
         global_config_path = Config.GLOBAL_CONFIG_PATH
         global_raw = _load_toml(Config.GLOBAL_CONFIG_PATH)
         global_compute_groups = global_raw.pop("compute_groups", [])
         global_remote_env = {str(k): str(v) for k, v in global_raw.pop("remote_env", {}).items()}
+        global_accounts = _parse_global_accounts(global_raw.pop("accounts", {}))
 
         raw_workspaces = global_raw.get("workspaces") or {}
         if isinstance(raw_workspaces, dict):
@@ -124,15 +147,31 @@ def config_from_files_and_env(
         if global_workspaces:
             config_dict["workspaces"] = global_workspaces
             sources["workspaces"] = SOURCE_GLOBAL
+        if global_accounts:
+            config_dict["accounts"] = global_accounts
+            sources["accounts"] = SOURCE_GLOBAL
 
     project_config_path = _find_project_config()
     project_compute_groups: list[dict] = []
     project_remote_env: dict[str, str] = {}
     project_workspaces: dict[str, str] = {}
+    prefer_source = "env"
     if project_config_path:
         project_raw = _load_toml(project_config_path)
+
+        # Extract cli.prefer_source before flattening
+        cli_section = project_raw.pop("cli", {})
+        prefer_source = cli_section.get("prefer_source", "env")
+        if prefer_source not in ("env", "toml"):
+            raise ConfigError(
+                f"Invalid prefer_source value: '{prefer_source}'\n"
+                "Must be 'env' or 'toml' in [cli] section of project config."
+            )
+
         project_compute_groups = project_raw.pop("compute_groups", [])
         project_remote_env = {str(k): str(v) for k, v in project_raw.pop("remote_env", {}).items()}
+        # Keep account passwords global-only to avoid storing secrets in repos.
+        project_raw.pop("accounts", None)
 
         raw_workspaces = project_raw.get("workspaces") or {}
         if isinstance(raw_workspaces, dict):
@@ -157,7 +196,12 @@ def config_from_files_and_env(
             config_dict["workspaces"] = merged_workspaces
             sources["workspaces"] = SOURCE_PROJECT
 
+    env_password = os.getenv("INSPIRE_PASSWORD")
+
     for option in CONFIG_OPTIONS:
+        if option.env_var == "INSPIRE_PASSWORD":
+            continue
+
         value = os.getenv(option.env_var)
         if value is None and option.env_var == "INSP_LOG_CACHE_DIR":
             value = os.getenv("INSPIRE_LOG_CACHE_DIR")
@@ -173,11 +217,31 @@ def config_from_files_and_env(
                 parsed_value = option.parser(value)
             except (ValueError, TypeError) as e:
                 raise ConfigError(f"Invalid {option.env_var} value: {value}") from e
-            config_dict[field_name] = parsed_value
+            new_value = parsed_value
         else:
-            config_dict[field_name] = value
+            new_value = value
 
+        # If prefer_source is "toml", skip env override for project-sourced fields
+        if prefer_source == "toml" and sources.get(field_name) == SOURCE_PROJECT:
+            continue
+
+        config_dict[field_name] = new_value
         sources[field_name] = SOURCE_ENV
+
+    # Password precedence:
+    # 1) explicit [auth].password from config layers
+    # 2) global [accounts."<username>"].password
+    # 3) INSPIRE_PASSWORD env var (fallback only if still unset)
+    if not config_dict.get("password"):
+        resolved_username = str(config_dict.get("username") or "").strip()
+        account_password = config_dict.get("accounts", {}).get(resolved_username)
+        if account_password:
+            config_dict["password"] = account_password
+            sources["password"] = SOURCE_GLOBAL
+
+    if not config_dict.get("password") and env_password:
+        config_dict["password"] = env_password
+        sources["password"] = SOURCE_ENV
 
     if not config_dict.get("github_token"):
         github_token_fallback = os.getenv("GITHUB_TOKEN")
@@ -196,7 +260,9 @@ def config_from_files_and_env(
         if not config_dict["password"]:
             raise ConfigError(
                 "Missing password configuration.\n"
-                "Set INSPIRE_PASSWORD env var (recommended for security)"
+                "Set INSPIRE_PASSWORD env var or add a global account password:\n"
+                "  [accounts.\"your_username\"]\n"
+                "  password = 'your_password'"
             )
 
     if require_target_dir and not config_dict["target_dir"]:
@@ -209,6 +275,7 @@ def config_from_files_and_env(
 
     config_dict["_global_config_path"] = global_config_path
     config_dict["_project_config_path"] = project_config_path
+    config_dict["prefer_source"] = prefer_source
 
     global_path = config_dict.pop("_global_config_path", None)
     project_path = config_dict.pop("_project_config_path", None)

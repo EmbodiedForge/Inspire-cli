@@ -57,20 +57,41 @@ def list_images(
     source: str = "SOURCE_OFFICIAL",
     session: Optional[WebSession] = None,
 ) -> list[ImageInfo]:
-    """List available Docker images."""
+    """List available Docker images.
+
+    Args:
+        workspace_id: Workspace ID for filtering.
+        source: Image source filter. Use "SOURCE_OFFICIAL" for official images,
+            "SOURCE_PUBLIC" for public images (uses visibility filter as
+            required by the platform API).
+        session: Existing web session.
+    """
     session, workspace_id = _get_session_and_workspace_id(
         workspace_id=workspace_id, session=session
     )
 
-    body = {
-        "page": 0,
-        "page_size": -1,
-        "filter": {
-            "source": source,
-            "source_list": [],
-            "registry_hint": {"workspace_id": workspace_id},
-        },
-    }
+    if source == "SOURCE_PUBLIC":
+        # Public images require source_list + visibility (not a simple source field).
+        # Discovered via Playwright network capture of the platform UI.
+        body: dict = {
+            "page": 0,
+            "page_size": -1,
+            "filter": {
+                "source_list": ["SOURCE_PRIVATE", "SOURCE_PUBLIC"],
+                "visibility": "VISIBILITY_PUBLIC",
+                "registry_hint": {"workspace_id": workspace_id},
+            },
+        }
+    else:
+        body = {
+            "page": 0,
+            "page_size": -1,
+            "filter": {
+                "source": source,
+                "source_list": [],
+                "registry_hint": {"workspace_id": workspace_id},
+            },
+        }
 
     data = _request_notebooks_data(
         session,
@@ -104,18 +125,74 @@ def get_notebook_schedule(
     workspace_id: Optional[str] = None,
     session: Optional[WebSession] = None,
 ) -> dict:
-    """Get notebook schedule configuration including resource specs."""
+    """Get notebook schedule configuration including resource specs.
+
+    Tries path-parameter format first (the format the UI uses), then falls
+    back to query-parameter format.  Returns an empty schedule when neither
+    endpoint is available.
+    """
     session, workspace_id = _get_session_and_workspace_id(
         workspace_id=workspace_id, session=session
     )
 
-    return _request_notebooks_data(
-        session,
-        "GET",
+    # Try both endpoint formats — the UI uses path param, older deployments
+    # may use query param.
+    for endpoint in [
+        f"/notebook/schedule/{workspace_id}",
         f"/notebook/schedule?workspace_id={workspace_id}",
-        timeout=30,
-        default_data={},
+    ]:
+        try:
+            return _request_notebooks_data(
+                session,
+                "GET",
+                endpoint,
+                timeout=30,
+                default_data={},
+            )
+        except ValueError:
+            continue
+
+    # Neither endpoint worked — return empty schedule.
+    return {}
+
+
+def get_resource_prices(
+    workspace_id: Optional[str] = None,
+    logic_compute_group_id: str = "",
+    session: Optional[WebSession] = None,
+) -> list[dict]:
+    """Fetch resource spec prices for a compute group.
+
+    The UI calls this endpoint when the user opens the resource spec dialog.
+    Returns a list of price entries, each containing quota_id, cpu_count,
+    memory_size_gib, gpu_count, gpu_info, and price.
+    """
+    session, workspace_id = _get_session_and_workspace_id(
+        workspace_id=workspace_id, session=session
     )
+
+    body = {
+        "workspace_id": workspace_id,
+        "schedule_config_type": "SCHEDULE_CONFIG_TYPE_DSW",
+        "logic_compute_group_id": logic_compute_group_id,
+    }
+
+    try:
+        data = _request_notebooks_data(
+            session,
+            "POST",
+            "/resource_prices/logic_compute_groups/",
+            body=body,
+            timeout=30,
+            default_data=[],
+        )
+    except ValueError:
+        return []
+
+    if isinstance(data, list):
+        return data
+    # The API nests results under 'lcg_resource_spec_prices'
+    return data.get("lcg_resource_spec_prices", data.get("resource_spec_prices", data.get("list", [])))
 
 
 def list_notebook_compute_groups(
@@ -200,28 +277,45 @@ def create_notebook(
     auto_stop: bool,
     workspace_id: Optional[str] = None,
     session: Optional[WebSession] = None,
+    task_priority: Optional[int] = None,
+    resource_spec_price: Optional[dict] = None,
 ) -> dict:
-    """Create a new notebook instance."""
+    """Create a new notebook instance.
+
+    The request body must match the exact structure the platform UI sends.
+    Captured via Playwright network interception — the proto rejects unknown
+    fields, so only send fields the backend expects.
+    """
     session, workspace_id = _get_session_and_workspace_id(
         workspace_id=workspace_id, session=session
     )
 
-    # Use proto-compatible field names (mirror_id/mirror_url, not image_id/image_url)
-    body = {
+    # Match the exact field set the platform UI sends (captured via Playwright).
+    # Proto-compatible names: mirror_id/mirror_url (not image_id/image_url).
+    # The UI does NOT send: shared_memory_size, gpu_type (top-level).
+    body: dict[str, Any] = {
+        "workspace_id": workspace_id,
         "name": name,
         "project_id": project_id,
         "project_name": project_name,
+        "auto_stop": auto_stop,
         "mirror_id": image_id,
         "mirror_url": image_url,
         "logic_compute_group_id": logic_compute_group_id,
         "quota_id": quota_id,
-        "gpu_count": gpu_count,
         "cpu_count": cpu_count,
+        "gpu_count": gpu_count,
         "memory_size": memory_size,
-        "shared_memory_size": shared_memory_size,
-        "auto_stop": auto_stop,
-        "workspace_id": workspace_id,
     }
+
+    # resource_spec_price is required for GPU notebooks.
+    # Structure: {cpu_type, cpu_count, gpu_type, gpu_count, memory_size_gib,
+    #             logic_compute_group_id, quota_id}
+    if resource_spec_price is not None:
+        body["resource_spec_price"] = resource_spec_price
+
+    if task_priority is not None:
+        body["task_priority"] = task_priority
 
     return _request_notebooks_data(
         session,
@@ -297,6 +391,7 @@ __all__ = [
     "create_notebook",
     "get_notebook_detail",
     "get_notebook_schedule",
+    "get_resource_prices",
     "list_images",
     "list_notebook_compute_groups",
     "start_notebook",

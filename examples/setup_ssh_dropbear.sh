@@ -61,7 +61,8 @@ sleep 1
 
 # Start dropbear
 echo ">>> Starting dropbear on port $SSH_PORT..."
-dropbear -R -E -p "$SSH_PORT" >/tmp/dropbear.log 2>&1 &
+# -F: do not daemonize (so $! is the actual dropbear PID)
+dropbear -R -E -F -p "$SSH_PORT" >/tmp/dropbear.log 2>&1 &
 DROPBEAR_PID=$!
 sleep 2
 
@@ -85,12 +86,12 @@ if [ ! -x "$RTUNNEL_BIN" ]; then
 fi
 
 # Kill any existing rtunnel
-pkill -f "rtunnel.*server" 2>/dev/null || true
+pkill -f "rtunnel.*:$RTUNNEL_PORT" 2>/dev/null || true
 sleep 1
 
-# Start rtunnel server
-echo ">>> Starting rtunnel server on port $RTUNNEL_PORT..."
-nohup "$RTUNNEL_BIN" server --port "$RTUNNEL_PORT" >/tmp/rtunnel-server.log 2>&1 &
+# Start rtunnel server (forward websocket connections on RTUNNEL_PORT to dropbear on SSH_PORT)
+echo ">>> Starting rtunnel: 127.0.0.1:$SSH_PORT -> 0.0.0.0:$RTUNNEL_PORT..."
+nohup "$RTUNNEL_BIN" "127.0.0.1:$SSH_PORT" "0.0.0.0:$RTUNNEL_PORT" >/tmp/rtunnel-server.log 2>&1 &
 RTUNNEL_PID=$!
 sleep 2
 

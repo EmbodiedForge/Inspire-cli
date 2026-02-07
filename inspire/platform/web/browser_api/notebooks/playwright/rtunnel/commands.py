@@ -44,8 +44,9 @@ def build_rtunnel_setup_commands(
         key_line,
     ]
 
+    # Always set RTUNNEL_BIN_PATH (empty string if not configured)
+    cmd_lines.append(f"RTUNNEL_BIN_PATH={shlex.quote(rtunnel_bin or '')}")
     if rtunnel_bin:
-        cmd_lines.append(f"RTUNNEL_BIN_PATH={shlex.quote(rtunnel_bin)}")
         cmd_lines.append(
             'if [ -f "$RTUNNEL_BIN_PATH" ]; then cp "$RTUNNEL_BIN_PATH" /tmp/rtunnel '
             "&& chmod +x /tmp/rtunnel; fi"
@@ -63,13 +64,18 @@ def build_rtunnel_setup_commands(
                 "ssh.setup_script (or INSPIRE_SETUP_SCRIPT) is required when using "
                 "ssh.dropbear_deb_dir."
             )
-        rtunnel_bin_arg = rtunnel_bin or ""
+        cmd_lines.append(f"SETUP_SCRIPT={shlex.quote(setup_script)}")
         cmd_lines.append(
-            f"bash {shlex.quote(setup_script)} {shlex.quote(dropbear_deb_dir)} "
-            f'{shlex.quote(rtunnel_bin_arg)} "$SSH_PORT" "$PORT" '
-            ">/tmp/setup_ssh.log 2>&1; tail -80 /tmp/setup_ssh.log; echo "
-            "'>>> dropbear log'; tail -60 /tmp/dropbear.log 2>/dev/null || true; echo "
-            "'>>> rtunnel log'; tail -60 /tmp/rtunnel-server.log 2>/dev/null || true"
+            '[ -f "$SETUP_SCRIPT" ] || echo "ERROR: setup script not found: $SETUP_SCRIPT"'
+        )
+        cmd_lines.append(
+            'bash "$SETUP_SCRIPT" "$DROPBEAR_DEB_DIR" "$RTUNNEL_BIN_PATH" '
+            '"$SSH_PORT" "$PORT" >/tmp/setup_ssh.log 2>&1'
+        )
+        cmd_lines.append("tail -80 /tmp/setup_ssh.log")
+        cmd_lines.append(
+            "echo '>>> dropbear log'; tail -60 /tmp/dropbear.log 2>/dev/null || true; "
+            "echo '>>> rtunnel log'; tail -60 /tmp/rtunnel-server.log 2>/dev/null || true"
         )
     else:
         cmd_lines.extend(

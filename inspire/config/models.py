@@ -126,6 +126,13 @@ class Config:
     # Remote environment variables (injected into bridge exec, jobs, run commands)
     remote_env: dict[str, str] = field(default_factory=dict)
 
+    # Global per-account secrets map, loaded from global config:
+    # [accounts."<username>"].password
+    accounts: dict[str, str] = field(default_factory=dict)
+
+    # Source precedence: "env" (default) = env vars win, "toml" = project TOML wins
+    prefer_source: str = "env"
+
     # Class-level config paths
     GLOBAL_CONFIG_PATH = Path.home() / ".config" / "inspire" / CONFIG_FILENAME
 

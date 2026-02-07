@@ -86,12 +86,15 @@ class TunnelConfig:
 
     bridges: dict[str, BridgeProfile] = field(default_factory=dict)
     default_bridge: Optional[str] = None
+    account: Optional[str] = None
 
     # Paths
     config_dir: Path = field(default_factory=lambda: Path.home() / ".inspire")
 
     @property
     def config_file(self) -> Path:
+        if self.account:
+            return self.config_dir / f"bridges-{self.account}.json"
         return self.config_dir / "bridges.json"
 
     @property

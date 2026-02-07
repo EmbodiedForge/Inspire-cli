@@ -55,7 +55,11 @@ class _BrowserRequestClient:
         if resp.status == 401:
             raise SessionExpiredError("Session expired or invalid")
         if resp.status >= 400:
-            raise ValueError(f"API returned {resp.status}")
+            try:
+                body_text = resp.text()
+            except Exception:
+                body_text = ""
+            raise ValueError(f"API returned {resp.status}: {body_text}")
 
         return resp.json()
 

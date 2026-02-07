@@ -12,7 +12,7 @@ AUTH_OPTIONS: list[ConfigOption] = [
         description="Platform username",
         default=None,
         category="Authentication",
-        scope="global",
+        scope="project",
     ),
     ConfigOption(
         env_var="INSPIRE_PASSWORD",

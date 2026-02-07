@@ -247,6 +247,21 @@ def _show_table(
         click.echo(f"  Project: {project_path} " + click.style("(found)", fg="green"))
     else:
         click.echo("  Project: ./inspire/config.toml " + click.style("(not found)", fg="white"))
+
+    prefer_source = getattr(cfg, "prefer_source", "env")
+    if prefer_source == "toml":
+        click.echo(
+            "  Precedence: "
+            + click.style("project TOML wins", fg="green")
+            + " on conflict"
+        )
+    else:
+        click.echo(
+            "  Precedence: "
+            + click.style("env vars win", fg="yellow")
+            + " on conflict (default)"
+        )
+
     click.echo()
 
     categories = get_categories()
@@ -313,6 +328,7 @@ def _show_json(
             "global": str(global_path) if global_path else None,
             "project": str(project_path) if project_path else None,
         },
+        "prefer_source": getattr(cfg, "prefer_source", "env"),
         "values": {},
     }
 

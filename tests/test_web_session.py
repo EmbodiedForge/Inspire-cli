@@ -173,6 +173,13 @@ def test_browser_request_context_posts_json_bytes():
 def test_get_credentials_prefers_project_toml_when_prefer_source_toml(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    global_dir = tmp_path / ".config" / "inspire"
+    global_dir.mkdir(parents=True)
+    (global_dir / "config.toml").write_text("""
+[accounts."toml-user"]
+password = "global-pass"
+""")
+
     project_dir = tmp_path / ".inspire"
     project_dir.mkdir()
     (project_dir / "config.toml").write_text("""
@@ -181,9 +188,8 @@ prefer_source = "toml"
 
 [auth]
 username = "toml-user"
-password = "toml-pass"
 """)
-    monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "missing" / "config.toml")
+    monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_dir / "config.toml")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("INSPIRE_USERNAME", "env-user")
     monkeypatch.setenv("INSPIRE_PASSWORD", "env-pass")
@@ -191,7 +197,7 @@ password = "toml-pass"
     username, password = ws.get_credentials()
 
     assert username == "toml-user"
-    assert password == "toml-pass"
+    assert password == "global-pass"
 
 
 def test_get_web_session_reauths_when_cached_user_mismatch(monkeypatch: pytest.MonkeyPatch):
@@ -214,7 +220,7 @@ def test_get_web_session_reauths_when_cached_user_mismatch(monkeypatch: pytest.M
     monkeypatch.setattr(
         ws_auth.WebSession,
         "load",
-        classmethod(lambda cls, allow_expired=False: cached),
+        classmethod(lambda cls, allow_expired=False, account=None: cached),
     )
     monkeypatch.setattr(ws_auth, "get_credentials", lambda: ("new-user", "new-pass"))
     monkeypatch.setattr(
@@ -238,3 +244,47 @@ def test_get_web_session_reauths_when_cached_user_mismatch(monkeypatch: pytest.M
     assert calls["username"] == "new-user"
     assert calls["password"] == "new-pass"
     assert calls["base_url"] == "https://example.invalid"
+
+
+def test_get_web_session_uses_account_scoped_cache(monkeypatch: pytest.MonkeyPatch):
+    cached = WebSession(
+        storage_state={"cookies": [{"name": "session", "value": "abc"}]},
+        cookies={"session": "abc"},
+        workspace_id="ws-test",
+        login_username="project-user",
+        created_at=0,
+    )
+    load_calls: list[str | None] = []
+
+    def fake_load(cls, allow_expired=False, account=None):  # type: ignore[no-untyped-def]
+        load_calls.append(account)
+        return cached
+
+    monkeypatch.setattr(ws_auth.WebSession, "load", classmethod(fake_load))
+    monkeypatch.setattr(ws_auth, "get_credentials", lambda: ("project-user", "secret"))
+
+    session = ws_auth.get_web_session(force_refresh=False, require_workspace=False)
+
+    assert session is cached
+    assert load_calls
+    assert load_calls[0] == "project-user"
+
+
+def test_clear_session_cache_removes_scoped_and_legacy_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir(parents=True)
+    legacy = cache_dir / "web_session.json"
+    scoped = cache_dir / "web_session-project-user.json"
+    other = cache_dir / "not_session.json"
+    legacy.write_text("{}")
+    scoped.write_text("{}")
+    other.write_text("{}")
+
+    monkeypatch.setattr(ws, "SESSION_CACHE_FILE", legacy)
+    ws.clear_session_cache()
+
+    assert not legacy.exists()
+    assert not scoped.exists()
+    assert other.exists()

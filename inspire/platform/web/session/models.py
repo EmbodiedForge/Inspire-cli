@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-# Session cache file
-SESSION_CACHE_FILE = Path.home() / ".cache" / "inspire-cli" / "web_session.json"
+# Session cache files
+SESSION_CACHE_DIR = Path.home() / ".cache" / "inspire-cli"
+SESSION_CACHE_FILE = SESSION_CACHE_DIR / "web_session.json"  # legacy/default path
 SESSION_TTL = 3600  # 1 hour
 
 
@@ -20,6 +22,23 @@ class SessionExpiredError(Exception):
 
 # Default workspace placeholder (override with INSPIRE_WORKSPACE_ID env var)
 DEFAULT_WORKSPACE_ID = "ws-00000000-0000-0000-0000-000000000000"
+
+
+def normalize_account_for_cache(account: Optional[str]) -> Optional[str]:
+    if not account:
+        return None
+    value = account.strip()
+    if not value:
+        return None
+    normalized = re.sub(r"[^A-Za-z0-9._-]+", "_", value)
+    return normalized or None
+
+
+def get_session_cache_file(account: Optional[str] = None) -> Path:
+    normalized = normalize_account_for_cache(account)
+    if not normalized:
+        return SESSION_CACHE_FILE
+    return SESSION_CACHE_DIR / f"web_session-{normalized}.json"
 
 
 @dataclass
@@ -67,35 +86,50 @@ class WebSession:
             created_at=data["created_at"],
         )
 
-    def save(self) -> None:
+    def save(self, account: Optional[str] = None) -> None:
         """Save session to cache file."""
-        SESSION_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        cache_file = get_session_cache_file(account or self.login_username)
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
         # Restrict permissions: session contains sensitive cookies/tokens.
-        tmp_path = SESSION_CACHE_FILE.with_suffix(".tmp")
+        tmp_path = cache_file.with_suffix(".tmp")
         with open(tmp_path, "w") as f:
             json.dump(self.to_dict(), f)
-        os.replace(tmp_path, SESSION_CACHE_FILE)
+        os.replace(tmp_path, cache_file)
         try:
-            os.chmod(SESSION_CACHE_FILE, 0o600)
+            os.chmod(cache_file, 0o600)
         except Exception:
             pass
 
     @classmethod
-    def load(cls, allow_expired: bool = False) -> Optional["WebSession"]:
+    def load(
+        cls,
+        allow_expired: bool = False,
+        account: Optional[str] = None,
+    ) -> Optional["WebSession"]:
         """Load session from cache file if valid.
 
         Args:
             allow_expired: If True, return session even if TTL has expired.
                           The session cookies may still be valid server-side.
         """
-        if not SESSION_CACHE_FILE.exists():
-            return None
-        try:
-            with open(SESSION_CACHE_FILE) as f:
-                data = json.load(f)
-            session = cls.from_dict(data)
-            if allow_expired or session.is_valid():
-                return session
-        except (json.JSONDecodeError, KeyError):
-            pass
+        candidates: list[Path] = []
+        scoped_file = get_session_cache_file(account)
+        if scoped_file.exists():
+            candidates.append(scoped_file)
+        # Backward compatibility: if account-scoped file is missing or invalid,
+        # fall back to the legacy shared cache path.
+        if scoped_file != SESSION_CACHE_FILE and SESSION_CACHE_FILE.exists():
+            candidates.append(SESSION_CACHE_FILE)
+        elif not candidates and SESSION_CACHE_FILE.exists():
+            candidates.append(SESSION_CACHE_FILE)
+
+        for cache_file in candidates:
+            try:
+                with open(cache_file) as f:
+                    data = json.load(f)
+                session = cls.from_dict(data)
+                if allow_expired or session.is_valid():
+                    return session
+            except (json.JSONDecodeError, KeyError):
+                continue
         return None

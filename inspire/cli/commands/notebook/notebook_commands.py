@@ -106,6 +106,112 @@ def _try_get_current_user_ids(
     return []
 
 
+def _get_current_user_detail(
+    session: web_session_module.WebSession,
+    *,
+    base_url: str,
+) -> dict:
+    user_data = web_session_module.request_json(
+        session,
+        "GET",
+        f"{base_url}/api/v1/user/detail",
+        timeout=30,
+    )
+    return user_data.get("data", {}) if isinstance(user_data, dict) else {}
+
+
+def _first_non_empty_str(data: dict, keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = data.get(key)
+        if value is None:
+            continue
+        value_str = str(value).strip()
+        if value_str:
+            return value_str
+    return ""
+
+
+def _collect_user_ids(data: dict, keys: tuple[str, ...]) -> set[str]:
+    ids: set[str] = set()
+    for key in keys:
+        value = data.get(key)
+        if value is None:
+            continue
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    candidate = _first_non_empty_str(item, ("id", "user_id", "uid"))
+                else:
+                    candidate = str(item).strip()
+                if candidate:
+                    ids.add(candidate)
+            continue
+        if isinstance(value, dict):
+            candidate = _first_non_empty_str(value, ("id", "user_id", "uid"))
+        else:
+            candidate = str(value).strip()
+        if candidate:
+            ids.add(candidate)
+    return ids
+
+
+def _validate_notebook_account_access(
+    *,
+    current_user: dict,
+    notebook_detail: dict,
+) -> tuple[bool, str]:
+    current_user_id = _first_non_empty_str(current_user, ("id", "user_id", "uid"))
+    current_username = _first_non_empty_str(
+        current_user,
+        ("username", "user_name", "name", "email", "account"),
+    )
+    if not current_user_id and not current_username:
+        return True, ""
+
+    owner_ids = _collect_user_ids(
+        notebook_detail,
+        ("user_id", "owner_id", "creator_id", "created_by", "owner", "creator"),
+    )
+    member_ids = _collect_user_ids(
+        notebook_detail,
+        ("members", "member_list", "users", "collaborators", "authorized_users"),
+    )
+
+    owner_names = set()
+    for key in ("username", "owner_username", "creator_username", "created_by_username"):
+        value = notebook_detail.get(key)
+        if value is None:
+            continue
+        value_str = str(value).strip()
+        if value_str:
+            owner_names.add(value_str)
+
+    if member_ids and current_user_id and current_user_id in member_ids:
+        return True, ""
+    if owner_ids and current_user_id and current_user_id in owner_ids:
+        return True, ""
+    if owner_names and current_username and current_username in owner_names:
+        return True, ""
+
+    if owner_ids and current_user_id and current_user_id not in owner_ids and (
+        not member_ids or current_user_id not in member_ids
+    ):
+        return (
+            False,
+            f"current user id '{current_user_id}' is not allowed for this notebook "
+            f"(owner ids: {', '.join(sorted(owner_ids))})",
+        )
+
+    if owner_names and current_username and current_username not in owner_names:
+        return (
+            False,
+            f"current user '{current_username}' does not match notebook owner "
+            f"({', '.join(sorted(owner_names))})",
+        )
+
+    return True, ""
+
+
 def _list_notebooks_for_workspace(
     session: web_session_module.WebSession,
     *,
@@ -349,6 +455,12 @@ def _resolve_notebook_id(
     is_flag=True,
     help="Alias for global --json",
 )
+@click.option(
+    "--priority",
+    type=click.IntRange(1, 9),
+    default=None,
+    help="Task priority (1-9, default from config [job].priority or 6)",
+)
 @pass_context
 def create_notebook_cmd(
     ctx: Context,
@@ -364,6 +476,7 @@ def create_notebook_cmd(
     wait: bool,
     keepalive: bool,
     json_output: bool,
+    priority: Optional[int],
 ) -> None:
     """Create a new interactive notebook instance.
 
@@ -379,6 +492,7 @@ def create_notebook_cmd(
         inspire notebook create --no-auto -r 1xH200 # Disable auto-select
         inspire notebook create --no-keepalive      # Disable GPU keepalive script
         inspire notebook create --no-keepalive --no-wait  # Old behavior (return immediately)
+        inspire notebook create --priority 5        # Set task priority to 5
     """
     run_notebook_create(
         ctx,
@@ -394,6 +508,7 @@ def create_notebook_cmd(
         wait=wait,
         keepalive=keepalive,
         json_output=json_output,
+        priority=priority,
     )
 
 
@@ -953,8 +1068,8 @@ def run_notebook_ssh(
         ctx,
         hint=(
             "Notebook SSH requires web authentication. "
-            "Set [auth].username/password in config.toml or "
-            "INSPIRE_USERNAME/INSPIRE_PASSWORD."
+            "Set [auth].username and configure password via INSPIRE_PASSWORD "
+            "or global [accounts.\"<username>\"].password."
         ),
     )
 
@@ -990,12 +1105,41 @@ def run_notebook_ssh(
         _handle_error(ctx, "APIError", str(e), EXIT_API_ERROR)
         return
 
+    current_user_detail: dict = {}
+    try:
+        current_user_detail = _get_current_user_detail(session, base_url=base_url)
+    except Exception:
+        current_user_detail = {}
+
+    allowed, reason = _validate_notebook_account_access(
+        current_user=current_user_detail,
+        notebook_detail=notebook_detail,
+    )
+    if not allowed:
+        configured_user = str(getattr(config, "username", "") or "").strip()
+        user_label = configured_user or "current account"
+        _handle_error(
+            ctx,
+            "ConfigError",
+            "Notebook/account mismatch detected before tunnel setup: "
+            f"{reason}.",
+            EXIT_CONFIG_ERROR,
+            hint=(
+                f"Notebook '{notebook_id}' appears to belong to another account. "
+                f"Switch [auth].username for this project (current: {user_label}) and ensure a "
+                "matching password is available via INSPIRE_PASSWORD or global "
+                "[accounts.\"<username>\"].password."
+            ),
+        )
+        return
+
     gpu_info = (notebook_detail.get("resource_spec_price") or {}).get("gpu_info") or {}
     gpu_type = gpu_info.get("gpu_product_simple", "")
     has_internet = has_internet_for_gpu_type(gpu_type)
 
+    tunnel_account = str(getattr(config, "username", "") or "").strip() or None
     profile_name = save_as or f"notebook-{notebook_id[:8]}"
-    cached_config = load_tunnel_config()
+    cached_config = load_tunnel_config(account=tunnel_account)
 
     if profile_name in cached_config.bridges:
         import subprocess
@@ -1075,7 +1219,7 @@ def run_notebook_ssh(
         has_internet=has_internet,
     )
 
-    config = load_tunnel_config()
+    config = load_tunnel_config(account=tunnel_account)
     config.add_bridge(bridge)
     save_tunnel_config(config)
 

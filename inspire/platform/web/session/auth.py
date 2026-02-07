@@ -35,21 +35,21 @@ def _maybe_apply_workspace_override(
         return
     cached.workspace_id = env_workspace_id
     try:
-        cached.save()
+        cached.save(account=cached.login_username)
     except Exception:
         pass
 
 
 def get_credentials() -> tuple[str, str]:
-    """Get web credentials from layered config (env/project/global/default)."""
+    """Get web credentials from layered config (project/global/env/default)."""
     config = _load_runtime_config()
     username = (config.username or "").strip()
     password = config.password or ""
 
     if not username or not password:
         raise ValueError(
-            "Missing web authentication credentials. Set [auth].username/password in "
-            "config.toml or export INSPIRE_USERNAME/INSPIRE_PASSWORD."
+            "Missing web authentication credentials. Set [auth].username in project config and "
+            "configure password via INSPIRE_PASSWORD or global [accounts.\"<username>\"].password."
         )
 
     return username, password
@@ -191,7 +191,7 @@ def login_with_playwright(
             login_username=username,
             created_at=time.time(),
         )
-        session.save()
+        session.save(account=username)
 
         return session
 
@@ -215,11 +215,14 @@ def get_web_session(force_refresh: bool = False, require_workspace: bool = False
         username, password = get_credentials()
     except ValueError as e:
         credentials_error = e
-        username = ""
+        try:
+            username = (_load_runtime_config().username or "").strip()
+        except Exception:
+            username = ""
         password = ""
 
     if not force_refresh:
-        cached = WebSession.load()
+        cached = WebSession.load(account=username or None)
         if cached and cached.storage_state.get("cookies"):
             _maybe_apply_workspace_override(cached, env_workspace_id)
             if require_workspace and not cached.workspace_id:
@@ -233,7 +236,7 @@ def get_web_session(force_refresh: bool = False, require_workspace: bool = False
 
     # If we can't refresh (missing credentials), try the cached session anyway.
     if credentials_error is not None:
-        cached = WebSession.load(allow_expired=True)
+        cached = WebSession.load(allow_expired=True, account=username or None)
         if cached and cached.storage_state.get("cookies"):
             _maybe_apply_workspace_override(cached, env_workspace_id)
 
@@ -244,7 +247,7 @@ def get_web_session(force_refresh: bool = False, require_workspace: bool = False
 
     # Use cached session if available and has cookies, even if beyond TTL.
     # The session cookies may still be valid server-side; let API calls determine validity.
-    cached = WebSession.load(allow_expired=True)
+    cached = WebSession.load(allow_expired=True, account=username or None)
     if cached and cached.storage_state.get("cookies"):
         _maybe_apply_workspace_override(cached, env_workspace_id)
         if (not require_workspace or cached.workspace_id) and _session_matches_username(

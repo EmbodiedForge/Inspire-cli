@@ -95,10 +95,6 @@ class TestConfigSchema:
         global_opts = get_options_by_scope("global")
         global_env_vars = [opt.env_var for opt in global_opts]
 
-        # Auth should be global
-        assert "INSPIRE_USERNAME" in global_env_vars
-        assert "INSPIRE_PASSWORD" in global_env_vars
-
         # API settings should be global
         assert "INSPIRE_BASE_URL" in global_env_vars
         assert "INSPIRE_TIMEOUT" in global_env_vars
@@ -112,11 +108,17 @@ class TestConfigSchema:
 
         # Mirrors should be global
         assert "INSPIRE_APT_MIRROR_URL" in global_env_vars
+        # Password should remain global-scope for security defaults
+        assert "INSPIRE_PASSWORD" in global_env_vars
 
     def test_project_scope_options(self) -> None:
         """Test that expected options have project scope."""
         project_opts = get_options_by_scope("project")
         project_env_vars = [opt.env_var for opt in project_opts]
+
+        # Username should be project-scoped (different repos can use different accounts)
+        assert "INSPIRE_USERNAME" in project_env_vars
+        assert "INSPIRE_PASSWORD" not in project_env_vars
 
         # Paths like target_dir should be project
         assert "INSPIRE_TARGET_DIR" in project_env_vars
@@ -601,7 +603,7 @@ class TestInitCommand:
         monkeypatch.chdir(tmp_path)
 
         # Set both global and project scope env vars
-        monkeypatch.setenv("INSPIRE_USERNAME", "testuser")  # global
+        monkeypatch.setenv("INSPIRE_BASE_URL", "https://custom.example.com")  # global
         monkeypatch.setenv("INSPIRE_TARGET_DIR", "/shared/myproject")  # project
 
         runner = CliRunner()
@@ -614,15 +616,15 @@ class TestInitCommand:
         assert global_config.exists(), "Global config should be created"
         assert project_config.exists(), "Project config should be created"
 
-        # Global config should have username only
+        # Global config should have base_url only
         global_content = global_config.read_text()
-        assert 'username = "testuser"' in global_content
+        assert 'base_url = "https://custom.example.com"' in global_content
         assert "target_dir" not in global_content
 
         # Project config should have target_dir only
         project_content = project_config.read_text()
         assert 'target_dir = "/shared/myproject"' in project_content
-        assert "username" not in project_content
+        assert "base_url" not in project_content
 
     def test_init_global_flag_forces_all_to_global(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
@@ -715,8 +717,8 @@ class TestInitCommand:
         monkeypatch.chdir(tmp_path)
 
         # Set only global scope env vars
-        monkeypatch.setenv("INSPIRE_USERNAME", "testuser")
         monkeypatch.setenv("INSPIRE_BASE_URL", "https://custom.example.com")
+        monkeypatch.setenv("INSPIRE_TIMEOUT", "60")
 
         runner = CliRunner()
         result = runner.invoke(init, ["--force"])
@@ -726,8 +728,8 @@ class TestInitCommand:
         # Global config should exist
         assert global_config.exists()
         global_content = global_config.read_text()
-        assert 'username = "testuser"' in global_content
         assert 'base_url = "https://custom.example.com"' in global_content
+        assert "timeout = 60" in global_content
 
         # Project config should NOT exist (no project-scope vars)
         project_config = tmp_path / PROJECT_CONFIG_DIR / CONFIG_FILENAME
@@ -828,24 +830,24 @@ class TestInitHelpers:
     ) -> None:
         """Test _generate_toml_content with scope_filter parameter."""
         # Set both global and project scope env vars
-        monkeypatch.setenv("INSPIRE_USERNAME", "testuser")  # global
+        monkeypatch.setenv("INSPIRE_BASE_URL", "https://custom.example.com")  # global
         monkeypatch.setenv("INSPIRE_TARGET_DIR", "/shared/myproject")  # project
 
         detected = _detect_env_vars()
 
         # Generate with global filter
         global_content = _generate_toml_content(detected, scope_filter="global")
-        assert 'username = "testuser"' in global_content
+        assert 'base_url = "https://custom.example.com"' in global_content
         assert "target_dir" not in global_content
 
         # Generate with project filter
         project_content = _generate_toml_content(detected, scope_filter="project")
-        assert "username" not in project_content
+        assert "base_url" not in project_content
         assert 'target_dir = "/shared/myproject"' in project_content
 
         # Generate without filter (all options)
         all_content = _generate_toml_content(detected)
-        assert 'username = "testuser"' in all_content
+        assert 'base_url = "https://custom.example.com"' in all_content
         assert 'target_dir = "/shared/myproject"' in all_content
 
     def test_generate_toml_list_values(
@@ -989,3 +991,281 @@ class TestMigrateCommandRemoved:
         # Should fail with "No such command"
         assert result.exit_code != 0
         assert "No such command" in result.output or "Error" in result.output
+
+
+# ===========================================================================
+# prefer_source tests
+# ===========================================================================
+
+
+class TestPreferSource:
+    """Tests for the [cli] prefer_source config setting."""
+
+    @pytest.fixture
+    def clean_env(self, monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+        """Clear relevant env vars for testing."""
+        env_vars = [
+            "INSPIRE_USERNAME",
+            "INSPIRE_PASSWORD",
+            "INSPIRE_BASE_URL",
+            "INSPIRE_TIMEOUT",
+            "INSPIRE_TARGET_DIR",
+            "INSP_GITEA_SERVER",
+        ]
+        for var in env_vars:
+            monkeypatch.delenv(var, raising=False)
+        yield
+
+    def test_default_env_wins(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Test that env vars override project TOML by default (no prefer_source)."""
+        project_dir = tmp_path / ".inspire"
+        project_dir.mkdir()
+        project_config = project_dir / "config.toml"
+        project_config.write_text("""
+[api]
+timeout = 120
+""")
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "nonexistent" / "config.toml")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("INSPIRE_TIMEOUT", "90")
+
+        cfg, sources = Config.from_files_and_env(require_credentials=False)
+
+        assert cfg.timeout == 90
+        assert sources["timeout"] == SOURCE_ENV
+        assert cfg.prefer_source == "env"
+
+    def test_prefer_source_env_explicit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Test that prefer_source = 'env' lets env vars win (same as default)."""
+        project_dir = tmp_path / ".inspire"
+        project_dir.mkdir()
+        project_config = project_dir / "config.toml"
+        project_config.write_text("""
+[cli]
+prefer_source = "env"
+
+[api]
+timeout = 120
+""")
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "nonexistent" / "config.toml")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("INSPIRE_TIMEOUT", "90")
+
+        cfg, sources = Config.from_files_and_env(require_credentials=False)
+
+        assert cfg.timeout == 90
+        assert sources["timeout"] == SOURCE_ENV
+
+    def test_prefer_source_toml_wins(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Test that prefer_source = 'toml' keeps project TOML values over env vars."""
+        project_dir = tmp_path / ".inspire"
+        project_dir.mkdir()
+        project_config = project_dir / "config.toml"
+        project_config.write_text("""
+[cli]
+prefer_source = "toml"
+
+[api]
+timeout = 120
+""")
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "nonexistent" / "config.toml")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("INSPIRE_TIMEOUT", "90")
+
+        cfg, sources = Config.from_files_and_env(require_credentials=False)
+
+        assert cfg.timeout == 120
+        assert sources["timeout"] == SOURCE_PROJECT
+        assert cfg.prefer_source == "toml"
+
+    def test_prefer_source_toml_env_fills_unset(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Test that prefer_source = 'toml' still picks up env vars for fields NOT in project TOML."""
+        project_dir = tmp_path / ".inspire"
+        project_dir.mkdir()
+        project_config = project_dir / "config.toml"
+        project_config.write_text("""
+[cli]
+prefer_source = "toml"
+
+[api]
+timeout = 120
+""")
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "nonexistent" / "config.toml")
+        monkeypatch.chdir(tmp_path)
+        # Set env var for a field NOT in the project TOML
+        monkeypatch.setenv("INSPIRE_USERNAME", "envuser")
+
+        cfg, sources = Config.from_files_and_env(require_credentials=False)
+
+        # timeout should stay from project TOML
+        assert cfg.timeout == 120
+        assert sources["timeout"] == SOURCE_PROJECT
+        # username should come from env (not set in project TOML)
+        assert cfg.username == "envuser"
+        assert sources["username"] == SOURCE_ENV
+
+    def test_prefer_source_toml_global_still_overridden_by_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Test that prefer_source = 'toml' only protects project TOML, not global TOML."""
+        # Create global config
+        global_dir = tmp_path / "global"
+        global_dir.mkdir()
+        global_config = global_dir / "config.toml"
+        global_config.write_text("""
+[api]
+timeout = 45
+""")
+
+        # Create project config with prefer_source but NOT setting timeout
+        project_dir = tmp_path / ".inspire"
+        project_dir.mkdir()
+        project_config = project_dir / "config.toml"
+        project_config.write_text("""
+[cli]
+prefer_source = "toml"
+""")
+
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("INSPIRE_TIMEOUT", "90")
+
+        cfg, sources = Config.from_files_and_env(require_credentials=False)
+
+        # timeout from global TOML should be overridden by env var
+        assert cfg.timeout == 90
+        assert sources["timeout"] == SOURCE_ENV
+
+    def test_password_resolves_from_global_accounts_map(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Project username should pick password from global [accounts] mapping."""
+        global_dir = tmp_path / "global"
+        global_dir.mkdir()
+        global_config = global_dir / "config.toml"
+        global_config.write_text("""
+[accounts."toml-user"]
+password = "global-pass"
+""")
+
+        project_dir = tmp_path / ".inspire"
+        project_dir.mkdir()
+        project_config = project_dir / "config.toml"
+        project_config.write_text("""
+[cli]
+prefer_source = "toml"
+
+[auth]
+username = "toml-user"
+""")
+
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("INSPIRE_PASSWORD", "env-pass")
+
+        cfg, sources = Config.from_files_and_env(require_credentials=False)
+
+        assert cfg.username == "toml-user"
+        assert cfg.password == "global-pass"
+        assert sources["password"] == SOURCE_GLOBAL
+
+    def test_password_env_used_when_global_account_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """INSPIRE_PASSWORD should still work when no global account password is defined."""
+        project_dir = tmp_path / ".inspire"
+        project_dir.mkdir()
+        project_config = project_dir / "config.toml"
+        project_config.write_text("""
+[auth]
+username = "toml-user"
+""")
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "missing" / "config.toml")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("INSPIRE_PASSWORD", "env-pass")
+
+        cfg, sources = Config.from_files_and_env(require_credentials=False)
+
+        assert cfg.password == "env-pass"
+        assert sources["password"] == SOURCE_ENV
+
+    def test_prefer_source_invalid_raises_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Test that an invalid prefer_source value raises ConfigError."""
+        project_dir = tmp_path / ".inspire"
+        project_dir.mkdir()
+        project_config = project_dir / "config.toml"
+        project_config.write_text("""
+[cli]
+prefer_source = "invalid"
+""")
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "nonexistent" / "config.toml")
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(ConfigError, match="Invalid prefer_source value"):
+            Config.from_files_and_env(require_credentials=False)
+
+    def test_config_show_displays_precedence(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Test that config show displays the precedence mode."""
+        project_dir = tmp_path / ".inspire"
+        project_dir.mkdir()
+        project_config = project_dir / "config.toml"
+        project_config.write_text("""
+[cli]
+prefer_source = "toml"
+""")
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "nonexistent" / "config.toml")
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(config_command, ["show"])
+
+        assert result.exit_code == 0
+        assert "Precedence:" in result.output
+        assert "project TOML wins" in result.output
+
+    def test_config_show_displays_default_precedence(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Test that config show displays default precedence when no prefer_source set."""
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "nonexistent" / "config.toml")
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(config_command, ["show"])
+
+        assert result.exit_code == 0
+        assert "Precedence:" in result.output
+        assert "env vars win" in result.output
+
+    def test_config_show_json_includes_prefer_source(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Test that config show --format json includes prefer_source."""
+        project_dir = tmp_path / ".inspire"
+        project_dir.mkdir()
+        project_config = project_dir / "config.toml"
+        project_config.write_text("""
+[cli]
+prefer_source = "toml"
+""")
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "nonexistent" / "config.toml")
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(config_command, ["show", "--format", "json"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["prefer_source"] == "toml"

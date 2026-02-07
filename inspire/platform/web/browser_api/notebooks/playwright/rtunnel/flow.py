@@ -81,7 +81,7 @@ def _setup_notebook_rtunnel_sync(
                         timeout=180000,
                     )
 
-            for label in ("No", "Yes", "否", "不接收", "取消"):
+            for label in ("Dismiss", "No", "Yes", "否", "不接收", "取消"):
                 try:
                     btn = lab_frame.get_by_role("button", name=label)
                     if btn.count() > 0:
@@ -92,15 +92,28 @@ def _setup_notebook_rtunnel_sync(
 
             terminal_opened = False
 
-            terminal_card = lab_frame.locator(
-                "div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')"
-            )
+            # Check if a terminal tab is already open (e.g. from keepalive script)
             try:
-                terminal_card.first.wait_for(state="visible", timeout=20000)
-                terminal_card.first.click(timeout=8000)
-                terminal_opened = True
+                existing_term = lab_frame.locator(
+                    "li.lm-TabBar-tab:has-text('Terminal'), li.lm-TabBar-tab:has-text('终端')"
+                ).first
+                if existing_term.count() > 0:
+                    existing_term.click(timeout=2000)
+                    page.wait_for_timeout(500)
+                    terminal_opened = True
             except Exception:
-                terminal_opened = False
+                pass
+
+            if not terminal_opened:
+                terminal_card = lab_frame.locator(
+                    "div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')"
+                )
+                try:
+                    terminal_card.first.wait_for(state="visible", timeout=20000)
+                    terminal_card.first.click(timeout=8000)
+                    terminal_opened = True
+                except Exception:
+                    terminal_opened = False
 
             if not terminal_opened:
                 try:
@@ -163,16 +176,15 @@ def _setup_notebook_rtunnel_sync(
                 ssh_runtime=ssh_runtime,
             )
 
-            _sys.stderr.write("  Executing setup commands in notebook terminal...\n")
+            total_chars = sum(len(line) for line in cmd_lines)
+            _sys.stderr.write(
+                f"  Executing {len(cmd_lines)} setup commands "
+                f"({total_chars} chars) in notebook terminal...\n"
+            )
             _sys.stderr.flush()
             for line in cmd_lines:
-                page.keyboard.type(line, delay=2)
+                page.keyboard.insert_text(line)
                 page.keyboard.press("Enter")
-                page.wait_for_timeout(200)
-
-            _sys.stderr.write("  Waiting for services to start...\n")
-            _sys.stderr.flush()
-            page.wait_for_timeout(5000)
             try:
                 page.screenshot(path="/tmp/notebook_terminal_debug.png")
             except Exception:
@@ -206,7 +218,7 @@ def _setup_notebook_rtunnel_sync(
             if not proxy_url:
                 proxy_url = jupyter_proxy_url
 
-            _sys.stderr.write("  Verifying rtunnel is reachable...\n")
+            _sys.stderr.write(f"  Verifying rtunnel is reachable at: {proxy_url}\n")
             _sys.stderr.flush()
             wait_for_rtunnel_reachable(
                 proxy_url=proxy_url,
