@@ -1,217 +1,146 @@
-# Inspire CLI - AI Documentation
+# Inspire CLI - AI Notes
 
 > Quick reference for AI assistants working with the Inspire CLI codebase.
 
 ## Project Overview
 
-Inspire CLI is a command-line tool for the Inspire HPC training platform:
-- Submit and manage training jobs on GPU clusters
-- Monitor job status and retrieve logs
-- Sync code to remote clusters via Git Actions (Gitea/GitHub)
-- Launch and SSH into interactive notebook sessions
-- View real-time GPU availability
+Inspire CLI is a command-line tool for the Inspire HPC platform:
+- Submit and manage jobs on GPU clusters
+- Monitor status and stream logs
+- Sync repositories to remote Bridge runners
+- Launch and SSH into notebook sessions
+- Inspect GPU/node availability
 
-## Architecture
+## Public Sync Scope (.gitignore)
 
-```
+Treat `.gitignore` as the source of truth for public-sync boundaries.
+
+Ignored/internal paths currently include:
+- `.inspire/`
+- `internal/`
+- `scripts/`
+- `API_ENDPOINTS.md`
+- `CLAUDE.md`
+- `config.toml.example`
+- `docs/rtunnel-ssh-setup.md`
+
+When preparing `github-public` sync, avoid adding docs/tests/examples that depend on ignored files.
+
+## Architecture (Current)
+
+```text
 inspire-cli/
 ├── inspire/
-│   ├── __init__.py              # Package version
-│   ├── compute_groups.py        # GPU resource definitions
-│   ├── config/                  # Config models + TOML/env loading
+│   ├── __init__.py
+│   ├── cli/
+│   │   ├── main.py
+│   │   ├── context.py
+│   │   ├── commands/
+│   │   │   ├── bridge/
+│   │   │   ├── config/
+│   │   │   ├── init/
+│   │   │   ├── job/
+│   │   │   ├── notebook/
+│   │   │   ├── resources/
+│   │   │   ├── tunnel/
+│   │   │   ├── run.py
+│   │   │   └── sync.py
+│   │   ├── formatters/
+│   │   └── utils/
+│   ├── config/                  # Config models/loaders/schema/options
 │   ├── platform/
-│   │   ├── openapi/             # Token-based OpenAPI client + resource selection
-│   │   └── web/                 # Web-session (SSO) + browser-only endpoints
+│   │   ├── openapi/             # Token-based API client + resource matching
+│   │   └── web/                 # SSO session + browser-only APIs
 │   │       ├── session/
-│   │       ├── browser_api/
-│   │       └── resources.py     # Workspace node availability
+│   │       └── browser_api/
 │   ├── bridge/
-│   │   ├── forge/               # GitHub/Gitea Actions workflows (fallback path)
-│   │   └── tunnel/              # rtunnel/SSH ProxyCommand support
-│   └── cli/
-│       ├── main.py              # Entry point, Click groups
-│       ├── context.py           # CLI context, exit codes
-│       ├── commands/            # Command implementations
-│       │   ├── job.py           # job create/status/logs/stop/list/wait
-│       │   ├── resources.py     # resources list (GPU availability)
-│       │   ├── config.py        # config show/check/env
-│       │   ├── init.py          # inspire init
-│       │   ├── sync.py          # sync code to Bridge
-│       │   ├── bridge.py        # bridge exec
-│       │   ├── run.py           # quick job submission
-│       │   ├── notebook.py      # notebook list/create/start/stop/ssh
-│       │   └── tunnel.py        # SSH tunnel management
-│       ├── utils/               # CLI-only helpers (keep minimal)
-│       │   ├── auth.py          # OpenAPI authentication wrapper
-│       │   ├── job_cache.py     # Local job metadata cache
-│       │   └── job_submit.py    # Job submission helpers (CLI)
-│       └── formatters/
-│           ├── json_formatter.py
-│           └── human_formatter.py
+│   │   ├── forge/               # GitHub/Gitea Actions integrations
+│   │   └── tunnel/              # rtunnel/SSH integration
+│   ├── core/
+│   ├── features/
+│   └── api/                     # Legacy compatibility surface
+├── tests/
 ├── examples/
-│   ├── setup_ssh_dropbear.sh    # SSH setup for offline clusters
-│   └── workflows/               # Example Actions workflows
-└── tests/
-    └── test_*.py
+├── AGENTS.md
+└── pyproject.toml
 ```
 
-## Key Commands
+## Top-Level CLI Groups
 
 ```bash
-# Jobs
-inspire job create --name "train" --resource "4xH200" --command "bash train.sh"
-inspire job status <job-id>
-inspire job logs <job-id> --follow
-inspire job stop <job-id>
-inspire job list
-inspire job wait <job-id>
-
-# Quick Run
-inspire run "python train.py"                    # Auto-select resources
-inspire run "python train.py" --gpus 4 --type H100
-inspire run "python train.py" --watch            # Sync, run, follow logs
-
-# Resources
-inspire resources list                # GPU availability
-inspire resources list --watch        # Watch mode
-inspire resources list --workspace    # Node-level view
-
-# Notebooks
-inspire notebook list
-inspire notebook create --resource 1xH200
-inspire notebook start <id>           # Start stopped notebook
-inspire notebook stop <id>
-inspire notebook ssh <id>             # SSH into notebook
-
-# Sync & Bridge
-inspire sync                          # Sync code via Git Actions
-inspire bridge exec "bash train.sh"   # Run command on Bridge
-
-# Config
-inspire init                          # Initialize config
-inspire config show                   # Display config
+inspire job ...
+inspire resources ...
+inspire config ...
+inspire sync ...
+inspire bridge ...
+inspire tunnel ...
+inspire run ...
+inspire notebook ...
+inspire init
 ```
 
-## Configuration
+## Configuration Model
 
-### Precedence (lowest to highest)
-```
-Defaults < Global config.toml < Project config.toml < Environment variables
+### Precedence
+```text
+Defaults < Global TOML < Project TOML < Environment variables
 ```
 
 ### Config File Locations
-- **Global**: `~/.config/inspire/config.toml`
-- **Project**: `./.inspire/config.toml`
+- Global: `~/.config/inspire/config.toml`
+- Project: `./.inspire/config.toml`
 
-### Key Environment Variables
+### High-Impact Env Vars
+- `INSPIRE_USERNAME`
+- `INSPIRE_PASSWORD`
+- `INSPIRE_TARGET_DIR`
+- `INSPIRE_BASE_URL`
+- `INSPIRE_SHM_SIZE`
+- `INSPIRE_BRIDGE_ACTION_TIMEOUT`
+- `INSP_GITEA_REPO`
+- `INSP_GITEA_TOKEN`
+- `INSP_GITEA_SERVER`
 
-| Variable | Description |
-|----------|-------------|
-| INSPIRE_USERNAME | Platform username |
-| INSPIRE_PASSWORD | Platform password |
-| INSPIRE_BASE_URL | API base URL |
-| INSPIRE_TARGET_DIR | Shared filesystem path |
-| INSPIRE_WORKSPACE_ID | Default workspace ID |
-| INSPIRE_WORKSPACE_CPU_ID | CPU workspace ID (default workspace) |
-| INSPIRE_WORKSPACE_GPU_ID | GPU workspace ID (H100/H200) |
-| INSPIRE_WORKSPACE_INTERNET_ID | Internet-enabled workspace ID (e.g. RTX 4090) |
-| INSPIRE_PROJECT_ID | Default project ID |
-| INSP_IMAGE | Default Docker image (for jobs) |
-| INSPIRE_NOTEBOOK_IMAGE | Default notebook image (falls back to INSP_IMAGE) |
-| INSP_PRIORITY | Job priority (1-10) |
-| INSP_GITEA_TOKEN | Gitea personal access token |
-| INSP_GITHUB_TOKEN | GitHub personal access token |
+## Common Development Commands
 
-### Example config.toml
-
-```toml
-[auth]
-username = "your_username"
-# password - use INSPIRE_PASSWORD env var
-
-[api]
-base_url = "https://your-inspire-platform.com"
-
-[gitea]
-server = "https://codeberg.org"
-repo = "owner/repo"
-# token - use INSP_GITEA_TOKEN env var
-
-[workspaces]
-cpu = "ws-..."
-gpu = "ws-..."
-internet = "ws-..."
-# You can add custom aliases and select them with --workspace <name>
-# special = "ws-..."
-
-[job]
-priority = 6
-
-[[compute_groups]]
-name = "H100 Cluster"
-id = "lcg-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-gpu_type = "H100"
-
-[remote_env]
-# Environment variables injected into remote commands.
-# Tip: use $VARNAME or ${VARNAME} to pull from your *local* env at runtime
-# (avoids putting API keys directly in config.toml).
-UV_PYTHON_INSTALL_DIR = "/path/to/uv_python_global"
-TORCH_HOME = "/path/to/torch_cache"
-HF_HOME = "$TORCH_HOME"
-IMAGENET_PATH = "/path/to/imagenet"
-WANDB_API_KEY = "$WANDB_API_KEY"
-HF_TOKEN = "$HF_TOKEN"
-```
-
-### Remote Environment Variables
-
-The `[remote_env]` section in config.toml defines environment variables that are automatically exported before commands run on remote machines. This affects:
-
-- `inspire bridge exec "cmd"` - env vars set before cmd runs
-- `inspire bridge ssh` - env vars set in SSH session
-- `inspire job create --command "cmd"` - env vars set in job environment
-- `inspire run "cmd"` - env vars set in job environment
-
-Example:
-```toml
-[remote_env]
-UV_PYTHON_INSTALL_DIR = "/inspire/hdd/global_user/.../uv_python_global"
-WANDB_API_KEY = "$WANDB_API_KEY"
-HF_TOKEN = "$HF_TOKEN"
+```bash
+uv tool install -e .
+uv run pytest
+uv run pytest -m integration
+uv run ruff check .
+uv tool run black .
+inspire --help
 ```
 
 ## Code Patterns
 
-### Loading Configuration
+### Load Config
 ```python
-from inspire.cli.utils.config import Config
+from inspire.config import Config
 
-config = Config.from_env()  # For commands requiring auth
-config, sources = Config.from_files_and_env()  # With source tracking
+cfg = Config.from_env(require_credentials=True)
+cfg, sources = Config.from_files_and_env(require_credentials=True)
 ```
 
-### API Client
+### Get Authenticated API Client
 ```python
 from inspire.cli.utils.auth import AuthManager
 
-api = AuthManager.get_api(config)
-jobs = api.list_tasks()
+api = AuthManager.get_api(cfg)
 ```
 
-### Click Command
+### Click Command Pattern
 ```python
 import click
 from inspire.cli.context import Context, pass_context
 
 @click.command()
-@click.option("--name", required=True)
 @pass_context
-def my_command(ctx: Context, name: str):
+def my_command(ctx: Context) -> None:
     if ctx.json_output:
-        click.echo(json.dumps({"name": name}))
+        click.echo('{"ok": true}')
     else:
-        click.echo(f"Name: {name}")
+        click.echo("ok")
 ```
 
 ## Exit Codes
@@ -225,15 +154,24 @@ def my_command(ctx: Context, name: str):
 | 13 | API error |
 | 14 | Timeout |
 
-## Testing
+## Where To Edit
 
-```bash
-pytest tests/ -v
-pytest --cov=inspire tests/
-```
+1. Add a config option:
+   - `inspire/config/options/`
+   - `inspire/config/schema.py` / `schema_models.py`
+   - `inspire/config/models.py`
+2. Add a command:
+   - Command registry under `inspire/cli/commands/<group>/__init__.py`
+   - Implementation in `inspire/cli/commands/<group>/...`
+3. Add OpenAPI behavior:
+   - `inspire/platform/openapi/`
+4. Add browser-only notebook/resource behavior:
+   - `inspire/platform/web/browser_api/`
+5. Add tests:
+   - `tests/test_*.py`
 
-## Common Tasks
+## Notes
 
-1. **Add config option**: Update `config_schema.py`, add to Config dataclass in `config.py`
-2. **Add command**: Create `commands/mycommand.py`, register in `main.py`
-3. **Add tests**: Create `tests/test_myfeature.py`, use Click's `CliRunner`
+- Keep reusable logic out of CLI-only `_impl` paths when possible.
+- Prefer `inspire/config`, `inspire/platform`, and `inspire/bridge` for shared logic.
+- For public syncs, double-check changes against `.gitignore` before pushing.

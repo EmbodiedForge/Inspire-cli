@@ -15,7 +15,7 @@
 - Internal-only implementations still use `_impl/` in some CLI areas (e.g. `inspire/cli/commands/_impl/`). Prefer moving reusable logic into `inspire/config/`, `inspire/platform/`, `inspire/bridge/`, and `inspire/features/` instead of adding new `_impl` modules.
 - `tests/` contains pytest suites (for example, `tests/test_cli_commands.py` and `tests/test_cli_smoke.py`).
 - `examples/` holds workflow YAMLs for Gitea Actions.
-- `scripts/` contains exploration/automation utilities used during API and UI discovery.
+- `scripts/` contains exploration/automation utilities used during API and UI discovery (gitignored; internal-only by default).
 - `docs/` and `README.md` document usage; `bin/inspire` is a repo-local wrapper.
 
 ## Build, Test, and Development Commands
@@ -47,3 +47,8 @@
 - Optional: `INSPIRE_SHM_SIZE` (or `job.shm_size` in config.toml) sets default shared memory (GiB) for job creation (`inspire job create`, `inspire run`) and notebook creation (`inspire notebook create`).
 - Optional: `INSPIRE_BRIDGE_ACTION_TIMEOUT` (or `bridge.action_timeout` in config.toml) sets default timeout (seconds) for `inspire bridge exec`.
 - Never commit credentials; prefer shell exports or local dotenv tooling. Use `inspire config check` to validate setup.
+
+## Public Sync & Ignore Policy
+- Treat `.gitignore` as the source of truth for non-public/internal artifacts.
+- Paths currently treated as internal/ignored include `.inspire/`, `internal/`, `scripts/`, `API_ENDPOINTS.md`, `CLAUDE.md`, `config.toml.example`, and `docs/rtunnel-ssh-setup.md`.
+- When preparing `github-public` sync, avoid introducing dependencies on ignored paths in docs, examples, tests, or command instructions.
