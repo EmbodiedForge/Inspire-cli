@@ -24,15 +24,29 @@ class ResourceManager:
         self.resource_specs = build_default_resource_specs()
 
         compute_groups_tuples = load_compute_groups_from_config(compute_groups_raw or [])
-        self.compute_groups = [
-            ComputeGroup(
-                name=group.name,
-                compute_group_id=group.compute_group_id,
-                gpu_type=GPUType(group.gpu_type),
-                location=group.location,
+        self.compute_groups = []
+        for group in compute_groups_tuples:
+            if not group.compute_group_id:
+                continue
+
+            gpu_type_raw = (group.gpu_type or "").strip().upper()
+            if not gpu_type_raw:
+                continue
+
+            try:
+                gpu_type = GPUType(gpu_type_raw)
+            except ValueError:
+                # Ignore non-OpenAPI-only groups (e.g. CPU or unsupported GPU families).
+                continue
+
+            self.compute_groups.append(
+                ComputeGroup(
+                    name=group.name,
+                    compute_group_id=group.compute_group_id,
+                    gpu_type=gpu_type,
+                    location=group.location,
+                )
             )
-            for group in compute_groups_tuples
-        ]
 
     def parse_resource_request(self, resource_str: str) -> tuple[GPUType, int]:
         return parse_resource_request(resource_str)
