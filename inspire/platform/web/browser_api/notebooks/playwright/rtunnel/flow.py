@@ -81,14 +81,32 @@ def _setup_notebook_rtunnel_sync(
                         timeout=180000,
                     )
 
-            for label in ("Dismiss", "No", "Yes", "否", "不接收", "取消"):
-                try:
-                    btn = lab_frame.get_by_role("button", name=label)
-                    if btn.count() > 0:
-                        btn.first.click(timeout=1000)
-                        break
-                except Exception:
-                    pass
+            # Dismiss any popups (Jupyter news, jupyterlab-git, etc.)
+            # Run multiple passes because dialogs may appear sequentially.
+            for _pass in range(3):
+                dismissed = False
+                for label in ("Dismiss", "No", "否", "不接收", "取消"):
+                    try:
+                        btn = lab_frame.get_by_role("button", name=label)
+                        if btn.count() > 0:
+                            btn.first.click(timeout=1000)
+                            dismissed = True
+                            break
+                    except Exception:
+                        pass
+                if not dismissed:
+                    # Also try closing via X button on dialog
+                    try:
+                        close_btn = lab_frame.locator("button.jp-Dialog-close, button[aria-label='Close']")
+                        if close_btn.count() > 0:
+                            close_btn.first.click(timeout=1000)
+                            dismissed = True
+                    except Exception:
+                        pass
+                if dismissed:
+                    page.wait_for_timeout(300)
+                else:
+                    break
 
             terminal_opened = False
 
@@ -169,6 +187,30 @@ def _setup_notebook_rtunnel_sync(
             except Exception:
                 pass
 
+            # Dismiss any popups that appeared during terminal opening
+            for label in ("Dismiss", "No", "否", "不接收", "取消"):
+                try:
+                    btn = lab_frame.get_by_role("button", name=label)
+                    if btn.count() > 0:
+                        btn.first.click(timeout=1000)
+                        page.wait_for_timeout(300)
+                        break
+                except Exception:
+                    pass
+
+            # Re-focus terminal after popup dismissal
+            try:
+                term_focus = lab_frame.locator(
+                    "textarea.xterm-helper-textarea"
+                ).first
+                if term_focus.count() > 0:
+                    term_focus.click(timeout=2000)
+            except Exception:
+                pass
+
+            # Wait for terminal to be ready
+            page.wait_for_timeout(500)
+
             cmd_lines = build_rtunnel_setup_commands(
                 port=port,
                 ssh_port=ssh_port,
@@ -185,6 +227,8 @@ def _setup_notebook_rtunnel_sync(
             for line in cmd_lines:
                 page.keyboard.insert_text(line)
                 page.keyboard.press("Enter")
+            # Wait for setup commands to execute before taking screenshot
+            page.wait_for_timeout(5000)
             try:
                 page.screenshot(path="/tmp/notebook_terminal_debug.png")
             except Exception:
