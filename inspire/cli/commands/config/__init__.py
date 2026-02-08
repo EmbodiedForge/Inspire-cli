@@ -166,6 +166,16 @@ def _validate_required_credentials(cfg: Config) -> None:
         )
 
 
+def _validate_required_registry(cfg: Config) -> None:
+    if not cfg.docker_registry:
+        raise ConfigError(
+            "Missing docker registry configuration.\n"
+            "Set INSPIRE_DOCKER_REGISTRY env var or add to config.toml:\n"
+            "  [api]\n"
+            "  docker_registry = 'your-registry.example.com'"
+        )
+
+
 def _validate_project_base_url_shape(project_path: Path | None) -> None:
     if not project_path or not project_path.exists():
         return
@@ -224,6 +234,7 @@ def check_config(ctx: Context) -> None:
             raise ConfigError(_format_placeholder_issue_message(placeholder_issues))
 
         _validate_required_credentials(cfg)
+        _validate_required_registry(cfg)
 
         auth_ok = True
         auth_error = None
