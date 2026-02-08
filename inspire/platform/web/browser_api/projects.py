@@ -115,6 +115,8 @@ def list_projects(
 def select_project(
     projects: list[ProjectInfo],
     requested: Optional[str] = None,
+    *,
+    allow_requested_over_quota: bool = False,
 ) -> tuple[ProjectInfo, Optional[str]]:
     """Select a project, with auto-fallback if over quota."""
 
@@ -138,6 +140,13 @@ def select_project(
 
         if target.has_quota():
             return (target, None)
+
+        if allow_requested_over_quota:
+            proceed_msg = (
+                f"Project '{target.name}' is over quota, but continuing with the explicitly "
+                "requested project."
+            )
+            return (target, proceed_msg)
 
         fallback_msg = f"Project '{target.name}' is over quota, selecting alternative..."
         sorted_projects = sorted(projects, key=sort_key)

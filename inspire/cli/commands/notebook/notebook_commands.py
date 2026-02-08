@@ -6,6 +6,9 @@ import os
 import re
 from pathlib import Path
 from typing import Optional
+from urllib import error as urllib_error
+from urllib import parse as urllib_parse
+from urllib import request as urllib_request
 
 import click
 
@@ -210,6 +213,34 @@ def _validate_notebook_account_access(
         )
 
     return True, ""
+
+
+def _format_proxy_http_body(raw: bytes) -> str:
+    if not raw:
+        return ""
+    text = raw.decode("utf-8", errors="replace")
+    compact = " ".join(text.split())
+    return compact[:180]
+
+
+def _describe_proxy_http_status(proxy_url: str, timeout_s: float = 4.0) -> str:
+    parsed = urllib_parse.urlsplit(proxy_url)
+    if parsed.scheme not in {"http", "https"}:
+        return "n/a (non-http proxy URL)"
+
+    request = urllib_request.Request(proxy_url, method="GET")
+    try:
+        with urllib_request.urlopen(request, timeout=timeout_s) as response:
+            body = _format_proxy_http_body(response.read(220))
+            return f"{response.status} {body}".strip()
+    except urllib_error.HTTPError as error:
+        try:
+            body = _format_proxy_http_body(error.read(220))
+        except Exception:
+            body = ""
+        return f"{error.code} {body}".strip()
+    except Exception as error:
+        return str(error)
 
 
 def _list_notebooks_for_workspace(
@@ -1059,6 +1090,7 @@ def run_notebook_ssh(
         BridgeProfile,
         get_ssh_command_args,
         has_internet_for_gpu_type,
+        is_tunnel_available,
         load_tunnel_config,
         save_tunnel_config,
     )
@@ -1222,6 +1254,27 @@ def run_notebook_ssh(
     config = load_tunnel_config(account=tunnel_account)
     config.add_bridge(bridge)
     save_tunnel_config(config)
+
+    if not is_tunnel_available(
+        bridge_name=profile_name,
+        config=config,
+        retries=6,
+        retry_pause=1.5,
+    ):
+        proxy_status = _describe_proxy_http_status(proxy_url)
+        _handle_error(
+            ctx,
+            "APIError",
+            "Tunnel setup completed, but SSH preflight failed.",
+            EXIT_API_ERROR,
+            hint=(
+                "Retry 'inspire notebook ssh <notebook-id>' in a few seconds, "
+                "or run 'inspire tunnel test -b "
+                f"{profile_name}' to inspect connectivity. "
+                f"Proxy readiness report: {proxy_status} ({proxy_url})."
+            ),
+        )
+        return
 
     internet_status = "yes" if has_internet else "no"
     gpu_label = gpu_type if gpu_type else "CPU"

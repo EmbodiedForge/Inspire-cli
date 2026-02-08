@@ -372,10 +372,15 @@ def resolve_notebook_project(
     *,
     projects: list,
     project: str | None,
+    cpu_only: bool,
     json_output: bool,
 ) -> object | None:
     try:
-        selected_project, fallback_msg = browser_api_module.select_project(projects, project)
+        selected_project, fallback_msg = browser_api_module.select_project(
+            projects,
+            project,
+            allow_requested_over_quota=cpu_only,
+        )
 
         if not json_output:
             if fallback_msg:
@@ -469,6 +474,98 @@ def resolve_notebook_image(
                 selected_image = images[0]
 
     return selected_image
+
+
+def resolve_notebook_resource_spec_price(
+    *,
+    resource_prices: list[dict],
+    gpu_count: int,
+    selected_gpu_type: str,
+    gpu_pattern: str,
+    logic_compute_group_id: str,
+    quota_id: str,
+    cpu_count: int,
+    memory_size: int,
+    requested_cpu_count: Optional[int],
+) -> tuple[dict, str, int, int]:
+    if gpu_count == 0:
+        cpu_spec = {
+            "cpu_type": "",
+            "cpu_count": cpu_count,
+            "gpu_type": "",
+            "gpu_count": 0,
+            "memory_size_gib": memory_size,
+            "logic_compute_group_id": logic_compute_group_id,
+            "quota_id": quota_id,
+        }
+
+        for price_entry in resource_prices:
+            if price_entry.get("gpu_count", 0) != 0:
+                continue
+
+            entry_quota_id = price_entry.get("quota_id", "")
+            entry_cpu_count = price_entry.get("cpu_count")
+
+            if quota_id and entry_quota_id and entry_quota_id != quota_id:
+                continue
+            if requested_cpu_count is not None and entry_cpu_count != requested_cpu_count:
+                continue
+
+            entry_cpu_info = price_entry.get("cpu_info", {})
+            cpu_type = entry_cpu_info.get("cpu_type", "")
+            if cpu_type:
+                cpu_spec["cpu_type"] = cpu_type
+            if not quota_id and entry_quota_id:
+                quota_id = entry_quota_id
+                cpu_spec["quota_id"] = entry_quota_id
+            break
+
+        return cpu_spec, quota_id, cpu_count, memory_size
+
+    resource_spec_price = {
+        "cpu_type": "",
+        "cpu_count": cpu_count,
+        "gpu_type": selected_gpu_type or "",
+        "gpu_count": gpu_count,
+        "memory_size_gib": memory_size,
+        "logic_compute_group_id": logic_compute_group_id,
+        "quota_id": quota_id,
+    }
+
+    for price_entry in resource_prices:
+        entry_gpu_count = price_entry.get("gpu_count", 0)
+        entry_gpu_info = price_entry.get("gpu_info", {})
+        entry_gpu_type = entry_gpu_info.get("gpu_type", "")
+        entry_cpu_info = price_entry.get("cpu_info", {})
+
+        if entry_gpu_count != gpu_count:
+            continue
+        if not (
+            not selected_gpu_type
+            or entry_gpu_type == selected_gpu_type
+            or match_gpu_type(selected_gpu_type, entry_gpu_type)
+            or match_gpu_type(gpu_pattern, entry_gpu_type)
+        ):
+            continue
+
+        resource_spec_price = {
+            "cpu_type": entry_cpu_info.get("cpu_type", ""),
+            "cpu_count": price_entry.get("cpu_count", cpu_count),
+            "gpu_type": entry_gpu_type,
+            "gpu_count": entry_gpu_count,
+            "memory_size_gib": price_entry.get("memory_size_gib", memory_size),
+            "logic_compute_group_id": logic_compute_group_id,
+            "quota_id": price_entry.get("quota_id", quota_id),
+        }
+        if not quota_id:
+            quota_id = price_entry.get("quota_id", "")
+        cpu_count = price_entry.get("cpu_count", cpu_count)
+        mem_gib = price_entry.get("memory_size_gib")
+        if mem_gib is not None:
+            memory_size = mem_gib
+        break
+
+    return resource_spec_price, quota_id, cpu_count, memory_size
 
 
 def create_notebook_and_report(
@@ -696,7 +793,6 @@ def run_notebook_create(
     quota_id, cpu_count, memory_size, selected_gpu_type, resource_display = quota_selection
 
     # --- Fetch resource prices (needed for resource_spec_price in create body) ---
-    resource_spec_price: Optional[dict] = None
     resource_prices: list[dict] = []
     if logic_compute_group_id:
         try:
@@ -709,60 +805,20 @@ def run_notebook_create(
             if not json_output:
                 click.echo(f"Warning: Failed to fetch resource prices: {e}", err=True)
 
-    # Build resource_spec_price matching the exact structure the platform UI sends.
-    # Captured via Playwright: {cpu_type, cpu_count, gpu_type, gpu_count,
-    #                           memory_size_gib, logic_compute_group_id, quota_id}
-    # The pricing API response has nested gpu_info/cpu_info — we extract the
-    # relevant fields into the flat structure the create proto expects.
-    if resource_prices:
-        for price_entry in resource_prices:
-            entry_gpu_count = price_entry.get("gpu_count", 0)
-            entry_gpu_info = price_entry.get("gpu_info", {})
-            entry_gpu_type = entry_gpu_info.get("gpu_type", "")
-            entry_cpu_info = price_entry.get("cpu_info", {})
-
-            if entry_gpu_count == gpu_count and (
-                not selected_gpu_type
-                or entry_gpu_type == selected_gpu_type
-                or match_gpu_type(selected_gpu_type, entry_gpu_type)
-                or match_gpu_type(gpu_pattern, entry_gpu_type)
-            ):
-                resource_spec_price = {
-                    "cpu_type": entry_cpu_info.get("cpu_type", ""),
-                    "cpu_count": price_entry.get("cpu_count", cpu_count),
-                    "gpu_type": entry_gpu_type,
-                    "gpu_count": entry_gpu_count,
-                    "memory_size_gib": price_entry.get("memory_size_gib", memory_size),
-                    "logic_compute_group_id": logic_compute_group_id,
-                    "quota_id": price_entry.get("quota_id", quota_id),
-                }
-                # Also pick up quota_id and resource sizes from the price entry
-                if not quota_id:
-                    quota_id = price_entry.get("quota_id", "")
-                cpu_count = price_entry.get("cpu_count", cpu_count)
-                mem_gib = price_entry.get("memory_size_gib")
-                if mem_gib is not None:
-                    memory_size = mem_gib
-                if not json_output:
-                    click.echo(
-                        f"Using resource spec: "
-                        f"{gpu_count}x{entry_gpu_info.get('gpu_product_simple', selected_gpu_type)}, "
-                        f"{cpu_count} CPU, {memory_size}GB RAM"
-                    )
-                break
-
-    # If we couldn't find a matching price entry, build a minimal resource_spec_price
-    # from the already-resolved quota info.  GPU notebooks require non-nil spec price.
-    if resource_spec_price is None and gpu_count > 0:
-        resource_spec_price = {
-            "cpu_type": "",
-            "cpu_count": cpu_count,
-            "gpu_type": selected_gpu_type or "",
-            "gpu_count": gpu_count,
-            "memory_size_gib": memory_size,
-            "logic_compute_group_id": logic_compute_group_id,
-            "quota_id": quota_id,
-        }
+    # Build resource_spec_price matching create API expectations.
+    # For CPU, keep the selected quota/requested size as source of truth.
+    # For GPU, prefer resource_prices entries when available.
+    resource_spec_price, quota_id, cpu_count, memory_size = resolve_notebook_resource_spec_price(
+        resource_prices=resource_prices,
+        gpu_count=gpu_count,
+        selected_gpu_type=selected_gpu_type,
+        gpu_pattern=gpu_pattern,
+        logic_compute_group_id=logic_compute_group_id,
+        quota_id=quota_id,
+        cpu_count=cpu_count,
+        memory_size=memory_size,
+        requested_cpu_count=requested_cpu_count,
+    )
 
     # --- Resolve task priority ---
     task_priority = priority
@@ -785,6 +841,7 @@ def run_notebook_create(
         ctx,
         projects=projects,
         project=project,
+        cpu_only=(gpu_count == 0),
         json_output=json_output,
     )
     if not selected_project:

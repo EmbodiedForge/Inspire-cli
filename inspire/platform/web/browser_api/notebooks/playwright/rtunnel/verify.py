@@ -6,6 +6,27 @@ import time
 from typing import Any
 
 
+def _is_rtunnel_proxy_ready(*, status: int, body: str) -> bool:
+    if status != 200:
+        return False
+
+    text = (body or "").lower()
+    if not text:
+        return True
+
+    if (
+        "econnrefused" in text
+        or "connection refused" in text
+        or "404 page not found" in text
+        or "<html" in text
+        or "<!doctype html" in text
+        or "jupyter server" in text
+    ):
+        return False
+
+    return True
+
+
 def wait_for_rtunnel_reachable(
     *,
     proxy_url: str,
@@ -40,7 +61,7 @@ def wait_for_rtunnel_reachable(
             if attempt <= 3:
                 _sys.stderr.write(f"  Attempt {attempt}: {last_status}\n")
                 _sys.stderr.flush()
-            if "ECONNREFUSED" not in body:
+            if _is_rtunnel_proxy_ready(status=resp.status, body=body):
                 return
         except Exception as e:
             last_status = str(e)
@@ -49,10 +70,12 @@ def wait_for_rtunnel_reachable(
                 _sys.stderr.flush()
 
         elapsed = time.time() - start
-        if elapsed < 5:
+        if elapsed < 3:
+            poll_ms = 180
+        elif elapsed < 8:
             poll_ms = 300
         elif elapsed < 20:
-            poll_ms = 700
+            poll_ms = 650
         else:
             poll_ms = 1000
         page.wait_for_timeout(poll_ms)

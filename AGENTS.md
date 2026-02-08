@@ -52,3 +52,9 @@
 - Treat `.gitignore` as the source of truth for non-public/internal artifacts.
 - Paths currently treated as internal/ignored include `.inspire/`, `internal/`, `scripts/`, `API_ENDPOINTS.md`, `CLAUDE.md`, `config.toml.example`, and `docs/rtunnel-ssh-setup.md`.
 - When preparing `github-public` sync, avoid introducing dependencies on ignored paths in docs, examples, tests, or command instructions.
+
+## Current Debug Status (rtunnel/browser automation)
+- Active issue: notebook proxy HTTP readiness checks can return non-ready responses (often `404`) even when SSH tunnel connectivity can still succeed.
+- Current direction: treat HTTP probe as advisory and use SSH preflight (`inspire tunnel test` semantics) as the authoritative success/failure gate.
+- Suspected contributors include per-project runtime differences (image/template/path availability), but this is not considered the sole root cause.
+- Keep all tracked tests/docs free of credentials, tokens, and private endpoint values while iterating on this debugging work.

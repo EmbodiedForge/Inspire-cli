@@ -6,6 +6,7 @@ import pytest
 
 from inspire.config.ssh_runtime import SshRuntimeConfig
 from inspire.platform.web.browser_api.notebooks.playwright.rtunnel.commands import (
+    BOOTSTRAP_SENTINEL,
     build_rtunnel_setup_commands,
 )
 
@@ -66,8 +67,39 @@ def test_dropbear_command_contains_setup_script_and_args() -> None:
     joined = "\n".join(commands)
     assert any(line.startswith("DROPBEAR_DEB_DIR=/project/dropbear") for line in commands)
     assert any(line.startswith("SETUP_SCRIPT=/project/setup_ssh.sh") for line in commands)
+    assert "falling back to openssh bootstrap" in joined
+    assert "RTUNNEL_URL=" in joined
+    assert 'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x /tmp/rtunnel ]; then ' in joined
     assert 'bash "$SETUP_SCRIPT" "$DROPBEAR_DEB_DIR" "$RTUNNEL_BIN_PATH"' in joined
+    assert "apt-get install -y -qq openssh-server" in joined
+    assert 'grep -q "[s]shd -p $SSH_PORT"' in joined
+    assert 'rm -f "$BOOTSTRAP_SENTINEL"' in joined
     # Verify the long single-line command is gone — setup invocation should be its own line
     assert not any(
         ">/tmp/setup_ssh.log 2>&1; tail" in line for line in commands
     ), "setup + tail should be separate commands, not chained with ;"
+
+
+def test_non_dropbear_uses_bootstrap_sentinel_and_start_only_commands() -> None:
+    runtime = SshRuntimeConfig(
+        rtunnel_bin="/project/rtunnel",
+        dropbear_deb_dir=None,
+    )
+
+    commands = build_rtunnel_setup_commands(
+        port=31337,
+        ssh_port=22222,
+        ssh_public_key=None,
+        ssh_runtime=runtime,
+    )
+    joined = "\n".join(commands)
+
+    assert f"BOOTSTRAP_SENTINEL={BOOTSTRAP_SENTINEL}" in joined
+    assert 'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x /tmp/rtunnel ] ' in joined
+    assert "apt-get install -y -qq openssh-server" in joined
+    assert "touch \"$BOOTSTRAP_SENTINEL\"" in joined
+    assert 'rm -f "$BOOTSTRAP_SENTINEL"' in joined
+    assert "pkill -f 'sshd -p'" not in joined
+    assert 'pkill -f "rtunnel.*:$PORT"' not in joined
+    assert "grep -q \"[s]shd -p " in joined
+    assert "grep -q \"[r]tunnel .*:$PORT\"" in joined
