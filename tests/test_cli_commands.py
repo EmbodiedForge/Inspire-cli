@@ -840,6 +840,153 @@ def test_config_check_config_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     assert payload["error"]["type"] == "ConfigError"
 
 
+def test_config_check_json_includes_base_url_resolution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_test_config(tmp_path)
+    config.prefer_source = "toml"
+    config.base_url = "https://my-inspire.internal"
+
+    project_dir = tmp_path / ".inspire"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    project_config = project_dir / "config.toml"
+    project_config.write_text(
+        """
+[api]
+base_url = "https://my-inspire.internal"
+"""
+    )
+    global_config = tmp_path / "global-config.toml"
+
+    def fake_from_files_and_env(
+        cls, require_target_dir: bool = False, require_credentials: bool = True
+    ):  # type: ignore[override]
+        return config, {"base_url": config_module.SOURCE_PROJECT}
+
+    def fake_get_config_paths(cls):  # type: ignore[override]
+        return global_config, project_config
+
+    monkeypatch.setattr(
+        config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env)
+    )
+    monkeypatch.setattr(config_module.Config, "get_config_paths", classmethod(fake_get_config_paths))
+    monkeypatch.setenv("INSPIRE_BASE_URL", "https://env.example")
+    monkeypatch.setattr(auth_module.AuthManager, "get_api", lambda _cls, cfg=None: DummyAPI())
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["--json", "config", "check"])
+
+    assert result.exit_code == EXIT_SUCCESS
+    payload = json.loads(result.output)
+    resolution = payload["data"]["base_url_resolution"]
+    assert resolution["value"] == "https://my-inspire.internal"
+    assert resolution["source"] == config_module.SOURCE_PROJECT
+    assert resolution["prefer_source"] == "toml"
+    assert resolution["env_present"] is True
+    assert resolution["project_config_path"] == str(project_config)
+    assert resolution["global_config_path"] == str(global_config)
+
+
+def test_config_check_rejects_placeholder_base_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_test_config(tmp_path)
+    config.base_url = "https://api.example.com"
+
+    def fake_from_files_and_env(
+        cls, require_target_dir: bool = False, require_credentials: bool = True
+    ):  # type: ignore[override]
+        return config, {"base_url": config_module.SOURCE_DEFAULT}
+
+    def fake_get_config_paths(cls):  # type: ignore[override]
+        return None, None
+
+    monkeypatch.setattr(
+        config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env)
+    )
+    monkeypatch.setattr(config_module.Config, "get_config_paths", classmethod(fake_get_config_paths))
+    monkeypatch.setattr(
+        auth_module.AuthManager, "get_api", lambda _cls, cfg=None: pytest.fail("should not auth")
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["--json", "config", "check"])
+
+    assert result.exit_code == EXIT_CONFIG_ERROR
+    payload = json.loads(result.output)
+    assert payload["success"] is False
+    assert payload["error"]["type"] == "ConfigError"
+    assert "Placeholder host values detected" in payload["error"]["message"]
+    assert "INSPIRE_BASE_URL" in payload["error"]["message"]
+
+
+def test_config_check_rejects_top_level_project_base_url_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_test_config(tmp_path)
+    config.base_url = "https://my-inspire.internal"
+
+    project_dir = tmp_path / ".inspire"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    project_config = project_dir / "config.toml"
+    project_config.write_text('base_url = "https://wrong.example.com"\n')
+
+    def fake_from_files_and_env(
+        cls, require_target_dir: bool = False, require_credentials: bool = True
+    ):  # type: ignore[override]
+        return config, {"base_url": config_module.SOURCE_PROJECT}
+
+    def fake_get_config_paths(cls):  # type: ignore[override]
+        return None, project_config
+
+    monkeypatch.setattr(
+        config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env)
+    )
+    monkeypatch.setattr(config_module.Config, "get_config_paths", classmethod(fake_get_config_paths))
+    monkeypatch.setattr(
+        auth_module.AuthManager, "get_api", lambda _cls, cfg=None: pytest.fail("should not auth")
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["--json", "config", "check"])
+
+    assert result.exit_code == EXIT_CONFIG_ERROR
+    payload = json.loads(result.output)
+    assert payload["success"] is False
+    assert "top-level `base_url`" in payload["error"]["message"]
+    assert "[api]" in payload["error"]["message"]
+
+
+def test_config_check_allows_path_defaults_for_endpoint_fields(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_test_config(tmp_path)
+    config.base_url = "https://my-inspire.internal"
+    config.auth_endpoint = "/auth/token"
+    config.openapi_prefix = "/openapi/v1"
+    config.browser_api_prefix = "/api/v1"
+
+    def fake_from_files_and_env(
+        cls, require_target_dir: bool = False, require_credentials: bool = True
+    ):  # type: ignore[override]
+        return config, {"base_url": config_module.SOURCE_ENV}
+
+    def fake_get_config_paths(cls):  # type: ignore[override]
+        return None, None
+
+    monkeypatch.setattr(
+        config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env)
+    )
+    monkeypatch.setattr(config_module.Config, "get_config_paths", classmethod(fake_get_config_paths))
+    monkeypatch.setattr(auth_module.AuthManager, "get_api", lambda _cls, cfg=None: DummyAPI())
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["config", "check"])
+
+    assert result.exit_code == EXIT_SUCCESS
+    assert "Configuration looks good" in result.output
+
+
 def test_notebook_list_all_workspaces_combines_results(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

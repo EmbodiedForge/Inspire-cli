@@ -9,8 +9,10 @@ Commands:
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import click
 
@@ -47,6 +49,160 @@ def config() -> None:
 # ---------------------------------------------------------------------------
 
 
+_PLACEHOLDER_HOSTS = {
+    "api.example.com",
+    "example.com",
+    "example.org",
+    "example.net",
+}
+_PLACEHOLDER_HOST_SUFFIXES = (
+    ".example.com",
+    ".example.org",
+    ".example.net",
+)
+_HOST_VALIDATION_FIELDS = (
+    ("base_url", "INSPIRE_BASE_URL"),
+    ("gitea_server", "INSP_GITEA_SERVER"),
+    ("github_server", "INSP_GITHUB_SERVER"),
+    ("docker_registry", "INSPIRE_DOCKER_REGISTRY"),
+    ("rtunnel_download_url", "INSPIRE_RTUNNEL_DOWNLOAD_URL"),
+    ("apt_mirror_url", "INSPIRE_APT_MIRROR_URL"),
+    ("pip_index_url", "INSPIRE_PIP_INDEX_URL"),
+)
+
+
+def _describe_precedence(prefer_source: str) -> str:
+    if prefer_source == "toml":
+        return "project TOML wins on conflict"
+    return "env vars win on conflict (default)"
+
+
+def _extract_hostname(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    text = str(value).strip()
+    if not text or text.startswith("/"):
+        return None
+
+    if "://" in text:
+        parsed = urlsplit(text)
+        return parsed.hostname.lower() if parsed.hostname else None
+
+    if text.startswith("//"):
+        parsed = urlsplit(f"https:{text}")
+        return parsed.hostname.lower() if parsed.hostname else None
+
+    candidate = text.split("/", 1)[0].strip()
+    if not candidate or " " in candidate:
+        return None
+    if "@" in candidate:
+        candidate = candidate.rsplit("@", 1)[-1]
+    if ":" in candidate:
+        candidate = candidate.split(":", 1)[0]
+    if "." not in candidate:
+        return None
+    return candidate.lower()
+
+
+def _is_placeholder_host(host: str) -> bool:
+    if host in _PLACEHOLDER_HOSTS:
+        return True
+    return any(host.endswith(suffix) for suffix in _PLACEHOLDER_HOST_SUFFIXES)
+
+
+def _find_placeholder_host_issues(cfg: Config, sources: dict[str, str]) -> list[dict[str, str]]:
+    issues: list[dict[str, str]] = []
+    for field_name, env_var in _HOST_VALIDATION_FIELDS:
+        raw_value = getattr(cfg, field_name, None)
+        if raw_value in (None, ""):
+            continue
+
+        value = str(raw_value)
+        host = _extract_hostname(value)
+        if not host:
+            continue
+        if not _is_placeholder_host(host):
+            continue
+
+        issues.append(
+            {
+                "field": field_name,
+                "env_var": env_var,
+                "value": value,
+                "host": host,
+                "source": sources.get(field_name, SOURCE_DEFAULT),
+            }
+        )
+    return issues
+
+
+def _format_placeholder_issue_message(issues: list[dict[str, str]]) -> str:
+    lines = ["Placeholder host values detected in configuration:"]
+    for issue in issues:
+        lines.append(
+            f"  - {issue['env_var']} ({issue['field']}): "
+            f"{issue['value']} [source: {issue['source']}]"
+        )
+    lines.append("Use real host values in config files or environment variables.")
+    lines.append("Path-only defaults such as /auth/token are allowed.")
+    return "\n".join(lines)
+
+
+def _validate_required_credentials(cfg: Config) -> None:
+    if not cfg.username:
+        raise ConfigError(
+            "Missing username configuration.\n"
+            "Set INSPIRE_USERNAME env var or add to config.toml:\n"
+            "  [auth]\n"
+            "  username = 'your_username'"
+        )
+    if not cfg.password:
+        raise ConfigError(
+            "Missing password configuration.\n"
+            "Set INSPIRE_PASSWORD env var or add a global account password:\n"
+            "  [accounts.\"your_username\"]\n"
+            "  password = 'your_password'"
+        )
+
+
+def _validate_project_base_url_shape(project_path: Path | None) -> None:
+    if not project_path or not project_path.exists():
+        return
+
+    try:
+        project_raw = Config._load_toml(project_path)
+    except Exception as e:
+        raise ConfigError(f"Failed to read project config at {project_path}: {e}") from e
+
+    if "base_url" in project_raw:
+        raise ConfigError(
+            f"Invalid project config at {project_path}.\n"
+            "Found top-level `base_url`; this key must be under [api].\n"
+            "Use:\n"
+            "  [api]\n"
+            "  base_url = 'https://your-inspire-host'"
+        )
+
+
+def _build_base_url_resolution(
+    cfg: Config,
+    sources: dict[str, str],
+    global_path: Path | None,
+    project_path: Path | None,
+) -> dict[str, object]:
+    env_base_url = os.environ.get("INSPIRE_BASE_URL")
+    return {
+        "value": cfg.base_url,
+        "source": sources.get("base_url", SOURCE_DEFAULT),
+        "prefer_source": getattr(cfg, "prefer_source", "env"),
+        "precedence": _describe_precedence(getattr(cfg, "prefer_source", "env")),
+        "env_present": bool(env_base_url),
+        "global_config_path": str(global_path) if global_path else None,
+        "project_config_path": str(project_path) if project_path else None,
+    }
+
+
 @click.command("check")
 @pass_context
 def check_config(ctx: Context) -> None:
@@ -56,7 +212,19 @@ def check_config(ctx: Context) -> None:
     authenticate with the Inspire API.
     """
     try:
-        cfg, _sources = Config.from_files_and_env(require_credentials=True)
+        cfg, sources = Config.from_files_and_env(
+            require_credentials=False,
+            require_target_dir=False,
+        )
+        global_path, project_path = Config.get_config_paths()
+        _validate_project_base_url_shape(project_path)
+
+        placeholder_issues = _find_placeholder_host_issues(cfg, sources)
+        if placeholder_issues:
+            raise ConfigError(_format_placeholder_issue_message(placeholder_issues))
+
+        _validate_required_credentials(cfg)
+
         auth_ok = True
         auth_error = None
 
@@ -65,6 +233,14 @@ def check_config(ctx: Context) -> None:
         except AuthenticationError as e:
             auth_ok = False
             auth_error = str(e)
+
+        base_url_resolution = _build_base_url_resolution(cfg, sources, global_path, project_path)
+        default_base_url_hint = None
+        if base_url_resolution["source"] == SOURCE_DEFAULT:
+            default_base_url_hint = (
+                "Base URL is using default fallback. Set [api] base_url in "
+                "./.inspire/config.toml or export INSPIRE_BASE_URL."
+            )
 
         result = {
             "username": cfg.username,
@@ -76,6 +252,11 @@ def check_config(ctx: Context) -> None:
             "max_retries": cfg.max_retries,
             "retry_delay": cfg.retry_delay,
             "auth_ok": auth_ok,
+            "base_url_resolution": base_url_resolution,
+            "validation": {
+                "placeholder_host_issues": placeholder_issues,
+                "base_url_default_hint": default_base_url_hint,
+            },
         }
         if auth_error:
             result["auth_error"] = auth_error
@@ -96,6 +277,25 @@ def check_config(ctx: Context) -> None:
             click.echo(f"Timeout:      {cfg.timeout}s")
             click.echo(f"Max retries:  {cfg.max_retries}")
             click.echo(f"Retry delay:  {cfg.retry_delay}s")
+            click.echo("\nBase URL resolution:")
+            click.echo(f"  Value:                {base_url_resolution['value']}")
+            click.echo(f"  Source:               {base_url_resolution['source']}")
+            click.echo(f"  Precedence:           {base_url_resolution['precedence']}")
+            click.echo(
+                "  INSPIRE_BASE_URL set: "
+                f"{'yes' if base_url_resolution['env_present'] else 'no'}"
+            )
+            click.echo(
+                "  Global config:        "
+                f"{base_url_resolution['global_config_path'] or '(not found)'}"
+            )
+            click.echo(
+                "  Project config:       "
+                f"{base_url_resolution['project_config_path'] or '(not found)'}"
+            )
+
+            if default_base_url_hint:
+                click.echo(click.style(f"  Note: {default_base_url_hint}", fg="yellow"))
 
             if auth_error:
                 click.echo(f"\nDetails: {auth_error}")
