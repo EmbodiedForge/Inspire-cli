@@ -32,6 +32,7 @@ from inspire.platform.openapi import ResourceManager
 TEST_JOB_ID = "job-12345678-1234-1234-1234-123456789abc"
 TEST_JOB_ID_2 = "job-abcdef12-3456-7890-abcd-ef1234567890"
 TEST_JOB_ID_3 = "job-11111111-2222-3333-4444-555555555555"
+TEST_DOCKER_REGISTRY = "registry.local"
 
 
 def make_test_config(tmp_path: Path, include_compute_groups: bool = False) -> config_module.Config:
@@ -795,7 +796,7 @@ def test_nodes_list_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
 def test_config_check_auth_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     config = make_test_config(tmp_path)
-    config.docker_registry = "docker.sii.shaipower.online"
+    config.docker_registry = TEST_DOCKER_REGISTRY
 
     def fake_from_env(cls, require_target_dir: bool = False) -> config_module.Config:  # type: ignore[override]
         return config
@@ -847,7 +848,7 @@ def test_config_check_json_includes_base_url_resolution(
     config = make_test_config(tmp_path)
     config.prefer_source = "toml"
     config.base_url = "https://my-inspire.internal"
-    config.docker_registry = "docker.sii.shaipower.online"
+    config.docker_registry = TEST_DOCKER_REGISTRY
 
     project_dir = tmp_path / ".inspire"
     project_dir.mkdir(parents=True, exist_ok=True)
@@ -998,7 +999,7 @@ def test_config_check_allows_path_defaults_for_endpoint_fields(
 ) -> None:
     config = make_test_config(tmp_path)
     config.base_url = "https://my-inspire.internal"
-    config.docker_registry = "docker.sii.shaipower.online"
+    config.docker_registry = TEST_DOCKER_REGISTRY
     config.auth_endpoint = "/auth/token"
     config.openapi_prefix = "/openapi/v1"
     config.browser_api_prefix = "/api/v1"
