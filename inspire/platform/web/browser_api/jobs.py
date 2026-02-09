@@ -15,6 +15,7 @@ from inspire.platform.web.session import DEFAULT_WORKSPACE_ID, WebSession, get_w
 __all__ = [
     "JobInfo",
     "get_current_user",
+    "get_train_job_workdir",
     "list_job_users",
     "list_jobs",
 ]
@@ -144,3 +145,43 @@ def list_job_users(
         timeout=30,
     )
     return data.get("data", {}).get("items", [])
+
+
+def get_train_job_workdir(
+    *,
+    project_id: str,
+    workspace_id: str,
+    session: Optional[WebSession] = None,
+) -> str | None:
+    """Fetch the training job workdir for a project within a workspace."""
+    if session is None:
+        session = get_web_session()
+
+    project_id = str(project_id or "").strip()
+    workspace_id = str(workspace_id or "").strip()
+    if not project_id or not workspace_id:
+        raise ValueError("project_id and workspace_id are required")
+
+    body = {
+        "project_id": project_id,
+        "workspace_id": workspace_id,
+    }
+
+    data = _request_json(
+        session,
+        "POST",
+        _browser_api_path("/train_job/workdir"),
+        referer=f"{_get_base_url()}/jobs/distributedTraining",
+        body=body,
+        timeout=30,
+    )
+
+    if data.get("code") != 0:
+        raise ValueError(f"API error: {data.get('message')}")
+
+    payload = data.get("data")
+    if isinstance(payload, str):
+        value = payload.strip()
+        return value or None
+
+    return None

@@ -69,7 +69,24 @@ def select_project_for_workspace(
     projects = browser_api_module.list_projects(workspace_id=workspace_id, session=session)
     if not projects:
         raise ConfigError("No projects available")
-    return browser_api_module.select_project(projects, requested or config.job_project_id)
+
+    requested_value = requested or config.job_project_id
+    if requested_value and not requested_value.startswith("project-"):
+        alias_map = config.projects or {}
+        for alias, project_id in alias_map.items():
+            if alias.lower() == requested_value.lower():
+                requested_value = project_id
+                break
+
+    shared_groups = getattr(config, "project_shared_path_groups", None)
+    if not isinstance(shared_groups, dict) or not shared_groups:
+        shared_groups = None
+
+    return browser_api_module.select_project(
+        projects,
+        requested_value,
+        shared_path_group_by_id=shared_groups,
+    )
 
 
 def cache_created_job(

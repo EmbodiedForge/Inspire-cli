@@ -688,26 +688,22 @@ class TestTunnelConfigPersistence:
     def test_load_tunnel_config_prefers_resolved_username(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        (tmp_path / "bridges-canonical-user.json").write_text(
-            """
+        (tmp_path / "bridges-canonical-user.json").write_text("""
 {
   "default": "canonical",
   "bridges": [
     {"name": "canonical", "proxy_url": "https://canonical.example.com"}
   ]
 }
-""".strip()
-        )
-        (tmp_path / "bridges-primary.json").write_text(
-            """
+""".strip())
+        (tmp_path / "bridges-primary.json").write_text("""
 {
   "default": "legacy",
   "bridges": [
     {"name": "legacy", "proxy_url": "https://legacy.example.com"}
   ]
 }
-""".strip()
-        )
+""".strip())
 
         monkeypatch.setenv("INSPIRE_ACCOUNT", "primary")
         monkeypatch.setattr(
@@ -730,8 +726,7 @@ class TestTunnelConfigPersistence:
     def test_load_tunnel_config_merges_account_alias_and_legacy(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        (tmp_path / "bridges-canonical-user.json").write_text(
-            """
+        (tmp_path / "bridges-canonical-user.json").write_text("""
 {
   "default": "canonical",
   "bridges": [
@@ -739,10 +734,8 @@ class TestTunnelConfigPersistence:
     {"name": "shared", "proxy_url": "https://primary-wins.example.com"}
   ]
 }
-""".strip()
-        )
-        (tmp_path / "bridges-primary.json").write_text(
-            """
+""".strip())
+        (tmp_path / "bridges-primary.json").write_text("""
 {
   "default": "legacy-alias",
   "bridges": [
@@ -750,18 +743,15 @@ class TestTunnelConfigPersistence:
     {"name": "alias-only", "proxy_url": "https://alias-only.example.com"}
   ]
 }
-""".strip()
-        )
-        (tmp_path / "bridges.json").write_text(
-            """
+""".strip())
+        (tmp_path / "bridges.json").write_text("""
 {
   "default": "legacy",
   "bridges": [
     {"name": "legacy-only", "proxy_url": "https://legacy-only.example.com"}
   ]
 }
-""".strip()
-        )
+""".strip())
 
         monkeypatch.setenv("INSPIRE_ACCOUNT", "primary")
         monkeypatch.setattr(

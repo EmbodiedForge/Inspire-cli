@@ -26,7 +26,12 @@ from inspire.config import (
     get_option_by_env,
     get_option_by_toml,
 )
-from inspire.cli.commands.init import init, _detect_env_vars, _generate_toml_content
+from inspire.cli.commands.init import (
+    init,
+    _detect_env_vars,
+    _derive_shared_path_group,
+    _generate_toml_content,
+)
 from inspire.cli.commands.config import config as config_command
 
 # ===========================================================================
@@ -762,6 +767,109 @@ class TestInitCommand:
         # Global config should NOT exist (no global-scope vars)
         assert not global_config.exists()
 
+    def test_init_discover_writes_per_account_catalog(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        global_config = tmp_path / ".config" / "inspire" / "config.toml"
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
+        monkeypatch.chdir(tmp_path)
+
+        workspace_id = "ws-11111111-1111-1111-1111-111111111111"
+        monkeypatch.setenv("INSPIRE_USERNAME", "testuser")
+        monkeypatch.setenv("INSPIRE_BASE_URL", "https://example.invalid")
+        monkeypatch.setenv("INSPIRE_TARGET_DIR", "/shared/test")
+
+        from inspire.platform.web.session.models import WebSession
+        from inspire.platform.web.browser_api.availability.models import GPUAvailability
+        from inspire.platform.web.browser_api.projects import ProjectInfo
+        import inspire.platform.web.session as web_session_module
+        import inspire.platform.web.browser_api as browser_api_module
+
+        session = WebSession(
+            storage_state={"cookies": [], "origins": []},
+            created_at=0.0,
+            workspace_id=workspace_id,
+            login_username="testuser",
+        )
+        monkeypatch.setattr(web_session_module, "get_web_session", lambda **_: session)
+
+        projects = [
+            ProjectInfo(
+                project_id="project-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                name="Over Quota",
+                workspace_id=workspace_id,
+                member_gpu_limit=True,
+                member_remain_gpu_hours=-1,
+            ),
+            ProjectInfo(
+                project_id="project-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                name="Good Project",
+                workspace_id=workspace_id,
+                member_gpu_limit=True,
+                member_remain_gpu_hours=10,
+            ),
+        ]
+        monkeypatch.setattr(browser_api_module, "list_projects", lambda **_: projects)
+
+        raw_groups = [
+            {
+                "logic_compute_group_id": "lcg-cccccccc-cccc-cccc-cccc-cccccccccccc",
+                "name": "H100 (CUDA 12.8)",
+            }
+        ]
+        monkeypatch.setattr(browser_api_module, "list_compute_groups", lambda **_: raw_groups)
+
+        availability = [
+            GPUAvailability(
+                group_id="lcg-cccccccc-cccc-cccc-cccc-cccccccccccc",
+                group_name="H100 (CUDA 12.8)",
+                gpu_type="H100",
+                total_gpus=8,
+                used_gpus=0,
+                available_gpus=8,
+                low_priority_gpus=0,
+            )
+        ]
+        monkeypatch.setattr(
+            browser_api_module,
+            "get_accurate_gpu_availability",
+            lambda **_: availability,
+        )
+
+        monkeypatch.setattr(
+            browser_api_module,
+            "get_train_job_workdir",
+            lambda *, project_id, workspace_id, session=None: f"/inspire/hdd/project/{project_id}",
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(init, ["--discover", "--force"])
+
+        assert result.exit_code == 0
+
+        assert global_config.exists()
+        project_config = tmp_path / PROJECT_CONFIG_DIR / CONFIG_FILENAME
+        assert project_config.exists()
+
+        global_data = Config._load_toml(global_config)
+        account = global_data["accounts"]["testuser"]
+        assert account["api"]["base_url"] == "https://example.invalid"
+        assert account["workspaces"]["cpu"] == workspace_id
+        assert account["workspaces"]["gpu"] == workspace_id
+        assert account["workspaces"]["internet"] == workspace_id
+        assert account["projects"]["over-quota"] == "project-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        assert account["projects"]["good-project"] == "project-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        assert account["compute_groups"][0]["id"] == "lcg-cccccccc-cccc-cccc-cccc-cccccccccccc"
+        assert account["compute_groups"][0]["gpu_type"] == "H100"
+
+        project_data = Config._load_toml(project_config)
+        assert project_data["context"]["account"] == "testuser"
+        # Defaults to the best in-quota project
+        assert project_data["context"]["project"] == "good-project"
+        assert project_data["context"]["workspace_cpu"] == "cpu"
+        assert project_data["context"]["workspace_gpu"] == "gpu"
+        assert project_data["context"]["workspace_internet"] == "internet"
+
 
 # ===========================================================================
 # Init helper function tests
@@ -873,6 +981,36 @@ class TestInitHelpers:
 
         # Value should be properly escaped
         assert 'base_url = "https://example.com/path?foo=bar&baz=\\"test\\""' in toml_content
+
+    def test_derive_shared_path_group_extracts_global_user_dir(self) -> None:
+        group = _derive_shared_path_group(
+            "/inspire/hdd/global_user/user123/some/dir",
+            account_key=None,
+        )
+        assert group == "/inspire/hdd/global_user/user123"
+
+    def test_derive_shared_path_group_infers_global_user_dir_without_account_match(self) -> None:
+        group = _derive_shared_path_group(
+            "/inspire/hdd/project/myproj/user-dir",
+            account_key="acct-0000",
+        )
+        assert group == "/inspire/hdd/global_user/user-dir"
+
+    def test_derive_shared_path_group_falls_back_to_project_root_when_user_dir_missing(
+        self,
+    ) -> None:
+        group = _derive_shared_path_group(
+            "/inspire/hdd/project/myproj",
+            account_key="acct-0000",
+        )
+        assert group == "/inspire/hdd/project/myproj"
+
+    def test_derive_shared_path_group_normalizes_global_user_under_project_path(self) -> None:
+        group = _derive_shared_path_group(
+            "/inspire/hdd/project/myproj/global_user/user-dir",
+            account_key=None,
+        )
+        assert group == "/inspire/hdd/global_user/user-dir"
 
 
 # ===========================================================================

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import Optional
 
 import click
@@ -31,13 +30,13 @@ def run_job_create(
     resource: str,
     command: str,
     framework: str,
-    priority: int,
+    priority: int | None,
     max_time: float,
     location: str,
     workspace: str | None,
     workspace_id_override: str | None,
     auto: bool,
-    image: str,
+    image: str | None,
     project: str | None,
     nodes: int,
 ) -> None:
@@ -45,6 +44,11 @@ def run_job_create(
     try:
         config, _ = Config.from_files_and_env(require_target_dir=True)
         api = AuthManager.get_api(config)
+
+        if priority is None:
+            priority = config.job_priority
+        if image is None:
+            image = config.job_image
 
         try:
             requested_gpu_type, requested_gpu_count = api.resource_manager.parse_resource_request(
@@ -209,8 +213,8 @@ def run_job_create(
 @click.option(
     "--priority",
     type=int,
-    default=lambda: int(os.environ.get("INSP_PRIORITY", "6")),
-    help="Task priority 1-10 (default: 6, env: INSP_PRIORITY)",
+    default=None,
+    help="Task priority 1-10 (default from config [job].priority or 6)",
 )
 @click.option("--max-time", type=float, default=100.0, help="Max runtime in hours (default: 100)")
 @click.option("--location", help="Preferred datacenter location")
@@ -225,12 +229,16 @@ def run_job_create(
     default=True,
     help="Auto-select best location based on node availability (default: auto)",
 )
-@click.option("--image", default=lambda: os.environ.get("INSP_IMAGE"), help="Custom Docker image")
+@click.option(
+    "--image",
+    default=None,
+    help="Custom Docker image (default from config [job].image)",
+)
 @click.option(
     "--project",
     "-p",
-    default=lambda: os.environ.get("INSPIRE_PROJECT_ID"),
-    help="Project name or ID (auto-selects first if not specified)",
+    default=None,
+    help="Project name or ID (default from config [context].project or [job].project_id)",
 )
 @click.option(
     "--nodes",
@@ -245,13 +253,13 @@ def create(
     resource: str,
     command: str,
     framework: str,
-    priority: int,
+    priority: Optional[int],
     max_time: float,
     location: str,
     workspace: Optional[str],
     workspace_id_override: Optional[str],
     auto: bool,
-    image: str,
+    image: Optional[str],
     project: Optional[str],
     nodes: int,
 ) -> None:

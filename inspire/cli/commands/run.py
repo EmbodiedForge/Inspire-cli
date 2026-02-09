@@ -185,19 +185,25 @@ def _run_flow(
     name: str | None,
     sync: bool,
     watch: bool,
-    priority: int,
+    priority: int | None,
     location: str | None,
     workspace: str | None,
     workspace_id_override: str | None,
     max_time: float,
     image: str | None,
     nodes: int,
+    project: str | None,
 ) -> None:
     _run_sync_if_requested(ctx, sync=sync, watch=watch)
 
     try:
         config, _ = Config.from_files_and_env(require_target_dir=True)
         api = AuthManager.get_api(config)
+
+        if priority is None:
+            priority = config.job_priority
+        if image is None:
+            image = config.job_image
 
         selected_workspace_id = select_workspace_id(
             config,
@@ -239,7 +245,7 @@ def _run_flow(
             selected_project, fallback_msg = job_submit.select_project_for_workspace(
                 config,
                 workspace_id=selected_workspace_id,
-                requested=None,
+                requested=project,
             )
         except ValueError as e:
             error_type = "QuotaExceeded" if "over quota" in str(e) else "ValidationError"
@@ -347,8 +353,14 @@ def _run_flow(
 @click.option(
     "--priority",
     type=int,
-    default=lambda: int(os.environ.get("INSP_PRIORITY", "6")),
-    help="Task priority 1-10 (default: 6, env: INSP_PRIORITY)",
+    default=None,
+    help="Task priority 1-10 (default from config [job].priority or 6)",
+)
+@click.option(
+    "--project",
+    "-p",
+    default=None,
+    help="Project name or ID (default from config [context].project or [job].project_id)",
 )
 @click.option("--location", help="Preferred datacenter location (overrides auto-selection)")
 @click.option("--workspace", help="Workspace name (from [workspaces])")
@@ -358,7 +370,11 @@ def _run_flow(
     help="Workspace ID override (highest precedence)",
 )
 @click.option("--max-time", type=float, default=100.0, help="Max runtime in hours (default: 100)")
-@click.option("--image", default=lambda: os.environ.get("INSP_IMAGE"), help="Custom Docker image")
+@click.option(
+    "--image",
+    default=None,
+    help="Custom Docker image (default from config [job].image)",
+)
 @click.option(
     "--nodes", type=int, default=1, help="Number of nodes for multi-node training (default: 1)"
 )
@@ -371,7 +387,8 @@ def run(
     name: str | None,
     sync: bool,
     watch: bool,
-    priority: int,
+    priority: int | None,
+    project: str | None,
     location: str | None,
     workspace: str | None,
     workspace_id_override: str | None,
@@ -405,6 +422,7 @@ def run(
         sync=sync,
         watch=watch,
         priority=priority,
+        project=project,
         location=location,
         workspace=workspace,
         workspace_id_override=workspace_id_override,

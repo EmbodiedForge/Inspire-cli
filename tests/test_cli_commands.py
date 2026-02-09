@@ -187,7 +187,7 @@ def patch_config_and_auth(
     monkeypatch.setattr(
         browser_api_module,
         "select_project",
-        lambda projects, requested=None: (test_project, None),
+        lambda projects, requested=None, **_: (test_project, None),
     )
 
     return api
@@ -854,12 +854,10 @@ def test_config_check_json_includes_base_url_resolution(
     project_dir = tmp_path / ".inspire"
     project_dir.mkdir(parents=True, exist_ok=True)
     project_config = project_dir / "config.toml"
-    project_config.write_text(
-        """
+    project_config.write_text("""
 [api]
 base_url = "https://my-inspire.internal"
-"""
-    )
+""")
     global_config = tmp_path / "global-config.toml"
 
     def fake_from_files_and_env(
@@ -873,7 +871,9 @@ base_url = "https://my-inspire.internal"
     monkeypatch.setattr(
         config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env)
     )
-    monkeypatch.setattr(config_module.Config, "get_config_paths", classmethod(fake_get_config_paths))
+    monkeypatch.setattr(
+        config_module.Config, "get_config_paths", classmethod(fake_get_config_paths)
+    )
     monkeypatch.setenv("INSPIRE_BASE_URL", "https://env.example")
     monkeypatch.setattr(auth_module.AuthManager, "get_api", lambda _cls, cfg=None: DummyAPI())
 
@@ -908,7 +908,9 @@ def test_config_check_rejects_placeholder_base_url(
     monkeypatch.setattr(
         config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env)
     )
-    monkeypatch.setattr(config_module.Config, "get_config_paths", classmethod(fake_get_config_paths))
+    monkeypatch.setattr(
+        config_module.Config, "get_config_paths", classmethod(fake_get_config_paths)
+    )
     monkeypatch.setattr(
         auth_module.AuthManager, "get_api", lambda _cls, cfg=None: pytest.fail("should not auth")
     )
@@ -934,7 +936,10 @@ def test_config_check_requires_docker_registry(
     def fake_from_files_and_env(
         cls, require_target_dir: bool = False, require_credentials: bool = True
     ):  # type: ignore[override]
-        return config, {"base_url": config_module.SOURCE_ENV, "docker_registry": config_module.SOURCE_DEFAULT}
+        return config, {
+            "base_url": config_module.SOURCE_ENV,
+            "docker_registry": config_module.SOURCE_DEFAULT,
+        }
 
     def fake_get_config_paths(cls):  # type: ignore[override]
         return None, None
@@ -942,7 +947,9 @@ def test_config_check_requires_docker_registry(
     monkeypatch.setattr(
         config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env)
     )
-    monkeypatch.setattr(config_module.Config, "get_config_paths", classmethod(fake_get_config_paths))
+    monkeypatch.setattr(
+        config_module.Config, "get_config_paths", classmethod(fake_get_config_paths)
+    )
     monkeypatch.setattr(
         auth_module.AuthManager, "get_api", lambda _cls, cfg=None: pytest.fail("should not auth")
     )
@@ -980,7 +987,9 @@ def test_config_check_rejects_top_level_project_base_url_key(
     monkeypatch.setattr(
         config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env)
     )
-    monkeypatch.setattr(config_module.Config, "get_config_paths", classmethod(fake_get_config_paths))
+    monkeypatch.setattr(
+        config_module.Config, "get_config_paths", classmethod(fake_get_config_paths)
+    )
     monkeypatch.setattr(
         auth_module.AuthManager, "get_api", lambda _cls, cfg=None: pytest.fail("should not auth")
     )
@@ -1016,7 +1025,9 @@ def test_config_check_allows_path_defaults_for_endpoint_fields(
     monkeypatch.setattr(
         config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env)
     )
-    monkeypatch.setattr(config_module.Config, "get_config_paths", classmethod(fake_get_config_paths))
+    monkeypatch.setattr(
+        config_module.Config, "get_config_paths", classmethod(fake_get_config_paths)
+    )
     monkeypatch.setattr(auth_module.AuthManager, "get_api", lambda _cls, cfg=None: DummyAPI())
 
     runner = CliRunner()

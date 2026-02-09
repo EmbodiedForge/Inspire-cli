@@ -95,6 +95,24 @@ class Config:
     # Full workspace map loaded from TOML [workspaces]
     workspaces: dict[str, str] = field(default_factory=dict)
 
+    # Project alias map for project_id resolution (alias -> project-...)
+    projects: dict[str, str] = field(default_factory=dict)
+
+    # Discovered per-account project metadata (loaded from global [accounts."<user>"] catalog)
+    # project_id -> metadata dict (best-effort, schema may evolve)
+    project_catalog: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # project_id -> shared-path grouping key (e.g. "/train/global_user/<user>")
+    project_shared_path_groups: dict[str, str] = field(default_factory=dict)
+    # project_id -> discovered workdir (best-effort; may come from API or probing)
+    project_workdirs: dict[str, str] = field(default_factory=dict)
+    # Account-level shared-path grouping key (if available)
+    account_shared_path_group: Optional[str] = None
+    # Account-level train job workdir (if available)
+    account_train_job_workdir: Optional[str] = None
+
+    # Project context account binding (from [context].account)
+    context_account: Optional[str] = None
+
     # Notebook settings
     notebook_resource: str = "1xH200"
     notebook_image: Optional[str] = None

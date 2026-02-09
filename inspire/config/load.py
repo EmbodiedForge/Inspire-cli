@@ -22,25 +22,200 @@ from inspire.config.toml import (
     _toml_key_to_field,
 )
 
+_ACCOUNT_OVERRIDE_FIELDS = {
+    "base_url",
+    "timeout",
+    "max_retries",
+    "retry_delay",
+    "skip_ssl_verify",
+    "force_proxy",
+    "openapi_prefix",
+    "browser_api_prefix",
+    "auth_endpoint",
+    "docker_registry",
+    "rtunnel_bin",
+    "sshd_deb_dir",
+    "dropbear_deb_dir",
+    "setup_script",
+    "rtunnel_download_url",
+    "apt_mirror_url",
+    "pip_index_url",
+    "pip_trusted_host",
+}
 
-def _parse_global_accounts(raw_accounts: Any) -> dict[str, str]:
-    """Parse global [accounts.\"<username>\"] password entries."""
-    if not isinstance(raw_accounts, dict):
+_ACCOUNT_SECTION_KEY_MAP = {
+    "api": {
+        "base_url": "base_url",
+        "timeout": "timeout",
+        "max_retries": "max_retries",
+        "retry_delay": "retry_delay",
+        "skip_ssl_verify": "skip_ssl_verify",
+        "force_proxy": "force_proxy",
+        "openapi_prefix": "openapi_prefix",
+        "browser_api_prefix": "browser_api_prefix",
+        "auth_endpoint": "auth_endpoint",
+        "docker_registry": "docker_registry",
+    },
+    "ssh": {
+        "rtunnel_bin": "rtunnel_bin",
+        "sshd_deb_dir": "sshd_deb_dir",
+        "dropbear_deb_dir": "dropbear_deb_dir",
+        "setup_script": "setup_script",
+        "rtunnel_download_url": "rtunnel_download_url",
+    },
+    "mirrors": {
+        "apt_mirror_url": "apt_mirror_url",
+        "pip_index_url": "pip_index_url",
+        "pip_trusted_host": "pip_trusted_host",
+    },
+}
+
+_DEFAULTS_FIELD_MAP = {
+    "image": "job_image",
+    "notebook_image": "notebook_image",
+    "notebook_resource": "notebook_resource",
+    "priority": "job_priority",
+    "shm_size": "shm_size",
+    "target_dir": "target_dir",
+    "log_pattern": "log_pattern",
+}
+
+_CONTEXT_WORKSPACE_FIELD_MAP = {
+    "workspace": "job_workspace_id",
+    "workspace_cpu": "workspace_cpu_id",
+    "workspace_gpu": "workspace_gpu_id",
+    "workspace_internet": "workspace_internet_id",
+}
+
+
+def _parse_alias_map(raw_value: Any) -> dict[str, str]:
+    if not isinstance(raw_value, dict):
         return {}
 
-    parsed: dict[str, str] = {}
+    result: dict[str, str] = {}
+    for raw_key, raw_item in raw_value.items():
+        key = str(raw_key).strip()
+        value = str(raw_item).strip()
+        if not key or not value:
+            continue
+        result[key] = value
+    return result
+
+
+def _normalize_compute_groups(raw_value: Any) -> list[dict]:
+    if not isinstance(raw_value, list):
+        return []
+
+    normalized: list[dict] = []
+    for raw_item in raw_value:
+        if not isinstance(raw_item, dict):
+            continue
+        normalized.append(
+            {
+                "name": str(raw_item.get("name", "")),
+                "id": str(raw_item.get("id", "")),
+                "gpu_type": str(raw_item.get("gpu_type", "")),
+                "location": str(raw_item.get("location", "")),
+            }
+        )
+    return normalized
+
+
+def _normalize_project_catalog(raw_value: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(raw_value, dict):
+        return {}
+
+    normalized: dict[str, dict[str, Any]] = {}
+    for raw_project_id, raw_item in raw_value.items():
+        project_id = str(raw_project_id).strip()
+        if not project_id or not isinstance(raw_item, dict):
+            continue
+        entry: dict[str, Any] = {}
+        for raw_key, value in raw_item.items():
+            key = str(raw_key).strip()
+            if not key or value is None:
+                continue
+            entry[key] = value
+        normalized[project_id] = entry
+    return normalized
+
+
+def _resolve_alias(value: Any, mapping: dict[str, str], *, id_prefix: str) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    # Prefer explicit alias mappings (even if the alias looks like an ID prefix).
+    if text in mapping:
+        return mapping[text]
+    for key, mapped in mapping.items():
+        if key.lower() == text.lower():
+            return mapped
+    if text.startswith(id_prefix):
+        return text
+    return text
+
+
+def _coerce_project_default(field_name: str, raw_value: Any) -> Any:
+    if field_name in {"job_priority", "shm_size"}:
+        return int(raw_value)
+    if field_name in {
+        "target_dir",
+        "job_image",
+        "notebook_image",
+        "notebook_resource",
+        "log_pattern",
+    }:
+        return str(raw_value)
+    return raw_value
+
+
+def _parse_global_accounts(raw_accounts: Any) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+    """Parse global [accounts.\"<username>\"] entries."""
+    if not isinstance(raw_accounts, dict):
+        return {}, {}
+
+    passwords: dict[str, str] = {}
+    catalogs: dict[str, dict[str, Any]] = {}
     for raw_username, raw_value in raw_accounts.items():
         username = str(raw_username).strip()
         if not username or not isinstance(raw_value, dict):
             continue
+
+        account_data: dict[str, Any] = {
+            "projects": _parse_alias_map(raw_value.get("projects", {})),
+            "workspaces": _parse_alias_map(raw_value.get("workspaces", {})),
+            "compute_groups": _normalize_compute_groups(raw_value.get("compute_groups", [])),
+            "project_catalog": _normalize_project_catalog(raw_value.get("project_catalog", {})),
+            "shared_path_group": str(raw_value.get("shared_path_group") or "").strip() or None,
+            "train_job_workdir": str(raw_value.get("train_job_workdir") or "").strip() or None,
+            "overrides": {},
+        }
+
         password = raw_value.get("password")
-        if password is None:
-            continue
-        password_str = str(password)
-        if not password_str:
-            continue
-        parsed[username] = password_str
-    return parsed
+        if password is not None:
+            password_str = str(password)
+            if password_str:
+                passwords[username] = password_str
+
+        for field_name in _ACCOUNT_OVERRIDE_FIELDS:
+            value = raw_value.get(field_name)
+            if value is None or value == "":
+                continue
+            account_data["overrides"][field_name] = value
+
+        for section_name, key_map in _ACCOUNT_SECTION_KEY_MAP.items():
+            section = raw_value.get(section_name)
+            if not isinstance(section, dict):
+                continue
+            for key, field_name in key_map.items():
+                value = section.get(key)
+                if value is None or value == "":
+                    continue
+                account_data["overrides"][field_name] = value
+
+        catalogs[username] = account_data
+
+    return passwords, catalogs
 
 
 def config_from_files_and_env(
@@ -93,6 +268,13 @@ def config_from_files_and_env(
         "workspace_gpu_id": None,
         "workspace_internet_id": None,
         "workspaces": {},
+        "projects": {},
+        "project_catalog": {},
+        "project_shared_path_groups": {},
+        "project_workdirs": {},
+        "account_shared_path_group": None,
+        "account_train_job_workdir": None,
+        "context_account": None,
         "notebook_resource": "1xH200",
         "notebook_image": None,
         "rtunnel_bin": None,
@@ -121,13 +303,16 @@ def config_from_files_and_env(
     global_compute_groups: list[dict] = []
     global_remote_env: dict[str, str] = {}
     global_workspaces: dict[str, str] = {}
+    global_account_catalogs: dict[str, dict[str, Any]] = {}
     global_accounts: dict[str, str] = {}
     if Config.GLOBAL_CONFIG_PATH.exists():
         global_config_path = Config.GLOBAL_CONFIG_PATH
         global_raw = _load_toml(Config.GLOBAL_CONFIG_PATH)
         global_compute_groups = global_raw.pop("compute_groups", [])
         global_remote_env = {str(k): str(v) for k, v in global_raw.pop("remote_env", {}).items()}
-        global_accounts = _parse_global_accounts(global_raw.pop("accounts", {}))
+        global_accounts, global_account_catalogs = _parse_global_accounts(
+            global_raw.pop("accounts", {})
+        )
 
         raw_workspaces = global_raw.get("workspaces") or {}
         if isinstance(raw_workspaces, dict):
@@ -155,6 +340,9 @@ def config_from_files_and_env(
     project_compute_groups: list[dict] = []
     project_remote_env: dict[str, str] = {}
     project_workspaces: dict[str, str] = {}
+    project_projects: dict[str, str] = {}
+    project_defaults: dict[str, Any] = {}
+    project_context: dict[str, Any] = {}
     prefer_source = "env"
     if project_config_path:
         project_raw = _load_toml(project_config_path)
@@ -170,6 +358,13 @@ def config_from_files_and_env(
 
         project_compute_groups = project_raw.pop("compute_groups", [])
         project_remote_env = {str(k): str(v) for k, v in project_raw.pop("remote_env", {}).items()}
+        project_projects = _parse_alias_map(project_raw.pop("projects", {}))
+        raw_defaults = project_raw.pop("defaults", {})
+        if isinstance(raw_defaults, dict):
+            project_defaults = raw_defaults
+        raw_context = project_raw.pop("context", {})
+        if isinstance(raw_context, dict):
+            project_context = raw_context
         # Keep account passwords global-only to avoid storing secrets in repos.
         project_raw.pop("accounts", None)
 
@@ -195,6 +390,135 @@ def config_from_files_and_env(
             merged_workspaces.update(project_workspaces)
             config_dict["workspaces"] = merged_workspaces
             sources["workspaces"] = SOURCE_PROJECT
+
+    context_account = str(project_context.get("account") or "").strip()
+    if context_account:
+        config_dict["context_account"] = context_account
+        sources["context_account"] = SOURCE_PROJECT
+
+    selected_account = (
+        context_account
+        or str(config_dict.get("username") or "").strip()
+        or str(os.getenv("INSPIRE_USERNAME") or "").strip()
+    )
+    account_catalog = global_account_catalogs.get(selected_account, {})
+
+    account_projects = account_catalog.get("projects", {}) if account_catalog else {}
+    account_workspaces = account_catalog.get("workspaces", {}) if account_catalog else {}
+    account_compute_groups = account_catalog.get("compute_groups", []) if account_catalog else []
+    account_project_catalog = account_catalog.get("project_catalog", {}) if account_catalog else {}
+    account_shared_path_group = (
+        account_catalog.get("shared_path_group") if account_catalog else None
+    )
+    account_train_job_workdir = (
+        account_catalog.get("train_job_workdir") if account_catalog else None
+    )
+    account_overrides = account_catalog.get("overrides", {}) if account_catalog else {}
+
+    if account_overrides:
+        for field_name, value in account_overrides.items():
+            if field_name not in config_dict:
+                continue
+            if sources.get(field_name) == SOURCE_PROJECT:
+                continue
+            config_dict[field_name] = value
+            sources[field_name] = SOURCE_GLOBAL
+
+    if account_workspaces:
+        merged_workspaces = dict(account_workspaces)
+        merged_workspaces.update(config_dict.get("workspaces", {}))
+        config_dict["workspaces"] = merged_workspaces
+        if sources.get("workspaces") == SOURCE_DEFAULT:
+            sources["workspaces"] = SOURCE_GLOBAL
+
+        if not config_dict.get("workspace_cpu_id") and merged_workspaces.get("cpu"):
+            config_dict["workspace_cpu_id"] = merged_workspaces["cpu"]
+            sources["workspace_cpu_id"] = SOURCE_GLOBAL
+        if not config_dict.get("workspace_gpu_id") and merged_workspaces.get("gpu"):
+            config_dict["workspace_gpu_id"] = merged_workspaces["gpu"]
+            sources["workspace_gpu_id"] = SOURCE_GLOBAL
+        if not config_dict.get("workspace_internet_id") and merged_workspaces.get("internet"):
+            config_dict["workspace_internet_id"] = merged_workspaces["internet"]
+            sources["workspace_internet_id"] = SOURCE_GLOBAL
+
+    merged_projects = dict(account_projects)
+    merged_projects.update(project_projects)
+    if merged_projects:
+        config_dict["projects"] = merged_projects
+        sources["projects"] = SOURCE_PROJECT if project_projects else SOURCE_GLOBAL
+
+    if isinstance(account_project_catalog, dict) and account_project_catalog:
+        config_dict["project_catalog"] = account_project_catalog
+        sources["project_catalog"] = SOURCE_GLOBAL
+
+        shared_groups: dict[str, str] = {}
+        workdirs: dict[str, str] = {}
+        for project_id, entry in account_project_catalog.items():
+            if not isinstance(entry, dict):
+                continue
+
+            shared = str(entry.get("shared_path_group") or "").strip()
+            if shared:
+                shared_groups[str(project_id)] = shared
+
+            workdir = str(entry.get("workdir") or "").strip()
+            if workdir:
+                workdirs[str(project_id)] = workdir
+
+        if shared_groups:
+            config_dict["project_shared_path_groups"] = shared_groups
+            sources["project_shared_path_groups"] = SOURCE_GLOBAL
+        if workdirs:
+            config_dict["project_workdirs"] = workdirs
+            sources["project_workdirs"] = SOURCE_GLOBAL
+
+    if account_shared_path_group:
+        config_dict["account_shared_path_group"] = str(account_shared_path_group)
+        sources["account_shared_path_group"] = SOURCE_GLOBAL
+    if account_train_job_workdir:
+        config_dict["account_train_job_workdir"] = str(account_train_job_workdir)
+        sources["account_train_job_workdir"] = SOURCE_GLOBAL
+
+    if account_compute_groups and not config_dict.get("compute_groups"):
+        config_dict["compute_groups"] = account_compute_groups
+        sources["compute_groups"] = SOURCE_GLOBAL
+
+    if context_account and not config_dict.get("username"):
+        config_dict["username"] = context_account
+        sources["username"] = SOURCE_PROJECT
+
+    project_ref = _resolve_alias(
+        project_context.get("project"),
+        config_dict.get("projects", {}),
+        id_prefix="project-",
+    )
+    if project_ref:
+        config_dict["job_project_id"] = project_ref
+        sources["job_project_id"] = SOURCE_PROJECT
+
+    for context_key, field_name in _CONTEXT_WORKSPACE_FIELD_MAP.items():
+        workspace_ref = _resolve_alias(
+            project_context.get(context_key),
+            config_dict.get("workspaces", {}),
+            id_prefix="ws-",
+        )
+        if not workspace_ref:
+            continue
+        config_dict[field_name] = workspace_ref
+        sources[field_name] = SOURCE_PROJECT
+
+    for key, field_name in _DEFAULTS_FIELD_MAP.items():
+        if key not in project_defaults:
+            continue
+        raw_value = project_defaults.get(key)
+        if raw_value is None or raw_value == "":
+            continue
+        try:
+            coerced = _coerce_project_default(field_name, raw_value)
+        except (ValueError, TypeError):
+            continue
+        config_dict[field_name] = coerced
+        sources[field_name] = SOURCE_PROJECT
 
     env_password = os.getenv("INSPIRE_PASSWORD")
 
@@ -261,7 +585,7 @@ def config_from_files_and_env(
             raise ConfigError(
                 "Missing password configuration.\n"
                 "Set INSPIRE_PASSWORD env var or add a global account password:\n"
-                "  [accounts.\"your_username\"]\n"
+                '  [accounts."your_username"]\n'
                 "  password = 'your_password'"
             )
 

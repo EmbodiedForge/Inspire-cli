@@ -37,15 +37,23 @@ class ProjectInfo:
     priority_level: str = ""  # Priority level (HIGH, NORMAL, etc.)
     priority_name: str = ""  # Priority name (numeric string like "10", "4")
 
-    def has_quota(self) -> bool:
-        """Check if the project has available quota."""
+    def has_quota(self, *, needs_gpu: bool = True) -> bool:
+        """Check if the project has available quota.
+
+        The browser endpoint currently exposes GPU quota metadata. For CPU-only
+        workflows (no GPUs requested), treat quota as available.
+        """
+        if not needs_gpu:
+            return True
         if not self.gpu_limit and not self.member_gpu_limit:
             return True
         return self.member_remain_gpu_hours >= 0
 
-    def get_quota_status(self) -> str:
+    def get_quota_status(self, *, needs_gpu: bool = True) -> str:
         """Get formatted quota status string for display."""
-        if not self.has_quota():
+        if not needs_gpu:
+            return ""
+        if not self.has_quota(needs_gpu=needs_gpu):
             return " (over quota)"
         if self.member_gpu_limit:
             return f" ({self.member_remain_gpu_hours:.0f} GPU-hours remaining)"
@@ -117,16 +125,58 @@ def select_project(
     requested: Optional[str] = None,
     *,
     allow_requested_over_quota: bool = False,
+    shared_path_group_by_id: dict[str, str] | None = None,
+    needs_gpu_quota: bool = True,
 ) -> tuple[ProjectInfo, Optional[str]]:
     """Select a project, with auto-fallback if over quota."""
 
-    def sort_key(p: ProjectInfo) -> tuple:
-        has_quota = p.has_quota()
+    def _priority_value(project: ProjectInfo) -> int:
         try:
-            priority = int(p.priority_name) if p.priority_name else 0
+            return int(project.priority_name) if project.priority_name else 0
         except ValueError:
-            priority = 0
-        return (not has_quota, -priority, p.name)
+            return 0
+
+    def _effective_remain_gpu_hours(project: ProjectInfo) -> float:
+        if not needs_gpu_quota:
+            return float("inf")
+        if not project.gpu_limit and not project.member_gpu_limit:
+            return float("inf")
+        return float(project.member_remain_gpu_hours or 0.0)
+
+    def _quota_candidates(items: list[ProjectInfo]) -> list[ProjectInfo]:
+        return [p for p in items if p.has_quota(needs_gpu=needs_gpu_quota)]
+
+    def _best_by_quota(items: list[ProjectInfo]) -> ProjectInfo | None:
+        if not items:
+            return None
+        return sorted(
+            items,
+            key=lambda p: (
+                -_effective_remain_gpu_hours(p),
+                -_priority_value(p),
+                p.name.lower(),
+            ),
+        )[0]
+
+    def _format_candidates(items: list[ProjectInfo]) -> str:
+        ordered = sorted(
+            items,
+            key=lambda p: (
+                not p.has_quota(needs_gpu=needs_gpu_quota),
+                -_effective_remain_gpu_hours(p),
+                -_priority_value(p),
+                p.name.lower(),
+            ),
+        )
+        lines = [
+            "Candidates:",
+            *(
+                f"  - {p.name} ({p.project_id}){p.get_quota_status(needs_gpu=needs_gpu_quota)}"
+                for p in ordered
+                if p.name
+            ),
+        ]
+        return "\n".join(lines)
 
     if requested:
         target = None
@@ -138,7 +188,7 @@ def select_project(
         if not target:
             raise ValueError(f"Project '{requested}' not found")
 
-        if target.has_quota():
+        if target.has_quota(needs_gpu=needs_gpu_quota):
             return (target, None)
 
         if allow_requested_over_quota:
@@ -148,14 +198,56 @@ def select_project(
             )
             return (target, proceed_msg)
 
-        fallback_msg = f"Project '{target.name}' is over quota, selecting alternative..."
-        sorted_projects = sorted(projects, key=sort_key)
-        fallback = sorted_projects[0]
+        fallback_candidates = [
+            p for p in projects if p is not target and p.has_quota(needs_gpu=needs_gpu_quota)
+        ]
 
-        if not fallback.has_quota():
-            raise ValueError("All projects are over quota")
+        target_group = None
+        if shared_path_group_by_id is not None:
+            target_group = str(shared_path_group_by_id.get(target.project_id) or "").strip() or None
 
+        compatible_candidates = fallback_candidates
+        incompatible: list[ProjectInfo] = []
+        if target_group and shared_path_group_by_id is not None:
+            compatible_candidates = []
+            for project in fallback_candidates:
+                group = str(shared_path_group_by_id.get(project.project_id) or "").strip()
+                if group and group != target_group:
+                    incompatible.append(project)
+                    continue
+                compatible_candidates.append(project)
+
+        fallback = _best_by_quota(compatible_candidates)
+        if fallback is None:
+            suffix = ""
+            if target_group and incompatible:
+                suffix = (
+                    "\n\nNote: Some in-quota projects were excluded due to shared-path mismatch "
+                    f"(target group: {target_group})."
+                )
+            raise ValueError(
+                "All compatible projects are over quota\n" + _format_candidates(projects) + suffix
+            )
+
+        group_note = ""
+        if target_group and shared_path_group_by_id is not None:
+            fallback_group = str(shared_path_group_by_id.get(fallback.project_id) or "").strip()
+            if not fallback_group:
+                group_note = (
+                    " Warning: selected fallback project has unknown shared-path group; "
+                    "run 'inspire init --discover --probe-shared-path' to populate it."
+                )
+
+        fallback_msg = (
+            f"Project '{target.name}' is over quota; using '{fallback.name}'. "
+            "Hint: pass --project <name-or-id> to override."
+        )
+        if group_note:
+            fallback_msg = fallback_msg + group_note
         return (fallback, fallback_msg)
 
-    sorted_projects = sorted(projects, key=sort_key)
-    return (sorted_projects[0], None)
+    selected = _best_by_quota(_quota_candidates(projects))
+    if selected is None:
+        raise ValueError("All projects are over quota\n" + _format_candidates(projects))
+
+    return (selected, None)

@@ -371,22 +371,38 @@ def resolve_notebook_project(
     ctx: Context,
     *,
     projects: list,
+    config: Config,
     project: str | None,
-    cpu_only: bool,
+    allow_requested_over_quota: bool,
+    needs_gpu_quota: bool,
     json_output: bool,
 ) -> object | None:
+    project_value = project
+    if project_value and not project_value.startswith("project-"):
+        for alias, project_id in (config.projects or {}).items():
+            if alias.lower() == project_value.lower():
+                project_value = project_id
+                break
+
     try:
+        shared_groups = getattr(config, "project_shared_path_groups", None)
+        if not isinstance(shared_groups, dict) or not shared_groups:
+            shared_groups = None
+
         selected_project, fallback_msg = browser_api_module.select_project(
             projects,
-            project,
-            allow_requested_over_quota=cpu_only,
+            project_value,
+            allow_requested_over_quota=allow_requested_over_quota,
+            shared_path_group_by_id=shared_groups,
+            needs_gpu_quota=needs_gpu_quota,
         )
 
         if not json_output:
             if fallback_msg:
                 click.echo(fallback_msg)
             click.echo(
-                f"Using project: {selected_project.name}{selected_project.get_quota_status()}"
+                "Using project: "
+                f"{selected_project.name}{selected_project.get_quota_status(needs_gpu=needs_gpu_quota)}"
             )
     except ValueError as e:
         error_msg = str(e)
@@ -708,7 +724,7 @@ def run_notebook_create(
     name: Optional[str],
     workspace: Optional[str],
     workspace_id: Optional[str],
-    resource: str,
+    resource: str | None,
     project: Optional[str],
     image: Optional[str],
     shm_size: Optional[int],
@@ -718,6 +734,7 @@ def run_notebook_create(
     keepalive: bool,
     json_output: bool,
     priority: Optional[int] = None,
+    project_explicit: bool = False,
 ) -> None:
     json_output = resolve_json_output(ctx, json_output)
 
@@ -729,6 +746,13 @@ def run_notebook_create(
         ),
     )
     config = load_config(ctx)
+
+    if not resource:
+        resource = config.notebook_resource
+    if not project:
+        project = config.job_project_id
+    if not image:
+        image = config.notebook_image or config.job_image
     if shm_size is None:
         shm_size = config.shm_size if config.shm_size is not None else 32
     if shm_size < 1:
@@ -840,8 +864,10 @@ def run_notebook_create(
     selected_project = resolve_notebook_project(
         ctx,
         projects=projects,
+        config=config,
         project=project,
-        cpu_only=(gpu_count == 0),
+        allow_requested_over_quota=False,
+        needs_gpu_quota=(gpu_count > 0),
         json_output=json_output,
     )
     if not selected_project:

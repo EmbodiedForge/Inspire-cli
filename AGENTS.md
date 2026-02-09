@@ -19,9 +19,10 @@
 - `docs/` and `README.md` document usage; `bin/inspire` is a repo-local wrapper.
 
 ## Build, Test, and Development Commands
+- Prefer `uv` for all Python/CLI invocations (`uv run ...`, `uv tool run ...`); avoid system `python`/`pip`.
 - `uv tool install -e .` installs the CLI in editable mode without activating a venv.
 - `uv venv .venv && uv pip install -e .` creates a local venv and installs the package for development.
-- `inspire --help` validates the entry point.
+- `uv run inspire --help` validates the entry point (works without a global install).
 - `uv run pytest` runs the unit test suite.
 - `uv run pytest -m integration` runs integration tests that require live API access.
 - `uv run ruff check .` and `uv tool run black .` run linting and formatting.

@@ -25,6 +25,11 @@ def _session_matches_username(cached: WebSession, username: str) -> bool:
     return cached.login_username == username
 
 
+def _has_real_workspace_id(session: WebSession) -> bool:
+    value = str(session.workspace_id or "").strip()
+    return bool(value) and value != DEFAULT_WORKSPACE_ID
+
+
 def _maybe_apply_workspace_override(
     cached: WebSession,
     env_workspace_id: Optional[str],
@@ -49,7 +54,7 @@ def get_credentials() -> tuple[str, str]:
     if not username or not password:
         raise ValueError(
             "Missing web authentication credentials. Set [auth].username in project config and "
-            "configure password via INSPIRE_PASSWORD or global [accounts.\"<username>\"].password."
+            'configure password via INSPIRE_PASSWORD or global [accounts."<username>"].password.'
         )
 
     return username, password
@@ -168,10 +173,18 @@ def login_with_playwright(
         _wait_for_api_auth()
 
         # Extract workspace_id (spaceId)
-        # Priority: 1) env var override, 2) default workspace, 3) auto-detect from browser
+        # Priority: 1) env var override, 2) auto-detect from browser, 3) default placeholder
         workspace_id = os.environ.get("INSPIRE_WORKSPACE_ID")
+        if not workspace_id:
+            try:
+                detected = page.evaluate("() => window.localStorage.getItem('spaceId')")
+            except Exception:
+                detected = None
 
-        # Use default workspace unless explicitly overridden
+            detected_str = str(detected or "").strip()
+            if detected_str:
+                workspace_id = detected_str
+
         if not workspace_id:
             workspace_id = DEFAULT_WORKSPACE_ID
 
@@ -225,7 +238,7 @@ def get_web_session(force_refresh: bool = False, require_workspace: bool = False
         cached = WebSession.load(account=username or None)
         if cached and cached.storage_state.get("cookies"):
             _maybe_apply_workspace_override(cached, env_workspace_id)
-            if require_workspace and not cached.workspace_id:
+            if require_workspace and not _has_real_workspace_id(cached):
                 pass
             elif username and not _session_matches_username(cached, username):
                 # Credentials are available and don't match the cached login user.
@@ -240,7 +253,7 @@ def get_web_session(force_refresh: bool = False, require_workspace: bool = False
         if cached and cached.storage_state.get("cookies"):
             _maybe_apply_workspace_override(cached, env_workspace_id)
 
-            if require_workspace and not cached.workspace_id:
+            if require_workspace and not _has_real_workspace_id(cached):
                 raise credentials_error
             return cached
         raise credentials_error
@@ -250,7 +263,7 @@ def get_web_session(force_refresh: bool = False, require_workspace: bool = False
     cached = WebSession.load(allow_expired=True, account=username or None)
     if cached and cached.storage_state.get("cookies"):
         _maybe_apply_workspace_override(cached, env_workspace_id)
-        if (not require_workspace or cached.workspace_id) and _session_matches_username(
+        if (not require_workspace or _has_real_workspace_id(cached)) and _session_matches_username(
             cached, username
         ):
             # Use cached session; server will reject if truly invalid.
