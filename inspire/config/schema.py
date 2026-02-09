@@ -17,20 +17,16 @@ from inspire.config.schema_models import (  # noqa: F401
     _parse_list,
     parse_value,
 )
-from inspire.config.options.api import API_OPTIONS
-from inspire.config.options.authentication import AUTH_OPTIONS
-from inspire.config.options.bridge import BRIDGE_OPTIONS
-from inspire.config.options.git_platform import GIT_PLATFORM_OPTIONS
-from inspire.config.options.gitea import GITEA_OPTIONS
-from inspire.config.options.github import GITHUB_OPTIONS
-from inspire.config.options.job import JOB_OPTIONS
-from inspire.config.options.mirrors import MIRRORS_OPTIONS
-from inspire.config.options.notebook import NOTEBOOK_OPTIONS
-from inspire.config.options.paths import PATHS_OPTIONS
-from inspire.config.options.ssh import SSH_OPTIONS
-from inspire.config.options.sync import SYNC_OPTIONS
-from inspire.config.options.tunnel import TUNNEL_OPTIONS
-from inspire.config.options.workspaces import WORKSPACES_OPTIONS
+from inspire.config.options.api import API_OPTIONS, AUTH_OPTIONS
+from inspire.config.options.forge import GITEA_OPTIONS, GITHUB_OPTIONS, GIT_PLATFORM_OPTIONS
+from inspire.config.options.infra import SSH_OPTIONS, TUNNEL_OPTIONS, BRIDGE_OPTIONS, PATHS_OPTIONS
+from inspire.config.options.project import (
+    JOB_OPTIONS,
+    MIRRORS_OPTIONS,
+    NOTEBOOK_OPTIONS,
+    SYNC_OPTIONS,
+    WORKSPACES_OPTIONS,
+)
 
 # All configuration options organized by category.
 CONFIG_OPTIONS: list[ConfigOption] = [
