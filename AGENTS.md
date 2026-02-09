@@ -3,16 +3,18 @@
 ## Project Structure & Module Organization
 - `inspire/` is the main Python package.
 - CLI entry point: `inspire/cli/main.py`; command groups in `inspire/cli/commands/`; formatters in `inspire/cli/formatters/`.
+- CLI command groups use thin `__init__.py` files for Click group definitions and `add_command` registrations. Implementation lives in named submodules:
+  - `bridge/`: `exec_cmd.py`, `ssh_cmd.py`
+  - `tunnel/`: `add.py`, `remove.py`, `status.py`, `list_cmd.py`, `update.py`, `set_default.py`, `ssh_config.py`, `test_cmd.py`
+  - `config/`: `check.py`, `show.py`, `env_cmd.py`
+  - `init/`: `discover.py`, `templates.py`, `env_detect.py`, `toml_helpers.py`
+- Formatters: `human_formatter.py` (all human-readable output) and `json_formatter.py` (machine-readable).
 - Domain packages (preferred for shared logic; used by CLI):
-  - `inspire/config/` config models, TOML/env loading, and schema/options.
-  - `inspire/platform/openapi/` platform OpenAPI client + resource selection.
+  - `inspire/config/` config models, TOML/env loading, and schema/options. Options are grouped in `options/api.py`, `options/forge.py`, `options/infra.py`, `options/project.py`.
+  - `inspire/platform/openapi/` platform OpenAPI client + resource selection (`resources.py` is a flat module).
   - `inspire/platform/web/` web-session (SSO) + browser-only endpoints (`session/`, `browser_api/`).
-  - `inspire/core/` small shared utilities (no CLI concerns).
-  - `inspire/bridge/` bridge/tunnel/SSH integrations (in progress).
-  - `inspire/features/` higher-level workflows (in progress).
-- Legacy: backward-compat modules have been retired; current code is organized under `inspire/cli/`, `inspire/config/`, `inspire/platform/`, and `inspire/bridge/`.
-- Command groups may be split across modules: `inspire/cli/commands/job.py`, `notebook.py`, `tunnel.py`, and `resources.py` are registries, with subcommands implemented in `<group>_*.py`.
-- Internal-only implementations still use `_impl/` in some CLI areas (e.g. `inspire/cli/commands/_impl/`). Prefer moving reusable logic into `inspire/config/`, `inspire/platform/`, `inspire/bridge/`, and `inspire/features/` instead of adding new `_impl` modules.
+  - `inspire/platform/web/browser_api/` notebook HTTP APIs (`notebooks.py`), Playwright automation (`playwright_notebooks.py`), and rtunnel setup/probe/verify (`rtunnel.py`).
+  - `inspire/bridge/` bridge/tunnel/SSH integrations. Tunnel SSH helpers are in `tunnel/ssh.py` and `tunnel/ssh_exec.py` (flat modules).
 - `tests/` contains pytest suites (for example, `tests/test_cli_commands.py` and `tests/test_cli_smoke.py`).
 - `examples/` holds workflow YAMLs for Gitea Actions.
 - `scripts/` contains exploration/automation utilities used during API and UI discovery (gitignored; internal-only by default).
@@ -31,7 +33,7 @@
 ## Coding Style & Naming Conventions
 - Python 3.10+ codebase; follow Black and Ruff defaults with a 100-character line length.
 - Use `snake_case` for functions/variables, `CapWords` for classes, and `test_*.py` for test files.
-- CLI command groups map to `inspire/cli/commands/<group>.py` (for example, `job.py` for `inspire job ...`); subcommands may live in `inspire/cli/commands/<group>_*.py`.
+- CLI command groups use thin `__init__.py` files (group definition + `add_command` registrations only); implementation code goes in named submodules.
 
 ## Testing Guidelines
 - Tests live under `tests/` and use pytest.
