@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from inspire.config.ssh_runtime import SshRuntimeConfig
-from inspire.platform.web.browser_api.notebooks.playwright.rtunnel.commands import (
+from inspire.platform.web.browser_api.rtunnel import (
     BOOTSTRAP_SENTINEL,
     build_rtunnel_setup_commands,
 )
@@ -97,9 +97,9 @@ def test_non_dropbear_uses_bootstrap_sentinel_and_start_only_commands() -> None:
     assert f"BOOTSTRAP_SENTINEL={BOOTSTRAP_SENTINEL}" in joined
     assert 'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x /tmp/rtunnel ] ' in joined
     assert "apt-get install -y -qq openssh-server" in joined
-    assert "touch \"$BOOTSTRAP_SENTINEL\"" in joined
+    assert 'touch "$BOOTSTRAP_SENTINEL"' in joined
     assert 'rm -f "$BOOTSTRAP_SENTINEL"' in joined
     assert "pkill -f 'sshd -p'" not in joined
     assert 'pkill -f "rtunnel.*:$PORT"' not in joined
-    assert "grep -q \"[s]shd -p " in joined
-    assert "grep -q \"[r]tunnel .*:$PORT\"" in joined
+    assert 'grep -q "[s]shd -p ' in joined
+    assert 'grep -Eq "[r]tunnel .*([[:space:]]|:)$PORT([[:space:]]|$)"' in joined

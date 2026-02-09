@@ -7,7 +7,7 @@ from typing import Optional
 
 from .config import load_tunnel_config
 from .models import TunnelConfig
-from .ssh_exec.run import run_ssh_command
+from .ssh_exec import run_ssh_command
 
 
 def sync_via_ssh(

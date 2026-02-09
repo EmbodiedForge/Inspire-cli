@@ -23,17 +23,20 @@ from .rtunnel import (
     _get_rtunnel_download_url,
     get_rtunnel_path,
 )
-from .ssh.connection import _test_ssh_connection, is_tunnel_available
-from .ssh.proxy import _get_proxy_command
-from .ssh.ssh_config import (
+from .ssh import (
+    _get_proxy_command,
+    _test_ssh_connection,
     generate_all_ssh_configs,
     generate_ssh_config,
+    get_tunnel_status,
     install_ssh_config,
+    is_tunnel_available,
 )
-from .ssh.status import get_tunnel_status
-from .ssh_exec.args import get_ssh_command_args
-from .ssh_exec.run import run_ssh_command
-from .ssh_exec.stream import run_ssh_command_streaming
+from .ssh_exec import (
+    get_ssh_command_args,
+    run_ssh_command,
+    run_ssh_command_streaming,
+)
 from .sync import sync_via_ssh
 
 __all__ = [

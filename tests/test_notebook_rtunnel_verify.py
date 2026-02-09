@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from inspire.platform.web.browser_api.notebooks.playwright.rtunnel.verify import (
+from inspire.platform.web.browser_api.rtunnel import (
     _is_rtunnel_proxy_ready,
 )
 

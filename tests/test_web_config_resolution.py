@@ -8,7 +8,7 @@ import pytest
 
 from inspire.cli.utils.notebook_cli import get_base_url
 from inspire.config import Config
-from inspire.platform.web.browser_api.notebooks.http.api import _config_compute_groups_fallback
+from inspire.platform.web.browser_api.notebooks import _config_compute_groups_fallback
 
 
 def test_notebook_cli_base_url_respects_prefer_source_toml(

@@ -1,13 +1,35 @@
-"""Browser (web-session) notebook APIs (HTTP endpoints)."""
+"""Browser (web-session) notebook HTTP APIs (images, schedule, create, stop, start, detail, wait)."""
 
 from __future__ import annotations
 
+import time
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from inspire.config import Config
 from inspire.platform.web.browser_api.core import _browser_api_path, _get_base_url, _request_json
-from .models import ImageInfo
 from inspire.platform.web.session import DEFAULT_WORKSPACE_ID, WebSession, get_web_session
+
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ImageInfo:
+    """Docker image information."""
+
+    image_id: str
+    url: str
+    name: str
+    framework: str
+    version: str
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 def _notebooks_referer() -> str:
@@ -50,6 +72,11 @@ def _request_notebooks_data(
         raise ValueError(f"API error: {data.get('message')}")
 
     return data.get("data", default_data)
+
+
+# ---------------------------------------------------------------------------
+# Images
+# ---------------------------------------------------------------------------
 
 
 def list_images(
@@ -119,6 +146,11 @@ def list_images(
             )
         )
     return results
+
+
+# ---------------------------------------------------------------------------
+# Schedule / Prices / Compute groups
+# ---------------------------------------------------------------------------
 
 
 def get_notebook_schedule(
@@ -192,7 +224,9 @@ def get_resource_prices(
     if isinstance(data, list):
         return data
     # The API nests results under 'lcg_resource_spec_prices'
-    return data.get("lcg_resource_spec_prices", data.get("resource_spec_prices", data.get("list", [])))
+    return data.get(
+        "lcg_resource_spec_prices", data.get("resource_spec_prices", data.get("list", []))
+    )
 
 
 def list_notebook_compute_groups(
@@ -202,7 +236,7 @@ def list_notebook_compute_groups(
     """List notebook compute groups.
 
     Falls back to config-based compute groups when the API endpoint
-    is unavailable (404).
+    is unavailable (404) or returns an empty list.
     """
     session, workspace_id = _get_session_and_workspace_id(
         workspace_id=workspace_id, session=session
@@ -212,8 +246,10 @@ def list_notebook_compute_groups(
         "workspace_id": workspace_id,
     }
 
+    groups: list[dict] = []
+
     try:
-        return _request_notebooks_data(
+        data = _request_notebooks_data(
             session,
             "POST",
             "/notebook/compute_groups",
@@ -221,11 +257,35 @@ def list_notebook_compute_groups(
             timeout=30,
             default_data=[],
         )
+        if isinstance(data, list):
+            groups = data
     except ValueError as e:
         if "404" not in str(e):
             raise
-        # API endpoint missing — fall back to config-based compute groups
-        return _config_compute_groups_fallback()
+
+    if groups:
+        return groups
+
+    # API endpoint missing or returned an empty list — fall back to local config.
+    fallback = _config_compute_groups_fallback()
+    if fallback:
+        return fallback
+
+    # Last-resort fallback: reuse the generic compute group list endpoint.
+    # This endpoint is primarily used for training jobs, but is typically a good
+    # approximation when the notebook-specific endpoint is unavailable.
+    try:
+        from inspire.platform.web.browser_api.availability.api import (
+            list_compute_groups as _list_groups,
+        )
+
+        data = _list_groups(workspace_id=workspace_id, session=session)
+        if isinstance(data, list):
+            return data
+    except Exception:
+        return []
+
+    return []
 
 
 def _config_compute_groups_fallback() -> list[dict]:
@@ -259,6 +319,11 @@ def _config_compute_groups_fallback() -> list[dict]:
             }
         )
     return result
+
+
+# ---------------------------------------------------------------------------
+# CRUD
+# ---------------------------------------------------------------------------
 
 
 def create_notebook(
@@ -387,7 +452,44 @@ def get_notebook_detail(
     )
 
 
+# ---------------------------------------------------------------------------
+# Wait
+# ---------------------------------------------------------------------------
+
+
+def wait_for_notebook_running(
+    notebook_id: str,
+    session: Optional[WebSession] = None,
+    timeout: int = 600,
+    poll_interval: int = 5,
+) -> dict:
+    """Wait for a notebook instance to reach RUNNING status."""
+    if session is None:
+        session = get_web_session()
+
+    start = time.time()
+    last_status = None
+
+    while True:
+        notebook = get_notebook_detail(notebook_id=notebook_id, session=session)
+        status = (notebook.get("status") or "").upper()
+        if status:
+            last_status = status
+
+        if status == "RUNNING":
+            return notebook
+
+        if time.time() - start >= timeout:
+            raise TimeoutError(
+                f"Notebook '{notebook_id}' did not reach RUNNING within {timeout}s "
+                f"(last status: {last_status or 'unknown'})"
+            )
+
+        time.sleep(poll_interval)
+
+
 __all__ = [
+    "ImageInfo",
     "create_notebook",
     "get_notebook_detail",
     "get_notebook_schedule",
@@ -396,4 +498,6 @@ __all__ = [
     "list_notebook_compute_groups",
     "start_notebook",
     "stop_notebook",
+    "wait_for_notebook_running",
+    "_config_compute_groups_fallback",
 ]

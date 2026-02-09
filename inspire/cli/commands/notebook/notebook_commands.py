@@ -33,6 +33,7 @@ from inspire.config.ssh_runtime import resolve_ssh_runtime_config
 from inspire.config.workspaces import select_workspace_id
 from inspire.platform.web import browser_api as browser_api_module
 from inspire.platform.web import session as web_session_module
+from inspire.platform.web.browser_api.rtunnel import redact_proxy_url
 
 _ZERO_WORKSPACE_ID = "ws-00000000-0000-0000-0000-000000000000"
 
@@ -196,8 +197,11 @@ def _validate_notebook_account_access(
     if owner_names and current_username and current_username in owner_names:
         return True, ""
 
-    if owner_ids and current_user_id and current_user_id not in owner_ids and (
-        not member_ids or current_user_id not in member_ids
+    if (
+        owner_ids
+        and current_user_id
+        and current_user_id not in owner_ids
+        and (not member_ids or current_user_id not in member_ids)
     ):
         return (
             False,
@@ -439,20 +443,23 @@ def _resolve_notebook_id(
 @click.option(
     "--resource",
     "-r",
-    default=lambda: os.environ.get("INSPIRE_NOTEBOOK_RESOURCE", "1xH200"),
-    help="Resource spec (e.g., 1xH200, 4xH100, 4CPU)",
+    default=None,
+    help="Resource spec (e.g., 1xH200, 4xH100, 4CPU) (default from config [notebook].resource)",
 )
 @click.option(
     "--project",
     "-p",
-    default=lambda: os.environ.get("INSPIRE_PROJECT_ID"),
-    help="Project name or ID",
+    default=None,
+    help="Project name or ID (default from config [context].project or [job].project_id)",
 )
 @click.option(
     "--image",
     "-i",
-    default=lambda: (os.environ.get("INSPIRE_NOTEBOOK_IMAGE") or os.environ.get("INSP_IMAGE")),
-    help="Image name/URL (prompts interactively if omitted)",
+    default=None,
+    help=(
+        "Image name/URL (default from config [notebook].image or [job].image; prompts interactively "
+        "if still omitted)"
+    ),
 )
 @click.option(
     "--shm-size",
@@ -498,7 +505,7 @@ def create_notebook_cmd(
     name: Optional[str],
     workspace: Optional[str],
     workspace_id: Optional[str],
-    resource: str,
+    resource: Optional[str],
     project: Optional[str],
     image: Optional[str],
     shm_size: Optional[int],
@@ -525,6 +532,8 @@ def create_notebook_cmd(
         inspire notebook create --no-keepalive --no-wait  # Old behavior (return immediately)
         inspire notebook create --priority 5        # Set task priority to 5
     """
+    project_explicit = bool(project)
+
     run_notebook_create(
         ctx,
         name=name,
@@ -540,6 +549,7 @@ def create_notebook_cmd(
         keepalive=keepalive,
         json_output=json_output,
         priority=priority,
+        project_explicit=project_explicit,
     )
 
 
@@ -1101,7 +1111,7 @@ def run_notebook_ssh(
         hint=(
             "Notebook SSH requires web authentication. "
             "Set [auth].username and configure password via INSPIRE_PASSWORD "
-            "or global [accounts.\"<username>\"].password."
+            'or global [accounts."<username>"].password.'
         ),
     )
 
@@ -1153,14 +1163,13 @@ def run_notebook_ssh(
         _handle_error(
             ctx,
             "ConfigError",
-            "Notebook/account mismatch detected before tunnel setup: "
-            f"{reason}.",
+            "Notebook/account mismatch detected before tunnel setup: " f"{reason}.",
             EXIT_CONFIG_ERROR,
             hint=(
                 f"Notebook '{notebook_id}' appears to belong to another account. "
                 f"Switch [auth].username for this project (current: {user_label}) and ensure a "
                 "matching password is available via INSPIRE_PASSWORD or global "
-                "[accounts.\"<username>\"].password."
+                '[accounts."<username>"].password.'
             ),
         )
         return
@@ -1271,7 +1280,7 @@ def run_notebook_ssh(
                 "Retry 'inspire notebook ssh <notebook-id>' in a few seconds, "
                 "or run 'inspire tunnel test -b "
                 f"{profile_name}' to inspect connectivity. "
-                f"Proxy readiness report: {proxy_status} ({proxy_url})."
+                f"Proxy readiness report: {proxy_status} ({redact_proxy_url(proxy_url)})."
             ),
         )
         return

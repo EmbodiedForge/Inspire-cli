@@ -1,5 +1,5 @@
 from inspire.platform.openapi.models import GPUType
-from inspire.platform.openapi.resources.manager import ResourceManager
+from inspire.platform.openapi.resources import ResourceManager
 
 
 def test_resource_manager_ignores_compute_groups_without_supported_gpu_type() -> None:

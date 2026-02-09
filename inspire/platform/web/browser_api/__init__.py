@@ -17,6 +17,7 @@ from .availability import (
 from .jobs import (
     JobInfo,
     get_current_user,
+    get_train_job_workdir,
     list_job_users,
     list_jobs,
 )
@@ -28,12 +29,12 @@ from .notebooks import (
     get_resource_prices,
     list_images,
     list_notebook_compute_groups,
-    run_command_in_notebook,
-    setup_notebook_rtunnel,
     start_notebook,
     stop_notebook,
     wait_for_notebook_running,
 )
+from .playwright_notebooks import run_command_in_notebook
+from .rtunnel import setup_notebook_rtunnel
 from .projects import (
     ProjectInfo,
     list_projects,
@@ -44,6 +45,7 @@ __all__ = [
     # Jobs / users
     "JobInfo",
     "get_current_user",
+    "get_train_job_workdir",
     "list_job_users",
     "list_jobs",
     # Availability

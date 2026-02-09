@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from inspire.platform.web.browser_api.notebooks.playwright.jupyter import build_jupyter_proxy_url
+from inspire.platform.web.browser_api.playwright_notebooks import build_jupyter_proxy_url
 
 
 def test_build_jupyter_proxy_url_includes_token_from_path() -> None:
