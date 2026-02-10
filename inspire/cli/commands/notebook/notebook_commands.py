@@ -1104,7 +1104,6 @@ def run_notebook_ssh(
         load_tunnel_config,
         save_tunnel_config,
     )
-    from inspire.cli.utils.notebook_cli import require_web_session
 
     session = require_web_session(
         ctx,
