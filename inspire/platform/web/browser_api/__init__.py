@@ -34,6 +34,16 @@ from .notebooks import (
     wait_for_notebook_running,
 )
 from .playwright_notebooks import run_command_in_notebook
+from .images import (
+    CustomImageInfo,
+    create_image,
+    delete_image,
+    get_image_detail,
+    list_images_by_source,
+    list_private_images,
+    save_notebook_as_image,
+    wait_for_image_ready,
+)
 from .rtunnel import setup_notebook_rtunnel
 from .projects import (
     ProjectInfo,
@@ -59,6 +69,15 @@ __all__ = [
     "ProjectInfo",
     "list_projects",
     "select_project",
+    # Images
+    "CustomImageInfo",
+    "create_image",
+    "delete_image",
+    "get_image_detail",
+    "list_images_by_source",
+    "list_private_images",
+    "save_notebook_as_image",
+    "wait_for_image_ready",
     # Notebooks
     "ImageInfo",
     "create_notebook",

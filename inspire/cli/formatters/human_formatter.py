@@ -353,3 +353,98 @@ def format_groups(groups: List[Any]) -> str:
     lines.append(f"Total: {len(groups)} group(s)")
 
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Images
+# ---------------------------------------------------------------------------
+
+
+def format_image_list(images: List[Dict[str, Any]]) -> str:
+    """Format image list as a table.
+
+    Args:
+        images: List of image data dictionaries
+
+    Returns:
+        Formatted table string
+    """
+    if not images:
+        return "\nNo images found.\n"
+
+    # Human-readable source labels
+    source_labels = {
+        "SOURCE_OFFICIAL": "official",
+        "SOURCE_PUBLIC": "public",
+        "SOURCE_PRIVATE": "private",
+    }
+
+    lines = [
+        "",
+        f"{'Name':<30} {'Version':<12} {'Source':<10} {'Status':<10} {'Framework':<14}",
+        "\u2500" * 80,
+    ]
+
+    for img in images:
+        name = str(img.get("name", "N/A"))[:30]
+        version = str(img.get("version", ""))[:12]
+        raw_source = str(img.get("source", ""))
+        source = source_labels.get(raw_source, raw_source)[:10]
+        status = str(img.get("status", ""))[:10]
+        framework = str(img.get("framework", ""))[:14]
+
+        lines.append(f"{name:<30} {version:<12} {source:<10} {status:<10} {framework:<14}")
+
+    lines.append("\u2500" * 80)
+    lines.append(f"Total: {len(images)} image(s)")
+
+    return "\n".join(lines)
+
+
+def format_image_detail(image_data: Dict[str, Any]) -> str:
+    """Format image detail as a pretty box.
+
+    Args:
+        image_data: Image data dictionary
+
+    Returns:
+        Formatted string with image details
+    """
+    width = 64
+    lines = [
+        "",
+        "\u256d" + "\u2500" * width + "\u256e",
+        "\u2502" + " Image Detail".ljust(width) + "\u2502",
+        "\u251c" + "\u2500" * width + "\u2524",
+    ]
+
+    # Human-readable source labels
+    source_labels = {
+        "SOURCE_OFFICIAL": "official",
+        "SOURCE_PUBLIC": "public",
+        "SOURCE_PRIVATE": "private",
+    }
+
+    raw_source = str(image_data.get("source", ""))
+    source = source_labels.get(raw_source, raw_source)
+
+    fields = [
+        ("Image ID", image_data.get("image_id", "N/A")),
+        ("Name", image_data.get("name", "N/A")),
+        ("Version", image_data.get("version", "")),
+        ("Framework", image_data.get("framework", "")),
+        ("Source", source),
+        ("Status", image_data.get("status", "")),
+        ("URL", image_data.get("url", "")),
+        ("Description", image_data.get("description", "")),
+        ("Created", image_data.get("created_at", "")),
+    ]
+
+    for label, value in fields:
+        if value:
+            line = f" {label}:".ljust(15) + str(value)
+            lines.append("\u2502" + line[:width].ljust(width) + "\u2502")
+
+    lines.append("\u2570" + "\u2500" * width + "\u256f")
+
+    return "\n".join(lines)

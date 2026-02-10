@@ -9,5 +9,17 @@ from inspire.cli.commands.tunnel import tunnel
 from inspire.cli.commands.run import run
 from inspire.cli.commands.notebook import notebook
 from inspire.cli.commands.init import init
+from inspire.cli.commands.image import image
 
-__all__ = ["job", "resources", "config", "sync", "bridge", "tunnel", "run", "notebook", "init"]
+__all__ = [
+    "job",
+    "resources",
+    "config",
+    "sync",
+    "bridge",
+    "tunnel",
+    "run",
+    "notebook",
+    "init",
+    "image",
+]

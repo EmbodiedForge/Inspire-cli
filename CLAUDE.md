@@ -19,6 +19,7 @@ inspire/
 │   ├── commands/           # Command implementations
 │   │   ├── job/           # Job management (create, status, logs, list, stop, wait)
 │   │   ├── notebook/      # Notebook management (list, create, start, stop, ssh)
+│   │   ├── image/         # Image management (list, detail, register, save, delete, set-default)
 │   │   ├── resources/     # GPU/node availability
 │   │   ├── bridge/        # Remote execution (exec_cmd.py, ssh_cmd.py)
 │   │   ├── tunnel/        # SSH tunnel management (add, remove, status, list, etc.)
@@ -32,7 +33,7 @@ inspire/
 ├── platform/
 │   ├── openapi/           # Token-based API client + resource selection (resources.py)
 │   └── web/               # Web session (SSO) + browser-only endpoints
-│       └── browser_api/   # notebooks.py, playwright_notebooks.py, rtunnel.py
+│       └── browser_api/   # notebooks.py, images.py, playwright_notebooks.py, rtunnel.py
 ├── bridge/
 │   ├── forge/             # Gitea/GitHub workflow interactions
 │   └── tunnel/            # SSH tunnel (ssh.py, ssh_exec.py, rtunnel, models, config)
@@ -44,6 +45,7 @@ inspire/
 |---------|---------|
 | `job create/status/logs/list/stop/wait` | Manage training jobs |
 | `notebook list/create/start/stop/ssh` | Manage interactive notebooks |
+| `image list/detail/register/save/delete/set-default` | Manage Docker images |
 | `resources list/nodes` | View GPU availability |
 | `run` | Quick job submission with auto-resource selection |
 | `sync` | Push code to Bridge runner |
@@ -58,6 +60,9 @@ inspire/
 # Install dependencies
 uv sync
 
+# Set up pre-commit hooks (required for new clones)
+uv run pre-commit install
+
 # Run CLI
 uv run inspire --help
 
@@ -68,7 +73,41 @@ uv run pytest -m integration  # Integration tests only
 # Format/lint
 uv run black inspire tests
 uv run ruff check inspire tests
+
+# Run pre-commit hooks manually on all files
+uv run pre-commit run --all-files
 ```
+
+## CI/CD (Codeberg Forgejo Actions)
+
+Workflows live in `.forgejo/workflows/`:
+
+| Workflow | Trigger | Jobs |
+|----------|---------|------|
+| `ci.yml` | Push to `main`, PRs | `lint` (ruff + black --check), `test` (pytest) |
+| `release.yml` | `v*` tag push | Tests + version consistency check across pyproject.toml, `__init__.py`, and git tag |
+| `deps-check.yml` | Weekly (Mon 09:00 UTC) | Checks for outdated packages and stale lockfile |
+
+**Note:** Codeberg repo must have Actions enabled in Settings > Repository > Actions.
+
+## Release Process
+
+Uses [commitizen](https://commitizen-tools.github.io/commitizen/) for version management. Config in `[tool.commitizen]` in `pyproject.toml`.
+
+```bash
+# 1. Bump version (updates pyproject.toml, __init__.py, CHANGELOG.md, creates git tag)
+uv run cz bump --patch   # or --minor / --major
+
+# 2. Push to Codeberg (triggers CI + release validation)
+git push origin main --tags
+
+# 3. When ready, sync to GitHub public (see Bidirectional Workflow below)
+```
+
+Version is tracked in three places (kept in sync by commitizen):
+- `pyproject.toml` → `project.version`
+- `pyproject.toml` → `tool.commitizen.version`
+- `inspire/__init__.py` → `__version__`
 
 ## Architecture Patterns
 

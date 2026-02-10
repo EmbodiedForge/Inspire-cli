@@ -9,6 +9,7 @@ def test_cli_help_includes_top_level_groups() -> None:
     assert result.exit_code == 0
     assert "job" in result.output
     assert "notebook" in result.output
+    assert "image" in result.output
     assert "resources" in result.output
     assert "tunnel" in result.output
 

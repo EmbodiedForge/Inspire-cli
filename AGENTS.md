@@ -8,12 +8,13 @@
   - `tunnel/`: `add.py`, `remove.py`, `status.py`, `list_cmd.py`, `update.py`, `set_default.py`, `ssh_config.py`, `test_cmd.py`
   - `config/`: `check.py`, `show.py`, `env_cmd.py`
   - `init/`: `discover.py`, `templates.py`, `env_detect.py`, `toml_helpers.py`
+  - `image/`: `image_commands.py` (list, detail, register, save, delete, set-default)
 - Formatters: `human_formatter.py` (all human-readable output) and `json_formatter.py` (machine-readable).
 - Domain packages (preferred for shared logic; used by CLI):
   - `inspire/config/` config models, TOML/env loading, and schema/options. Options are grouped in `options/api.py`, `options/forge.py`, `options/infra.py`, `options/project.py`.
   - `inspire/platform/openapi/` platform OpenAPI client + resource selection (`resources.py` is a flat module).
   - `inspire/platform/web/` web-session (SSO) + browser-only endpoints (`session/`, `browser_api/`).
-  - `inspire/platform/web/browser_api/` notebook HTTP APIs (`notebooks.py`), Playwright automation (`playwright_notebooks.py`), and rtunnel setup/probe/verify (`rtunnel.py`).
+  - `inspire/platform/web/browser_api/` notebook HTTP APIs (`notebooks.py`), image management APIs (`images.py`), Playwright automation (`playwright_notebooks.py`), and rtunnel setup/probe/verify (`rtunnel.py`).
   - `inspire/bridge/` bridge/tunnel/SSH integrations. Tunnel SSH helpers are in `tunnel/ssh.py` and `tunnel/ssh_exec.py` (flat modules).
 - `tests/` contains pytest suites (for example, `tests/test_cli_commands.py` and `tests/test_cli_smoke.py`).
 - `examples/` holds workflow YAMLs for Gitea Actions.

@@ -17,7 +17,18 @@ from inspire.cli.context import (
     pass_context,
     EXIT_GENERAL_ERROR,
 )
-from inspire.cli.commands import job, resources, config, sync, bridge, tunnel, run, notebook, init
+from inspire.cli.commands import (
+    job,
+    resources,
+    config,
+    sync,
+    bridge,
+    tunnel,
+    run,
+    notebook,
+    init,
+    image,
+)
 
 
 def _apply_profile_option(
@@ -81,6 +92,7 @@ main.add_command(tunnel)
 main.add_command(run)
 main.add_command(notebook)
 main.add_command(init)
+main.add_command(image)
 
 
 def cli() -> None:
