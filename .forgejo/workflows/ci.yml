@@ -8,7 +8,7 @@ on:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: codeberg-small
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -19,7 +19,7 @@ jobs:
         run: uv run black --check inspire tests
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: codeberg-small
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
