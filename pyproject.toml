@@ -71,4 +71,17 @@ target-version = ["py310"]
 [dependency-groups]
 dev = [
     "pytest>=9.0.1",
+    "commitizen>=3.12.0",
+    "pre-commit>=3.6.0",
 ]
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.2.4"
+version_files = [
+    "inspire/__init__.py:__version__",
+    "pyproject.toml:^version"
+]
+tag_format = "v$version"
+update_changelog_on_bump = true
+changelog_file = "CHANGELOG.md"

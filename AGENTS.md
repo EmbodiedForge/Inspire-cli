@@ -30,6 +30,18 @@
 - `uv run ruff check .` and `uv tool run black .` run linting and formatting.
 - `uv` may update `uv.lock` during runs; avoid committing it unless you intentionally changed dependencies.
 
+## CI/CD and Release Process
+- CI runs on Codeberg via Forgejo Actions (`.forgejo/workflows/`). Triggered on push to `main` and PRs.
+- CI jobs: `lint` (ruff + black --check) and `test` (pytest) run in parallel.
+- Release workflow triggers on `v*` tag push — runs tests and verifies version consistency across `pyproject.toml`, `inspire/__init__.py`, and the git tag.
+- Dependencies are checked weekly (Monday 09:00 UTC) by the `deps-check` workflow.
+- **Release process:**
+  1. `uv run cz bump --patch` (or `--minor` / `--major`) — updates `pyproject.toml`, `inspire/__init__.py`, `CHANGELOG.md`, and creates a git tag.
+  2. `git push origin main --tags` — triggers release validation CI.
+  3. Sync to GitHub public using the existing file-copy process (see `CLAUDE.md`).
+- New clones should run: `uv run pre-commit install` to set up formatting/lint hooks.
+- Manual dependency update: `uv lock --upgrade`.
+
 ## Coding Style & Naming Conventions
 - Python 3.10+ codebase; follow Black and Ruff defaults with a 100-character line length.
 - Use `snake_case` for functions/variables, `CapWords` for classes, and `test_*.py` for test files.
