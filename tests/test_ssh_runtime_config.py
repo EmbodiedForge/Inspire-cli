@@ -84,10 +84,12 @@ rtunnel_bin = "/project/rtunnel"
         global_dir = tmp_path / "global"
         global_dir.mkdir()
         global_config = global_dir / "config.toml"
-        global_config.write_text("""
+        global_config.write_text(
+            """
 [ssh]
 rtunnel_bin = "/global/rtunnel"
-""")
+"""
+        )
 
         _write_project_config(
             tmp_path,

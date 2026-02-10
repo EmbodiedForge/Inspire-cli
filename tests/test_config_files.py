@@ -253,14 +253,16 @@ class TestLayeredConfig:
         global_dir = tmp_path / "global"
         global_dir.mkdir()
         global_config = global_dir / "config.toml"
-        global_config.write_text("""
+        global_config.write_text(
+            """
 [auth]
 username = "globaluser"
 
 [api]
 base_url = "https://global.example.com"
 timeout = 45
-""")
+"""
+        )
         monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
         monkeypatch.chdir(tmp_path)
 
@@ -280,13 +282,15 @@ timeout = 45
         project_dir = tmp_path / ".inspire"
         project_dir.mkdir()
         project_config = project_dir / "config.toml"
-        project_config.write_text("""
+        project_config.write_text(
+            """
 [auth]
 username = "projectuser"
 
 [api]
 timeout = 120
-""")
+"""
+        )
         monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "nonexistent" / "config.toml")
         monkeypatch.chdir(tmp_path)
 
@@ -305,23 +309,27 @@ timeout = 120
         global_dir = tmp_path / "global"
         global_dir.mkdir()
         global_config = global_dir / "config.toml"
-        global_config.write_text("""
+        global_config.write_text(
+            """
 [auth]
 username = "globaluser"
 
 [api]
 timeout = 45
 base_url = "https://global.example.com"
-""")
+"""
+        )
 
         # Create project config
         project_dir = tmp_path / ".inspire"
         project_dir.mkdir()
         project_config = project_dir / "config.toml"
-        project_config.write_text("""
+        project_config.write_text(
+            """
 [api]
 timeout = 120
-""")
+"""
+        )
 
         monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
         monkeypatch.chdir(tmp_path)
@@ -348,13 +356,15 @@ timeout = 120
         global_dir = tmp_path / "global"
         global_dir.mkdir()
         global_config = global_dir / "config.toml"
-        global_config.write_text("""
+        global_config.write_text(
+            """
 [auth]
 username = "globaluser"
 
 [api]
 timeout = 45
-""")
+"""
+        )
 
         monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
         monkeypatch.chdir(tmp_path)
@@ -377,14 +387,16 @@ timeout = 45
         global_dir = tmp_path / "global"
         global_dir.mkdir()
         global_config = global_dir / "config.toml"
-        global_config.write_text("""
+        global_config.write_text(
+            """
 [auth]
 username = "testuser"
 
 [remote_env]
 WANDB_API_KEY = "global-key"
 UV_PYTHON_INSTALL_DIR = "/path/to/uv"
-""")
+"""
+        )
 
         monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
         monkeypatch.chdir(tmp_path)
@@ -405,21 +417,25 @@ UV_PYTHON_INSTALL_DIR = "/path/to/uv"
         global_dir = tmp_path / "global"
         global_dir.mkdir()
         global_config = global_dir / "config.toml"
-        global_config.write_text("""
+        global_config.write_text(
+            """
 [remote_env]
 WANDB_API_KEY = "global-key"
 UV_PYTHON_INSTALL_DIR = "/path/to/uv"
-""")
+"""
+        )
 
         # Create project config with different remote_env
         project_dir = tmp_path / ".inspire"
         project_dir.mkdir()
         project_config = project_dir / "config.toml"
-        project_config.write_text("""
+        project_config.write_text(
+            """
 [remote_env]
 WANDB_API_KEY = "project-key"
 HF_TOKEN = "hf-token"
-""")
+"""
+        )
 
         monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
         monkeypatch.chdir(tmp_path)
@@ -1161,10 +1177,12 @@ class TestPreferSource:
         project_dir = tmp_path / ".inspire"
         project_dir.mkdir()
         project_config = project_dir / "config.toml"
-        project_config.write_text("""
+        project_config.write_text(
+            """
 [api]
 timeout = 120
-""")
+"""
+        )
         monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "nonexistent" / "config.toml")
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("INSPIRE_TIMEOUT", "90")
@@ -1182,13 +1200,15 @@ timeout = 120
         project_dir = tmp_path / ".inspire"
         project_dir.mkdir()
         project_config = project_dir / "config.toml"
-        project_config.write_text("""
+        project_config.write_text(
+            """
 [cli]
 prefer_source = "env"
 
 [api]
 timeout = 120
-""")
+"""
+        )
         monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "nonexistent" / "config.toml")
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("INSPIRE_TIMEOUT", "90")
@@ -1205,13 +1225,15 @@ timeout = 120
         project_dir = tmp_path / ".inspire"
         project_dir.mkdir()
         project_config = project_dir / "config.toml"
-        project_config.write_text("""
+        project_config.write_text(
+            """
 [cli]
 prefer_source = "toml"
 
 [api]
 timeout = 120
-""")
+"""
+        )
         monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "nonexistent" / "config.toml")
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("INSPIRE_TIMEOUT", "90")
@@ -1229,13 +1251,15 @@ timeout = 120
         project_dir = tmp_path / ".inspire"
         project_dir.mkdir()
         project_config = project_dir / "config.toml"
-        project_config.write_text("""
+        project_config.write_text(
+            """
 [cli]
 prefer_source = "toml"
 
 [api]
 timeout = 120
-""")
+"""
+        )
         monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "nonexistent" / "config.toml")
         monkeypatch.chdir(tmp_path)
         # Set env var for a field NOT in the project TOML
@@ -1258,19 +1282,23 @@ timeout = 120
         global_dir = tmp_path / "global"
         global_dir.mkdir()
         global_config = global_dir / "config.toml"
-        global_config.write_text("""
+        global_config.write_text(
+            """
 [api]
 timeout = 45
-""")
+"""
+        )
 
         # Create project config with prefer_source but NOT setting timeout
         project_dir = tmp_path / ".inspire"
         project_dir.mkdir()
         project_config = project_dir / "config.toml"
-        project_config.write_text("""
+        project_config.write_text(
+            """
 [cli]
 prefer_source = "toml"
-""")
+"""
+        )
 
         monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
         monkeypatch.chdir(tmp_path)
@@ -1289,21 +1317,25 @@ prefer_source = "toml"
         global_dir = tmp_path / "global"
         global_dir.mkdir()
         global_config = global_dir / "config.toml"
-        global_config.write_text("""
+        global_config.write_text(
+            """
 [accounts."toml-user"]
 password = "global-pass"
-""")
+"""
+        )
 
         project_dir = tmp_path / ".inspire"
         project_dir.mkdir()
         project_config = project_dir / "config.toml"
-        project_config.write_text("""
+        project_config.write_text(
+            """
 [cli]
 prefer_source = "toml"
 
 [auth]
 username = "toml-user"
-""")
+"""
+        )
 
         monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
         monkeypatch.chdir(tmp_path)
@@ -1322,10 +1354,12 @@ username = "toml-user"
         project_dir = tmp_path / ".inspire"
         project_dir.mkdir()
         project_config = project_dir / "config.toml"
-        project_config.write_text("""
+        project_config.write_text(
+            """
 [auth]
 username = "toml-user"
-""")
+"""
+        )
         monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "missing" / "config.toml")
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("INSPIRE_PASSWORD", "env-pass")
@@ -1342,10 +1376,12 @@ username = "toml-user"
         project_dir = tmp_path / ".inspire"
         project_dir.mkdir()
         project_config = project_dir / "config.toml"
-        project_config.write_text("""
+        project_config.write_text(
+            """
 [cli]
 prefer_source = "invalid"
-""")
+"""
+        )
         monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "nonexistent" / "config.toml")
         monkeypatch.chdir(tmp_path)
 
@@ -1359,10 +1395,12 @@ prefer_source = "invalid"
         project_dir = tmp_path / ".inspire"
         project_dir.mkdir()
         project_config = project_dir / "config.toml"
-        project_config.write_text("""
+        project_config.write_text(
+            """
 [cli]
 prefer_source = "toml"
-""")
+"""
+        )
         monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "nonexistent" / "config.toml")
         monkeypatch.chdir(tmp_path)
 
@@ -1394,10 +1432,12 @@ prefer_source = "toml"
         project_dir = tmp_path / ".inspire"
         project_dir.mkdir()
         project_config = project_dir / "config.toml"
-        project_config.write_text("""
+        project_config.write_text(
+            """
 [cli]
 prefer_source = "toml"
-""")
+"""
+        )
         monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "nonexistent" / "config.toml")
         monkeypatch.chdir(tmp_path)
 

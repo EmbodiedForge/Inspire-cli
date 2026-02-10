@@ -116,13 +116,15 @@ def login_with_playwright(
             except Exception:
                 pass
             try:
-                pass_locator.evaluate("""
+                pass_locator.evaluate(
+                    """
                     el => {
                       const btn = el.form?.querySelector('#passbutton,button[type="submit"],input[type="submit"]');
                       if (btn) { btn.click(); return true; }
                       return false;
                     }
-                    """)
+                    """
+                )
             except Exception:
                 pass
 

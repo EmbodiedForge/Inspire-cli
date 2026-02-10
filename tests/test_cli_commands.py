@@ -854,10 +854,12 @@ def test_config_check_json_includes_base_url_resolution(
     project_dir = tmp_path / ".inspire"
     project_dir.mkdir(parents=True, exist_ok=True)
     project_config = project_dir / "config.toml"
-    project_config.write_text("""
+    project_config.write_text(
+        """
 [api]
 base_url = "https://my-inspire.internal"
-""")
+"""
+    )
     global_config = tmp_path / "global-config.toml"
 
     def fake_from_files_and_env(

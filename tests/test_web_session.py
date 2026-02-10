@@ -175,20 +175,24 @@ def test_get_credentials_prefers_project_toml_when_prefer_source_toml(
 ):
     global_dir = tmp_path / ".config" / "inspire"
     global_dir.mkdir(parents=True)
-    (global_dir / "config.toml").write_text("""
+    (global_dir / "config.toml").write_text(
+        """
 [accounts."toml-user"]
 password = "global-pass"
-""")
+"""
+    )
 
     project_dir = tmp_path / ".inspire"
     project_dir.mkdir()
-    (project_dir / "config.toml").write_text("""
+    (project_dir / "config.toml").write_text(
+        """
 [cli]
 prefer_source = "toml"
 
 [auth]
 username = "toml-user"
-""")
+"""
+    )
     monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_dir / "config.toml")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("INSPIRE_USERNAME", "env-user")

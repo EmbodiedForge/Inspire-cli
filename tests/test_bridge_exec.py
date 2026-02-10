@@ -224,7 +224,9 @@ def test_bridge_exec_ssh_streaming_success(monkeypatch: pytest.MonkeyPatch, tmp_
         return 0
 
     monkeypatch.setattr(exec_cmd_module, "is_tunnel_available", fake_is_tunnel_available)
-    monkeypatch.setattr(exec_cmd_module, "run_ssh_command_streaming", fake_run_ssh_command_streaming)
+    monkeypatch.setattr(
+        exec_cmd_module, "run_ssh_command_streaming", fake_run_ssh_command_streaming
+    )
 
     runner = CliRunner()
     result = runner.invoke(cli_main, ["bridge", "exec", "echo test"])
@@ -269,7 +271,9 @@ def test_bridge_exec_ssh_json_uses_buffered(
         return FakeCompletedProcess()
 
     monkeypatch.setattr(exec_cmd_module, "is_tunnel_available", fake_is_tunnel_available)
-    monkeypatch.setattr(exec_cmd_module, "run_ssh_command_streaming", fake_run_ssh_command_streaming)
+    monkeypatch.setattr(
+        exec_cmd_module, "run_ssh_command_streaming", fake_run_ssh_command_streaming
+    )
     monkeypatch.setattr(exec_cmd_module, "run_ssh_command", fake_run_ssh_command)
 
     runner = CliRunner()
@@ -303,7 +307,9 @@ def test_bridge_exec_ssh_streaming_timeout(monkeypatch: pytest.MonkeyPatch, tmp_
         raise subprocess.TimeoutExpired(cmd="ssh", timeout=5)
 
     monkeypatch.setattr(exec_cmd_module, "is_tunnel_available", fake_is_tunnel_available)
-    monkeypatch.setattr(exec_cmd_module, "run_ssh_command_streaming", fake_run_ssh_command_streaming)
+    monkeypatch.setattr(
+        exec_cmd_module, "run_ssh_command_streaming", fake_run_ssh_command_streaming
+    )
 
     runner = CliRunner()
     result = runner.invoke(cli_main, ["bridge", "exec", "sleep 100", "--timeout", "5"])
@@ -329,7 +335,9 @@ def test_bridge_exec_ssh_streaming_failure(monkeypatch: pytest.MonkeyPatch, tmp_
         return 1  # Non-zero exit code
 
     monkeypatch.setattr(exec_cmd_module, "is_tunnel_available", fake_is_tunnel_available)
-    monkeypatch.setattr(exec_cmd_module, "run_ssh_command_streaming", fake_run_ssh_command_streaming)
+    monkeypatch.setattr(
+        exec_cmd_module, "run_ssh_command_streaming", fake_run_ssh_command_streaming
+    )
 
     runner = CliRunner()
     result = runner.invoke(cli_main, ["bridge", "exec", "false"])
@@ -455,7 +463,9 @@ def test_bridge_exec_passes_requested_bridge_to_ssh(
         return 0
 
     monkeypatch.setattr(exec_cmd_module, "is_tunnel_available", fake_is_tunnel_available)
-    monkeypatch.setattr(exec_cmd_module, "run_ssh_command_streaming", fake_run_ssh_command_streaming)
+    monkeypatch.setattr(
+        exec_cmd_module, "run_ssh_command_streaming", fake_run_ssh_command_streaming
+    )
 
     runner = CliRunner()
     result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--bridge", "gpu-main"])
