@@ -596,6 +596,304 @@ def _timing_enabled() -> bool:
     return value.strip().lower() in {"1", "true", "yes"}
 
 
+class _StepTimer:
+    """Lightweight per-step timing collector for the rtunnel setup flow.
+
+    When *enabled* is ``False`` every method is a no-op (zero overhead).
+    """
+
+    def __init__(self, *, enabled: bool = False) -> None:
+        self._enabled = enabled
+        self._steps: list[tuple[str, float]] = []  # (label, elapsed_s)
+        self._last = time.monotonic() if enabled else 0.0
+
+    def mark(self, label: str) -> float:
+        """Record elapsed time since the previous mark.
+
+        Returns the step duration in seconds (0.0 when disabled).
+        """
+        if not self._enabled:
+            return 0.0
+        import sys as _sys
+
+        now = time.monotonic()
+        elapsed = now - self._last
+        self._last = now
+        self._steps.append((label, elapsed))
+        _sys.stderr.write(f"  [timing] {label}: {elapsed:.3f}s\n")
+        _sys.stderr.flush()
+        return elapsed
+
+    def summary(self) -> None:
+        """Print a visual summary table to stderr."""
+        if not self._enabled or not self._steps:
+            return
+        import sys as _sys
+
+        total = sum(s for _, s in self._steps)
+        if total <= 0:
+            return
+
+        max_label = max(len(label) for label, _ in self._steps)
+        bar_width = 30
+
+        _sys.stderr.write("\n  ── rtunnel timing summary ──\n")
+        for label, elapsed in self._steps:
+            pct = elapsed / total * 100
+            bar_len = int(round(pct / 100 * bar_width))
+            bar = "#" * bar_len
+            _sys.stderr.write(f"  {label:<{max_label}}  {elapsed:6.2f}s  {pct:5.1f}%  {bar}\n")
+        _sys.stderr.write(f"  {'TOTAL':<{max_label}}  {total:6.2f}s\n")
+        _sys.stderr.flush()
+
+
+def _jupyter_server_base(lab_url: str) -> str:
+    """Derive the Jupyter server base URL from a lab frame URL.
+
+    Only strips ``/lab`` when it is the **final** path segment (the
+    JupyterLab UI route), not when ``/lab/`` appears mid-path as part
+    of the platform's proxy path (e.g. ``/api/v1/notebook/lab/{id}/``).
+    """
+    from urllib.parse import urlsplit, urlunsplit
+
+    parts = urlsplit(lab_url)
+    path = parts.path.rstrip("/")
+    if path.endswith("/lab"):
+        path = path[:-4]
+    if not path.endswith("/"):
+        path = path + "/"
+    return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
+
+
+def _create_terminal_via_api(context: Any, lab_url: str) -> str | None:
+    """Create a JupyterLab terminal via REST API.
+
+    Uses ``context.request`` which shares the browser session's cookies.
+    JupyterLab requires an ``_xsrf`` cookie value in the ``X-XSRFToken``
+    header for state-changing requests.
+    Returns the terminal name (e.g. ``"1"``) on success, or ``None``.
+    """
+    base = _jupyter_server_base(lab_url)
+    api_url = f"{base}api/terminals"
+    try:
+        # JupyterLab XSRF protection: extract _xsrf cookie value
+        headers: dict[str, str] = {}
+        try:
+            for cookie in context.cookies():
+                if cookie.get("name") == "_xsrf":
+                    headers["X-XSRFToken"] = cookie["value"]
+                    break
+        except Exception:
+            pass
+
+        resp = context.request.post(api_url, headers=headers, timeout=10000)
+        if resp.status in (200, 201):
+            data = resp.json()
+            return data.get("name")
+    except Exception:
+        pass
+    return None
+
+
+def _build_batch_setup_script(cmd_lines: list[str]) -> str:
+    """Encode setup commands as a single base64-wrapped bash line.
+
+    Instead of typing each command separately (fragile if the terminal
+    loses focus), we ship the entire script as::
+
+        echo '<base64>' | base64 -d | bash
+    """
+    import base64
+
+    script = "\n".join(cmd_lines) + "\n"
+    encoded = base64.b64encode(script.encode()).decode()
+    return f"echo '{encoded}' | base64 -d | bash"
+
+
+def _open_or_create_terminal(
+    context: Any,
+    page: Any,
+    lab_frame: Any,
+) -> bool:
+    """Open a terminal in JupyterLab.  REST API first, then DOM fallbacks."""
+    import sys as _sys
+
+    lab_url = lab_frame.url
+    api_term_created = False
+
+    # ------------------------------------------------------------------
+    # Strategy 1: REST API – create terminal + navigate directly to it
+    # ------------------------------------------------------------------
+    term_name = _create_terminal_via_api(context, lab_url)
+    if term_name:
+        _sys.stderr.write(f"  Created terminal '{term_name}' via REST API.\n")
+        _sys.stderr.flush()
+        server_base = _jupyter_server_base(lab_url)
+        term_url = f"{server_base}lab/terminals/{term_name}?reset"
+        try:
+            lab_frame.goto(term_url, timeout=15000, wait_until="domcontentloaded")
+            # Wait for xterm widget to appear in the DOM.
+            # Some deployments' workspace restoration may prevent the terminal
+            # from opening via URL alone; in that case fall through to DOM.
+            lab_frame.locator(".xterm").first.wait_for(state="attached", timeout=10000)
+            return True
+        except Exception:
+            _sys.stderr.write(
+                "  REST API terminal created but xterm not visible, " "trying DOM fallbacks...\n"
+            )
+            _sys.stderr.flush()
+            api_term_created = True
+
+    # ------------------------------------------------------------------
+    # Strategy 2–5: DOM fallbacks (existing logic, unchanged)
+    # ------------------------------------------------------------------
+
+    # Wait for launcher or menu to signal readiness.
+    # When the REST API already created the terminal, the page is on the
+    # terminal URL — there is no launcher card.  Skip straight to a short
+    # File-menu check so we still gate on JupyterLab being interactive.
+    if api_term_created:
+        try:
+            lab_frame.get_by_role("menuitem", name="File").first.wait_for(
+                state="visible", timeout=15000
+            )
+        except Exception:
+            try:
+                lab_frame.get_by_role("menuitem", name="文件").first.wait_for(
+                    state="visible", timeout=15000
+                )
+            except Exception:
+                pass
+    else:
+        try:
+            lab_frame.locator(
+                "div.jp-LauncherCard:has-text('Terminal'), " "div.jp-LauncherCard:has-text('终端')"
+            ).first.wait_for(state="visible", timeout=45000)
+        except Exception:
+            try:
+                lab_frame.get_by_role("menuitem", name="File").first.wait_for(
+                    state="visible", timeout=45000
+                )
+            except Exception:
+                try:
+                    lab_frame.get_by_role("menuitem", name="文件").first.wait_for(
+                        state="visible", timeout=45000
+                    )
+                except Exception:
+                    pass
+
+    # Dismiss popups (Jupyter news, jupyterlab-git, etc.)
+    for _pass in range(1):
+        dismissed = False
+        for label in ("Dismiss", "No", "否", "不接收", "取消"):
+            try:
+                btn = lab_frame.get_by_role("button", name=label)
+                if btn.count() > 0:
+                    btn.first.click(timeout=1000)
+                    dismissed = True
+                    break
+            except Exception:
+                pass
+        if not dismissed:
+            try:
+                close_btn = lab_frame.locator("button.jp-Dialog-close, button[aria-label='Close']")
+                if close_btn.count() > 0:
+                    close_btn.first.click(timeout=1000)
+                    dismissed = True
+            except Exception:
+                pass
+        if dismissed:
+            page.wait_for_timeout(150)
+        else:
+            break
+
+    terminal_opened = False
+
+    # 2. Existing terminal tab (e.g. from keepalive script)
+    try:
+        existing_term = lab_frame.locator(
+            "li.lm-TabBar-tab:has-text('Terminal'), " "li.lm-TabBar-tab:has-text('终端')"
+        ).first
+        if existing_term.count() > 0:
+            existing_term.click(timeout=2000)
+            page.wait_for_timeout(150)
+            terminal_opened = True
+    except Exception:
+        pass
+
+    # 3. Launcher card
+    if not terminal_opened:
+        terminal_card = lab_frame.locator(
+            "div.jp-LauncherCard:has-text('Terminal'), " "div.jp-LauncherCard:has-text('终端')"
+        )
+        try:
+            terminal_card.first.wait_for(state="visible", timeout=8000)
+            terminal_card.first.click(timeout=8000)
+            terminal_opened = True
+        except Exception:
+            pass
+
+    # 4. Launcher button → launcher card
+    if not terminal_opened:
+        try:
+            launcher_btn = lab_frame.locator(
+                "button[title*='Launcher'], button[aria-label*='Launcher']"
+            ).first
+            if launcher_btn.count() > 0:
+                launcher_btn.click(timeout=1200)
+                page.wait_for_timeout(150)
+            terminal_card = lab_frame.locator(
+                "div.jp-LauncherCard:has-text('Terminal'), " "div.jp-LauncherCard:has-text('终端')"
+            )
+            terminal_card.first.wait_for(state="visible", timeout=8000)
+            terminal_card.first.click(timeout=8000)
+            terminal_opened = True
+        except Exception:
+            pass
+
+    # 5. File → New → Terminal menu
+    if not terminal_opened:
+        try:
+            try:
+                lab_frame.get_by_role("menuitem", name="File").first.click(timeout=2000)
+                lab_frame.get_by_role("menuitem", name="New").first.hover(timeout=2000)
+                lab_frame.get_by_role("menuitem", name="Terminal").first.click(timeout=3000)
+            except Exception:
+                lab_frame.get_by_role("menuitem", name="文件").first.click(timeout=2000)
+                lab_frame.get_by_role("menuitem", name="新建").first.hover(timeout=2000)
+                lab_frame.get_by_role("menuitem", name="终端").first.click(timeout=3000)
+            terminal_opened = True
+        except Exception:
+            pass
+
+    if not terminal_opened:
+        return False
+
+    # Click terminal tab to ensure it's focused
+    try:
+        term_tab = lab_frame.locator(
+            "li.lm-TabBar-tab:has-text('Terminal'), " "li.lm-TabBar-tab:has-text('终端')"
+        ).first
+        if term_tab.count() > 0:
+            term_tab.click(timeout=2000)
+            page.wait_for_timeout(80)
+    except Exception:
+        pass
+
+    # Dismiss any popups that appeared during terminal opening
+    for label in ("Dismiss", "No", "否", "不接收", "取消"):
+        try:
+            btn = lab_frame.get_by_role("button", name=label)
+            if btn.count() > 0:
+                btn.first.click(timeout=1000)
+                page.wait_for_timeout(120)
+                break
+        except Exception:
+            pass
+
+    return True
+
+
 def _build_vscode_proxy_url(page, *, port: int) -> str | None:  # noqa: ANN001
     from urllib.parse import parse_qs, urlparse
 
@@ -754,11 +1052,12 @@ def _setup_notebook_rtunnel_sync(
     )
 
     timing = _timing_enabled()
-    started_at = time.monotonic()
+    timer = _StepTimer(enabled=timing)
 
     if session is None:
         session = get_web_session()
     account = session.login_username
+    timer.mark("session_init")
 
     existing = probe_existing_rtunnel_proxy_url(
         notebook_id=notebook_id,
@@ -767,168 +1066,40 @@ def _setup_notebook_rtunnel_sync(
         account=account,
     )
     if existing:
-        if timing:
-            _sys.stderr.write(f"  Timing: fast-path probe {time.monotonic() - started_at:.2f}s\n")
-            _sys.stderr.flush()
+        timer.mark("probe_existing")
+        timer.summary()
         _sys.stderr.write("Using existing rtunnel connection (fast path).\n")
         _sys.stderr.flush()
         return existing
 
+    timer.mark("probe_existing")
     _sys.stderr.write("Setting up rtunnel tunnel via browser automation...\n")
     _sys.stderr.flush()
 
     with sync_playwright() as p:
         browser = _launch_browser(p, headless=headless)
+        timer.mark("playwright_launch")
         context = _new_context(browser, storage_state=session.storage_state)
         page = context.new_page()
+        timer.mark("context_and_page")
 
         try:
-            lab_frame = open_notebook_lab(page, notebook_id=notebook_id)
+            lab_frame = open_notebook_lab(page, notebook_id=notebook_id, timeout=60000)
+            timer.mark("open_lab")
             jupyter_proxy_url = build_jupyter_proxy_url(lab_frame.url, port=port)
+            timer.mark("build_proxy_url")
 
             try:
-                lab_frame.locator("text=加载中").first.wait_for(state="hidden", timeout=45000)
+                lab_frame.locator("text=加载中").first.wait_for(state="hidden", timeout=30000)
             except Exception:
                 pass
+            timer.mark("wait_spinner")
 
-            try:
-                lab_frame.locator(
-                    "div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')"
-                ).first.wait_for(
-                    state="visible",
-                    timeout=45000,
-                )
-            except Exception:
-                try:
-                    lab_frame.get_by_role("menuitem", name="File").first.wait_for(
-                        state="visible",
-                        timeout=45000,
-                    )
-                except Exception:
-                    lab_frame.get_by_role("menuitem", name="文件").first.wait_for(
-                        state="visible",
-                        timeout=45000,
-                    )
-
-            # Dismiss any popups (Jupyter news, jupyterlab-git, etc.)
-            for _pass in range(1):
-                dismissed = False
-                for label in ("Dismiss", "No", "否", "不接收", "取消"):
-                    try:
-                        btn = lab_frame.get_by_role("button", name=label)
-                        if btn.count() > 0:
-                            btn.first.click(timeout=1000)
-                            dismissed = True
-                            break
-                    except Exception:
-                        pass
-                if not dismissed:
-                    # Also try closing via X button on dialog
-                    try:
-                        close_btn = lab_frame.locator(
-                            "button.jp-Dialog-close, button[aria-label='Close']"
-                        )
-                        if close_btn.count() > 0:
-                            close_btn.first.click(timeout=1000)
-                            dismissed = True
-                    except Exception:
-                        pass
-                if dismissed:
-                    page.wait_for_timeout(150)
-                else:
-                    break
-
-            terminal_opened = False
-
-            # Check if a terminal tab is already open (e.g. from keepalive script)
-            try:
-                existing_term = lab_frame.locator(
-                    "li.lm-TabBar-tab:has-text('Terminal'), li.lm-TabBar-tab:has-text('终端')"
-                ).first
-                if existing_term.count() > 0:
-                    existing_term.click(timeout=2000)
-                    page.wait_for_timeout(150)
-                    terminal_opened = True
-            except Exception:
-                pass
-
-            if not terminal_opened:
-                terminal_card = lab_frame.locator(
-                    "div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')"
-                )
-                try:
-                    terminal_card.first.wait_for(state="visible", timeout=8000)
-                    terminal_card.first.click(timeout=8000)
-                    terminal_opened = True
-                except Exception:
-                    terminal_opened = False
-
-            if not terminal_opened:
-                try:
-                    launcher_btn = lab_frame.locator(
-                        "button[title*='Launcher'], button[aria-label*='Launcher']"
-                    ).first
-                    if launcher_btn.count() > 0:
-                        launcher_btn.click(timeout=1200)
-                        page.wait_for_timeout(150)
-                    terminal_card = lab_frame.locator(
-                        "div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')"
-                    )
-                    terminal_card.first.wait_for(state="visible", timeout=8000)
-                    terminal_card.first.click(timeout=8000)
-                    terminal_opened = True
-                except Exception:
-                    terminal_opened = False
-
-            if not terminal_opened:
-                try:
-                    try:
-                        lab_frame.get_by_role("menuitem", name="File").first.click(timeout=2000)
-                        lab_frame.get_by_role("menuitem", name="New").first.hover(timeout=2000)
-                        lab_frame.get_by_role("menuitem", name="Terminal").first.click(timeout=3000)
-                    except Exception:
-                        lab_frame.get_by_role("menuitem", name="文件").first.click(timeout=2000)
-                        lab_frame.get_by_role("menuitem", name="新建").first.hover(timeout=2000)
-                        lab_frame.get_by_role("menuitem", name="终端").first.click(timeout=3000)
-                    terminal_opened = True
-                except Exception:
-                    terminal_opened = False
-
-            if not terminal_opened:
+            if not _open_or_create_terminal(context, page, lab_frame):
                 raise ValueError("Failed to open Jupyter terminal")
+            timer.mark("open_terminal")
 
-            try:
-                term_tab = lab_frame.locator(
-                    "li.lm-TabBar-tab:has-text('Terminal'), li.lm-TabBar-tab:has-text('终端')"
-                ).first
-                if term_tab.count() > 0:
-                    term_tab.click(timeout=2000)
-                    page.wait_for_timeout(80)
-            except Exception:
-                pass
-
-            try:
-                term_focus = lab_frame.locator(
-                    "textarea.xterm-helper-textarea, textarea.xterm-helper-textarea, "
-                    "div.xterm-helper-textarea textarea"
-                ).first
-                if term_focus.count() > 0:
-                    term_focus.click(timeout=2000)
-            except Exception:
-                pass
-
-            # Dismiss any popups that appeared during terminal opening
-            for label in ("Dismiss", "No", "否", "不接收", "取消"):
-                try:
-                    btn = lab_frame.get_by_role("button", name=label)
-                    if btn.count() > 0:
-                        btn.first.click(timeout=1000)
-                        page.wait_for_timeout(120)
-                        break
-                except Exception:
-                    pass
-
-            # Re-focus terminal after popup dismissal
+            # Focus xterm textarea (needed for both REST API and DOM paths)
             try:
                 term_focus = lab_frame.locator("textarea.xterm-helper-textarea").first
                 if term_focus.count() > 0:
@@ -936,8 +1107,8 @@ def _setup_notebook_rtunnel_sync(
             except Exception:
                 pass
 
-            # Wait for terminal to be ready
             page.wait_for_timeout(120)
+            timer.mark("focus_xterm")
 
             cmd_lines = build_rtunnel_setup_commands(
                 port=port,
@@ -945,29 +1116,28 @@ def _setup_notebook_rtunnel_sync(
                 ssh_public_key=ssh_public_key,
                 ssh_runtime=ssh_runtime,
             )
+            batch_cmd = _build_batch_setup_script(cmd_lines)
 
-            total_chars = sum(len(line) for line in cmd_lines)
             _sys.stderr.write(
-                f"  Executing {len(cmd_lines)} setup commands "
-                f"({total_chars} chars) in notebook terminal...\n"
+                f"  Executing setup script ({len(batch_cmd)} chars) " f"in notebook terminal...\n"
             )
             _sys.stderr.flush()
-            for line in cmd_lines:
-                page.keyboard.insert_text(line)
-                page.keyboard.press("Enter")
-            try:
-                # Best-effort: wait for a terminal marker indicating setup commands finished.
-                marker_deadline_ms = int(max(2, min(timeout, 120)) * 1000)
-                lab_frame.locator(f"text={SETUP_DONE_MARKER}").first.wait_for(
-                    state="visible",
-                    timeout=marker_deadline_ms,
-                )
-            except Exception:
-                page.wait_for_timeout(2500)
+            page.keyboard.insert_text(batch_cmd)
+            page.keyboard.press("Enter")
+            timer.mark("build_and_send_cmd")
+
+            # xterm.js renders to <canvas>, so Playwright text locators are
+            # blind to terminal output.  A short fixed delay lets the setup
+            # script finish; actual readiness is verified by
+            # _ensure_proxy_readiness_with_fallback() below.
+            page.wait_for_timeout(3000)
+            timer.mark("wait_marker")
+
             try:
                 page.screenshot(path="/tmp/notebook_terminal_debug.png")
             except Exception:
                 pass
+            timer.mark("screenshot")
 
             proxy_url = jupyter_proxy_url
             _sys.stderr.write(
@@ -986,6 +1156,7 @@ def _setup_notebook_rtunnel_sync(
                     "  Proxy readiness summary: " + " | ".join(probe_diagnostics) + "\n"
                 )
                 _sys.stderr.flush()
+            timer.mark("verify_proxy")
 
             try:
                 save_rtunnel_proxy_state(
@@ -998,18 +1169,14 @@ def _setup_notebook_rtunnel_sync(
                 )
             except Exception:
                 pass
+            timer.mark("save_state")
 
-            if timing:
-                _sys.stderr.write(
-                    f"  Timing: browser setup total {time.monotonic() - started_at:.2f}s\n"
-                )
-                _sys.stderr.flush()
             return proxy_url
 
         finally:
+            timer.summary()
             # Rely on sync_playwright() shutdown to terminate browser processes.
             # Explicit context/browser close can hang on some deployments.
-            pass
 
 
 # ============================================================================

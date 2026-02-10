@@ -52,3 +52,4 @@ CLAUDE.md
 # Development/exploration scripts (contain hardcoded IDs)
 scripts/
 API_ENDPOINTS.md
+.playwright-cli/

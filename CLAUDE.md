@@ -125,6 +125,11 @@ Version is tracked in three places (kept in sync by commitizen):
 3. Project: `./.inspire/config.toml`
 4. Environment variables (highest)
 
+**rtunnel Browser Automation (`rtunnel.py`):**
+- `_open_or_create_terminal()` uses REST API first, then DOM fallbacks (launcher card, tab click, File menu). When the REST API creates the terminal, the launcher-card readiness wait is skipped (no launcher on a terminal page).
+- `_setup_notebook_rtunnel_sync()` sends setup commands via base64-encoded script, then waits a short fixed delay. xterm.js renders to `<canvas>`, so Playwright text locators cannot detect terminal output; actual readiness is verified by `_ensure_proxy_readiness_with_fallback()`.
+- Set `INSPIRE_RTUNNEL_TIMING=1` to enable per-step timing output to stderr.
+
 ## Git Workflow
 
 We maintain two remotes with separate histories:

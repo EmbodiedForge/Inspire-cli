@@ -70,7 +70,9 @@
 - When preparing `github-public` sync, avoid introducing dependencies on ignored paths in docs, examples, tests, or command instructions.
 
 ## Current Debug Status (rtunnel/browser automation)
-- Active issue: notebook proxy HTTP readiness checks can return non-ready responses (often `404`) even when SSH tunnel connectivity can still succeed.
-- Current direction: treat HTTP probe as advisory and use SSH preflight (`inspire tunnel test` semantics) as the authoritative success/failure gate.
-- Suspected contributors include per-project runtime differences (image/template/path availability), but this is not considered the sole root cause.
+- Two major bottlenecks in `notebook ssh` browser automation were fixed in `rtunnel.py`, reducing setup from ~183s to ~35s:
+  - `open_terminal`: When the REST API creates the terminal but xterm doesn't attach, the code now skips the 45s launcher-card wait (which can never match on a terminal page) and does a short File-menu readiness check instead (~56s to ~11s).
+  - `wait_marker`: xterm.js renders to `<canvas>`, making Playwright text locators blind to terminal output. The broken DOM locator (which always timed out at ~120s) was replaced with a 3s fixed delay; actual readiness is handled by `_ensure_proxy_readiness_with_fallback()`.
+- HTTP proxy readiness checks can return non-ready responses (often `404`) even when SSH tunnel connectivity succeeds. HTTP probe is treated as advisory; SSH preflight (`inspire tunnel test` semantics) is the authoritative success/failure gate.
+- Set `INSPIRE_RTUNNEL_TIMING=1` to enable per-step timing instrumentation in `_setup_notebook_rtunnel_sync()` (prints a summary table to stderr).
 - Keep all tracked tests/docs free of credentials, tokens, and private endpoint values while iterating on this debugging work.

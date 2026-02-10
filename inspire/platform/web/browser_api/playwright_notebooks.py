@@ -22,19 +22,20 @@ from inspire.platform.web.session import WebSession, get_web_session
 # ---------------------------------------------------------------------------
 
 
-def open_notebook_lab(page, *, notebook_id: str):  # noqa: ANN001
+def open_notebook_lab(page, *, notebook_id: str, timeout: int = 60000):  # noqa: ANN001
     """Open the notebook's JupyterLab and return the lab frame/page handle."""
     base_url = _get_base_url()
+    timeout_s = max(timeout // 1000, 10)
     page.goto(
         f"{base_url}/ide?notebook_id={notebook_id}",
-        timeout=60000,
+        timeout=timeout,
         wait_until="domcontentloaded",
     )
 
     start = time.time()
     lab_frame = None
     notebook_lab_pattern = _browser_api_path("/notebook/lab/")
-    while time.time() - start < 60:
+    while time.time() - start < timeout_s:
         for fr in page.frames:
             url = fr.url or ""
             if "notebook-inspire" in url and url.rstrip("/").endswith("/lab"):
@@ -52,7 +53,7 @@ def open_notebook_lab(page, *, notebook_id: str):  # noqa: ANN001
         direct_lab_url = f"{base_url}{notebook_lab_prefix}/{notebook_id}/"
         page.goto(
             direct_lab_url,
-            timeout=60000,
+            timeout=timeout,
             wait_until="domcontentloaded",
         )
         lab_frame = page
@@ -153,22 +154,43 @@ def _run_command_in_notebook_sync(
             lab_frame = open_notebook_lab(page, notebook_id=notebook_id)
 
             try:
-                lab_frame.locator("text=加载中").first.wait_for(state="hidden", timeout=180000)
+                lab_frame.locator("text=加载中").first.wait_for(state="hidden", timeout=30000)
             except Exception:
                 pass
 
             terminal_opened = False
 
-            terminal_card = lab_frame.locator(
-                "div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')"
-            )
+            # Strategy 1: REST API
             try:
-                terminal_card.first.wait_for(state="visible", timeout=20000)
-                terminal_card.first.click(timeout=8000)
-                terminal_opened = True
-            except Exception:
-                terminal_opened = False
+                from inspire.platform.web.browser_api.rtunnel import (
+                    _create_terminal_via_api,
+                    _jupyter_server_base,
+                )
 
+                term_name = _create_terminal_via_api(context, lab_frame.url)
+                if term_name:
+                    server_base = _jupyter_server_base(lab_frame.url)
+                    term_url = f"{server_base}lab/terminals/{term_name}?reset"
+                    lab_frame.goto(term_url, timeout=15000, wait_until="domcontentloaded")
+                    lab_frame.locator(".xterm").first.wait_for(state="attached", timeout=10000)
+                    terminal_opened = True
+            except Exception:
+                pass
+
+            # Strategy 2: launcher card
+            if not terminal_opened:
+                terminal_card = lab_frame.locator(
+                    "div.jp-LauncherCard:has-text('Terminal'), "
+                    "div.jp-LauncherCard:has-text('终端')"
+                )
+                try:
+                    terminal_card.first.wait_for(state="visible", timeout=20000)
+                    terminal_card.first.click(timeout=8000)
+                    terminal_opened = True
+                except Exception:
+                    pass
+
+            # Strategy 3: launcher button → launcher card
             if not terminal_opened:
                 try:
                     launcher_btn = lab_frame.locator(
@@ -178,21 +200,21 @@ def _run_command_in_notebook_sync(
                         launcher_btn.click(timeout=2000)
                         page.wait_for_timeout(500)
                     terminal_card = lab_frame.locator(
-                        "div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')"
+                        "div.jp-LauncherCard:has-text('Terminal'), "
+                        "div.jp-LauncherCard:has-text('终端')"
                     )
                     terminal_card.first.wait_for(state="visible", timeout=20000)
                     terminal_card.first.click(timeout=8000)
                     terminal_opened = True
                 except Exception:
-                    terminal_opened = False
+                    pass
 
             if not terminal_opened:
                 raise ValueError("Failed to open Jupyter terminal")
 
             try:
                 term_focus = lab_frame.locator(
-                    "textarea.xterm-helper-textarea, textarea.xterm-helper-textarea, "
-                    "div.xterm-helper-textarea textarea"
+                    "textarea.xterm-helper-textarea, " "div.xterm-helper-textarea textarea"
                 ).first
                 if term_focus.count() > 0:
                     term_focus.click(timeout=2000)
