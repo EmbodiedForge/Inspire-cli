@@ -22,43 +22,88 @@ from inspire.platform.web.session import WebSession, get_web_session
 # ---------------------------------------------------------------------------
 
 
+def _is_lab_like_url(url: str, *, notebook_lab_pattern: str) -> bool:
+    value = str(url or "")
+    if not value:
+        return False
+
+    normalized = value.rstrip("/")
+    if "notebook-inspire" in value and normalized.endswith("/lab"):
+        return True
+    if notebook_lab_pattern.lstrip("/") in value:
+        return True
+    if "/jupyter/" in value and normalized.endswith("/lab"):
+        return True
+    return False
+
+
+def _find_lab_handle(page, *, notebook_lab_pattern: str):  # noqa: ANN001
+    for fr in page.frames:
+        if _is_lab_like_url(fr.url or "", notebook_lab_pattern=notebook_lab_pattern):
+            return fr
+
+    page_url = getattr(page, "url", "") or ""
+    if _is_lab_like_url(page_url, notebook_lab_pattern=notebook_lab_pattern):
+        return page
+
+    return None
+
+
+def _wait_for_lab_handle(
+    page,  # noqa: ANN001
+    *,
+    notebook_lab_pattern: str,
+    timeout_s: float,
+):
+    start = time.time()
+    while time.time() - start < timeout_s:
+        handle = _find_lab_handle(page, notebook_lab_pattern=notebook_lab_pattern)
+        if handle is not None:
+            return handle
+        page.wait_for_timeout(500)
+    return None
+
+
 def open_notebook_lab(page, *, notebook_id: str, timeout: int = 60000):  # noqa: ANN001
     """Open the notebook's JupyterLab and return the lab frame/page handle."""
     base_url = _get_base_url()
-    timeout_s = max(timeout // 1000, 10)
+    timeout_ms = max(int(timeout), 10000)
+    timeout_s = max(timeout_ms // 1000, 10)
     page.goto(
         f"{base_url}/ide?notebook_id={notebook_id}",
-        timeout=timeout,
+        timeout=timeout_ms,
         wait_until="domcontentloaded",
     )
 
-    start = time.time()
-    lab_frame = None
     notebook_lab_pattern = _browser_api_path("/notebook/lab/")
-    while time.time() - start < timeout_s:
-        for fr in page.frames:
-            url = fr.url or ""
-            if "notebook-inspire" in url and url.rstrip("/").endswith("/lab"):
-                lab_frame = fr
-                break
-            if notebook_lab_pattern.lstrip("/") in url:
-                lab_frame = fr
-                break
-        if lab_frame:
-            break
-        page.wait_for_timeout(500)
+    frame_probe_s = min(10.0, max(4.0, timeout_s / 6.0))
+    lab_handle = _wait_for_lab_handle(
+        page,
+        notebook_lab_pattern=notebook_lab_pattern,
+        timeout_s=frame_probe_s,
+    )
+    if lab_handle is not None:
+        return lab_handle
 
-    if lab_frame is None:
-        notebook_lab_prefix = _browser_api_path("/notebook/lab").rstrip("/")
-        direct_lab_url = f"{base_url}{notebook_lab_prefix}/{notebook_id}/"
-        page.goto(
-            direct_lab_url,
-            timeout=timeout,
-            wait_until="domcontentloaded",
-        )
-        lab_frame = page
+    notebook_lab_prefix = _browser_api_path("/notebook/lab").rstrip("/")
+    direct_lab_url = f"{base_url}{notebook_lab_prefix}/{notebook_id}/"
+    elapsed_ms = int(frame_probe_s * 1000)
+    remaining_ms = max(10000, timeout_ms - elapsed_ms)
+    direct_timeout_ms = min(remaining_ms, 20000)
+    page.goto(
+        direct_lab_url,
+        timeout=direct_timeout_ms,
+        wait_until="domcontentloaded",
+    )
+    lab_handle = _wait_for_lab_handle(
+        page,
+        notebook_lab_pattern=notebook_lab_pattern,
+        timeout_s=min(5.0, max(1.0, remaining_ms / 1000.0)),
+    )
+    if lab_handle is not None:
+        return lab_handle
 
-    return lab_frame
+    return page
 
 
 def build_jupyter_proxy_url(lab_url: str, *, port: int) -> str:

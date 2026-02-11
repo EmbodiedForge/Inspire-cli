@@ -695,6 +695,131 @@ def _create_terminal_via_api(context: Any, lab_url: str) -> str | None:
     return None
 
 
+def _extract_jupyter_token(lab_url: str) -> str | None:
+    from urllib.parse import parse_qs, urlsplit
+
+    parsed = urlsplit(lab_url)
+    query_token = parse_qs(parsed.query).get("token", [None])[0]
+    if query_token:
+        return query_token
+
+    path_parts = [part for part in parsed.path.split("/") if part]
+    try:
+        jupyter_index = path_parts.index("jupyter")
+        if len(path_parts) > jupyter_index + 2:
+            return path_parts[jupyter_index + 2]
+    except ValueError:
+        return None
+    return None
+
+
+def _build_terminal_websocket_url(lab_url: str, term_name: str) -> str:
+    from urllib.parse import urlencode, urlsplit, urlunsplit
+
+    base = _jupyter_server_base(lab_url)
+    parsed = urlsplit(base)
+    scheme = "wss" if parsed.scheme == "https" else "ws"
+    base_path = parsed.path if parsed.path.endswith("/") else f"{parsed.path}/"
+    ws_path = f"{base_path}terminals/websocket/{term_name}"
+
+    token = _extract_jupyter_token(lab_url)
+    query = urlencode({"token": token}) if token else ""
+    return urlunsplit((scheme, parsed.netloc, ws_path, query, ""))
+
+
+def _send_terminal_command_via_websocket(
+    page: Any,
+    *,
+    ws_url: str,
+    command: str,
+    timeout_ms: int = 5000,
+) -> bool:
+    stdin_payload = command.rstrip("\r\n") + "\r"
+    try:
+        return bool(
+            page.evaluate(
+                """
+                async ({ wsUrl, stdinData, timeoutMs }) => {
+                  return await new Promise((resolve) => {
+                    let settled = false;
+                    let socket = null;
+                    const finish = (ok) => {
+                      if (settled) return;
+                      settled = true;
+                      try {
+                        if (socket) socket.close();
+                      } catch (_) {}
+                      resolve(ok);
+                    };
+
+                    const timer = setTimeout(() => finish(false), timeoutMs);
+
+                    try {
+                      socket = new WebSocket(wsUrl);
+                    } catch (_) {
+                      clearTimeout(timer);
+                      finish(false);
+                      return;
+                    }
+
+                    socket.addEventListener("open", () => {
+                      try {
+                        socket.send(JSON.stringify(["stdin", stdinData]));
+                      } catch (_) {
+                        clearTimeout(timer);
+                        finish(false);
+                        return;
+                      }
+                      setTimeout(() => {
+                        clearTimeout(timer);
+                        finish(true);
+                      }, 180);
+                    });
+
+                    socket.addEventListener("error", () => {
+                      clearTimeout(timer);
+                      finish(false);
+                    });
+
+                    socket.addEventListener("close", () => {
+                      if (!settled) {
+                        clearTimeout(timer);
+                        finish(false);
+                      }
+                    });
+                  });
+                }
+                """,
+                {
+                    "wsUrl": ws_url,
+                    "stdinData": stdin_payload,
+                    "timeoutMs": int(timeout_ms),
+                },
+            )
+        )
+    except Exception:
+        return False
+
+
+def _send_setup_command_via_terminal_ws(
+    *,
+    context: Any,
+    page: Any,
+    lab_frame: Any,
+    batch_cmd: str,
+) -> bool:
+    term_name = _create_terminal_via_api(context, lab_frame.url)
+    if not term_name:
+        return False
+
+    ws_url = _build_terminal_websocket_url(lab_frame.url, term_name)
+    return _send_terminal_command_via_websocket(
+        page,
+        ws_url=ws_url,
+        command=batch_cmd,
+    )
+
+
 def _build_batch_setup_script(cmd_lines: list[str]) -> str:
     """Encode setup commands as a single base64-wrapped bash line.
 
@@ -710,6 +835,173 @@ def _build_batch_setup_script(cmd_lines: list[str]) -> str:
     return f"echo '{encoded}' | base64 -d | bash"
 
 
+_TERMINAL_TAB_SELECTOR = "li.lm-TabBar-tab:has-text('Terminal'), li.lm-TabBar-tab:has-text('终端')"
+_TERMINAL_CARD_SELECTOR = (
+    "div.jp-LauncherCard:has-text('Terminal'), div.jp-LauncherCard:has-text('终端')"
+)
+_TERMINAL_INPUT_SELECTORS = (
+    "textarea.xterm-helper-textarea",
+    "div.xterm-helper-textarea textarea",
+)
+_FAST_API_XTERM_ATTACH_TIMEOUT_MS = 1600
+_FAST_API_MENU_READY_TIMEOUT_MS = 2500
+_FAST_TERMINAL_TAB_CLICK_TIMEOUT_MS = 900
+_FAST_TERMINAL_CARD_WAIT_TIMEOUT_MS = 3500
+_FAST_TERMINAL_CARD_CLICK_TIMEOUT_MS = 2500
+_FAST_MENU_ACTION_TIMEOUT_MS = 1800
+_API_TERMINAL_PROGRESSIVE_WAIT_MS = 1800
+_API_TERMINAL_RECOVERY_WAIT_MS = 900
+_API_TERMINAL_POLL_MS = 220
+_API_TERMINAL_TAB_POKE_INTERVAL_MS = 1200
+_FOCUS_INPUT_WAIT_TIMEOUT_MS = 900
+_FOCUS_INPUT_CLICK_TIMEOUT_MS = 500
+_FOCUS_TAB_CLICK_TIMEOUT_MS = 450
+_FOCUS_RETRY_PASSES = 4
+
+
+def _wait_for_terminal_surface(
+    lab_frame: Any,
+    *,
+    timeout_ms: int,
+) -> bool:
+    try:
+        lab_frame.locator(".xterm").first.wait_for(state="attached", timeout=timeout_ms)
+        return True
+    except Exception:
+        pass
+
+    for selector in _TERMINAL_INPUT_SELECTORS:
+        try:
+            if lab_frame.locator(selector).first.count() > 0:
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def _wait_for_terminal_surface_progressive(
+    lab_frame: Any,
+    page: Any,
+    *,
+    total_timeout_ms: int,
+    poll_ms: int = _API_TERMINAL_POLL_MS,
+    tab_poke_interval_ms: int = _API_TERMINAL_TAB_POKE_INTERVAL_MS,
+) -> bool:
+    start = time.monotonic()
+    last_tab_poke = -tab_poke_interval_ms
+    min_probe_ms = 80
+
+    while True:
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        remaining_ms = total_timeout_ms - elapsed_ms
+        if remaining_ms <= 0:
+            return False
+
+        probe_timeout_ms = max(min_probe_ms, min(280, remaining_ms))
+        if _wait_for_terminal_surface(lab_frame, timeout_ms=probe_timeout_ms):
+            return True
+
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        if elapsed_ms - last_tab_poke >= tab_poke_interval_ms:
+            _click_terminal_tab(
+                lab_frame,
+                page,
+                timeout_ms=min(_FAST_TERMINAL_TAB_CLICK_TIMEOUT_MS, 350),
+                settle_ms=40,
+            )
+            last_tab_poke = elapsed_ms
+
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        remaining_ms = total_timeout_ms - elapsed_ms
+        if remaining_ms <= 0:
+            return False
+        page.wait_for_timeout(max(40, min(poll_ms, remaining_ms)))
+
+
+def _wait_for_file_menu_ready(
+    lab_frame: Any,
+    *,
+    timeout_ms: int,
+) -> bool:
+    per_label_timeout = max(300, timeout_ms // 2)
+    for label in ("File", "文件"):
+        try:
+            lab_frame.get_by_role("menuitem", name=label).first.wait_for(
+                state="visible",
+                timeout=per_label_timeout,
+            )
+            return True
+        except Exception:
+            pass
+    return False
+
+
+def _click_terminal_tab(
+    lab_frame: Any,
+    page: Any,
+    *,
+    timeout_ms: int,
+    settle_ms: int = 80,
+) -> bool:
+    try:
+        term_tab = lab_frame.locator(_TERMINAL_TAB_SELECTOR).first
+        if term_tab.count() <= 0:
+            return False
+        term_tab.click(timeout=timeout_ms)
+        if settle_ms > 0:
+            page.wait_for_timeout(settle_ms)
+        return True
+    except Exception:
+        return False
+
+
+def _open_terminal_from_file_menu(
+    lab_frame: Any,
+    *,
+    action_timeout_ms: int,
+) -> bool:
+    for labels in (("File", "New", "Terminal"), ("文件", "新建", "终端")):
+        file_label, new_label, terminal_label = labels
+        try:
+            lab_frame.get_by_role("menuitem", name=file_label).first.click(
+                timeout=action_timeout_ms
+            )
+            lab_frame.get_by_role("menuitem", name=new_label).first.hover(timeout=action_timeout_ms)
+            lab_frame.get_by_role("menuitem", name=terminal_label).first.click(
+                timeout=action_timeout_ms
+            )
+            return True
+        except Exception:
+            pass
+    return False
+
+
+def _focus_terminal_input(
+    lab_frame: Any,
+    page: Any,
+) -> bool:
+    for _ in range(_FOCUS_RETRY_PASSES):
+        for selector in _TERMINAL_INPUT_SELECTORS:
+            try:
+                term_focus = lab_frame.locator(selector).first
+                term_focus.wait_for(state="attached", timeout=_FOCUS_INPUT_WAIT_TIMEOUT_MS)
+                term_focus.click(timeout=_FOCUS_INPUT_CLICK_TIMEOUT_MS)
+                page.wait_for_timeout(40)
+                return True
+            except Exception:
+                pass
+
+        _click_terminal_tab(
+            lab_frame,
+            page,
+            timeout_ms=_FOCUS_TAB_CLICK_TIMEOUT_MS,
+            settle_ms=40,
+        )
+        page.wait_for_timeout(120)
+
+    return False
+
+
 def _open_or_create_terminal(
     context: Any,
     page: Any,
@@ -720,6 +1012,7 @@ def _open_or_create_terminal(
 
     lab_url = lab_frame.url
     api_term_created = False
+    api_term_navigated = False
 
     # ------------------------------------------------------------------
     # Strategy 1: REST API – create terminal + navigate directly to it
@@ -732,57 +1025,70 @@ def _open_or_create_terminal(
         term_url = f"{server_base}lab/terminals/{term_name}?reset"
         try:
             lab_frame.goto(term_url, timeout=15000, wait_until="domcontentloaded")
-            # Wait for xterm widget to appear in the DOM.
-            # Some deployments' workspace restoration may prevent the terminal
-            # from opening via URL alone; in that case fall through to DOM.
-            lab_frame.locator(".xterm").first.wait_for(state="attached", timeout=10000)
-            return True
+            api_term_navigated = True
+            if _wait_for_terminal_surface(lab_frame, timeout_ms=_FAST_API_XTERM_ATTACH_TIMEOUT_MS):
+                return True
         except Exception:
+            pass
+        if api_term_navigated:
             _sys.stderr.write(
-                "  REST API terminal created but xterm not visible, " "trying DOM fallbacks...\n"
+                "  REST API terminal created but xterm not yet visible; "
+                "continuing with API terminal path.\n"
+            )
+            _sys.stderr.flush()
+            if _wait_for_terminal_surface(lab_frame, timeout_ms=500):
+                return True
+            if _wait_for_terminal_surface_progressive(
+                lab_frame,
+                page,
+                total_timeout_ms=_API_TERMINAL_PROGRESSIVE_WAIT_MS,
+            ):
+                return True
+            if _wait_for_terminal_surface_progressive(
+                lab_frame,
+                page,
+                total_timeout_ms=_API_TERMINAL_RECOVERY_WAIT_MS,
+            ):
+                return True
+            api_term_created = True
+
+        if not api_term_navigated:
+            _sys.stderr.write(
+                "  REST API terminal created but navigation failed, trying DOM fallbacks...\n"
             )
             _sys.stderr.flush()
             api_term_created = True
 
-    # ------------------------------------------------------------------
-    # Strategy 2–5: DOM fallbacks (existing logic, unchanged)
-    # ------------------------------------------------------------------
-
-    # Wait for launcher or menu to signal readiness.
-    # When the REST API already created the terminal, the page is on the
-    # terminal URL — there is no launcher card.  Skip straight to a short
-    # File-menu check so we still gate on JupyterLab being interactive.
     if api_term_created:
-        try:
-            lab_frame.get_by_role("menuitem", name="File").first.wait_for(
-                state="visible", timeout=15000
-            )
-        except Exception:
-            try:
-                lab_frame.get_by_role("menuitem", name="文件").first.wait_for(
-                    state="visible", timeout=15000
-                )
-            except Exception:
-                pass
+        if _click_terminal_tab(
+            lab_frame,
+            page,
+            timeout_ms=min(_FAST_TERMINAL_TAB_CLICK_TIMEOUT_MS, 500),
+            settle_ms=60,
+        ) and _wait_for_terminal_surface_progressive(
+            lab_frame,
+            page,
+            total_timeout_ms=900,
+        ):
+            return True
+        if _open_terminal_from_file_menu(
+            lab_frame,
+            action_timeout_ms=_FAST_MENU_ACTION_TIMEOUT_MS,
+        ) and _wait_for_terminal_surface_progressive(
+            lab_frame,
+            page,
+            total_timeout_ms=2200,
+        ):
+            return True
+        _wait_for_file_menu_ready(lab_frame, timeout_ms=_FAST_API_MENU_READY_TIMEOUT_MS)
     else:
         try:
-            lab_frame.locator(
-                "div.jp-LauncherCard:has-text('Terminal'), " "div.jp-LauncherCard:has-text('终端')"
-            ).first.wait_for(state="visible", timeout=45000)
+            lab_frame.locator(_TERMINAL_CARD_SELECTOR).first.wait_for(
+                state="visible", timeout=45000
+            )
         except Exception:
-            try:
-                lab_frame.get_by_role("menuitem", name="File").first.wait_for(
-                    state="visible", timeout=45000
-                )
-            except Exception:
-                try:
-                    lab_frame.get_by_role("menuitem", name="文件").first.wait_for(
-                        state="visible", timeout=45000
-                    )
-                except Exception:
-                    pass
+            _wait_for_file_menu_ready(lab_frame, timeout_ms=45000)
 
-    # Dismiss popups (Jupyter news, jupyterlab-git, etc.)
     for _pass in range(1):
         dismissed = False
         for label in ("Dismiss", "No", "否", "不接收", "取消"):
@@ -809,31 +1115,25 @@ def _open_or_create_terminal(
 
     terminal_opened = False
 
-    # 2. Existing terminal tab (e.g. from keepalive script)
-    try:
-        existing_term = lab_frame.locator(
-            "li.lm-TabBar-tab:has-text('Terminal'), " "li.lm-TabBar-tab:has-text('终端')"
-        ).first
-        if existing_term.count() > 0:
-            existing_term.click(timeout=2000)
-            page.wait_for_timeout(150)
-            terminal_opened = True
-    except Exception:
-        pass
+    if _click_terminal_tab(
+        lab_frame,
+        page,
+        timeout_ms=_FAST_TERMINAL_TAB_CLICK_TIMEOUT_MS,
+        settle_ms=100,
+    ):
+        terminal_opened = True
 
-    # 3. Launcher card
     if not terminal_opened:
-        terminal_card = lab_frame.locator(
-            "div.jp-LauncherCard:has-text('Terminal'), " "div.jp-LauncherCard:has-text('终端')"
-        )
+        terminal_card = lab_frame.locator(_TERMINAL_CARD_SELECTOR)
+        card_wait_timeout = _FAST_TERMINAL_CARD_WAIT_TIMEOUT_MS if api_term_created else 8000
+        card_click_timeout = _FAST_TERMINAL_CARD_CLICK_TIMEOUT_MS if api_term_created else 8000
         try:
-            terminal_card.first.wait_for(state="visible", timeout=8000)
-            terminal_card.first.click(timeout=8000)
+            terminal_card.first.wait_for(state="visible", timeout=card_wait_timeout)
+            terminal_card.first.click(timeout=card_click_timeout)
             terminal_opened = True
         except Exception:
             pass
 
-    # 4. Launcher button → launcher card
     if not terminal_opened:
         try:
             launcher_btn = lab_frame.locator(
@@ -842,45 +1142,33 @@ def _open_or_create_terminal(
             if launcher_btn.count() > 0:
                 launcher_btn.click(timeout=1200)
                 page.wait_for_timeout(150)
-            terminal_card = lab_frame.locator(
-                "div.jp-LauncherCard:has-text('Terminal'), " "div.jp-LauncherCard:has-text('终端')"
-            )
-            terminal_card.first.wait_for(state="visible", timeout=8000)
-            terminal_card.first.click(timeout=8000)
+            terminal_card = lab_frame.locator(_TERMINAL_CARD_SELECTOR)
+            card_wait_timeout = _FAST_TERMINAL_CARD_WAIT_TIMEOUT_MS if api_term_created else 8000
+            card_click_timeout = _FAST_TERMINAL_CARD_CLICK_TIMEOUT_MS if api_term_created else 8000
+            terminal_card.first.wait_for(state="visible", timeout=card_wait_timeout)
+            terminal_card.first.click(timeout=card_click_timeout)
             terminal_opened = True
         except Exception:
             pass
 
-    # 5. File → New → Terminal menu
     if not terminal_opened:
-        try:
-            try:
-                lab_frame.get_by_role("menuitem", name="File").first.click(timeout=2000)
-                lab_frame.get_by_role("menuitem", name="New").first.hover(timeout=2000)
-                lab_frame.get_by_role("menuitem", name="Terminal").first.click(timeout=3000)
-            except Exception:
-                lab_frame.get_by_role("menuitem", name="文件").first.click(timeout=2000)
-                lab_frame.get_by_role("menuitem", name="新建").first.hover(timeout=2000)
-                lab_frame.get_by_role("menuitem", name="终端").first.click(timeout=3000)
+        menu_action_timeout = _FAST_MENU_ACTION_TIMEOUT_MS if api_term_created else 2000
+        if _open_terminal_from_file_menu(lab_frame, action_timeout_ms=menu_action_timeout):
             terminal_opened = True
-        except Exception:
-            pass
+
+    if not terminal_opened and api_term_created:
+        terminal_opened = _wait_for_terminal_surface(lab_frame, timeout_ms=1200)
 
     if not terminal_opened:
         return False
 
-    # Click terminal tab to ensure it's focused
-    try:
-        term_tab = lab_frame.locator(
-            "li.lm-TabBar-tab:has-text('Terminal'), " "li.lm-TabBar-tab:has-text('终端')"
-        ).first
-        if term_tab.count() > 0:
-            term_tab.click(timeout=2000)
-            page.wait_for_timeout(80)
-    except Exception:
-        pass
+    _click_terminal_tab(
+        lab_frame,
+        page,
+        timeout_ms=_FAST_TERMINAL_TAB_CLICK_TIMEOUT_MS,
+        settle_ms=80,
+    )
 
-    # Dismiss any popups that appeared during terminal opening
     for label in ("Dismiss", "No", "否", "不接收", "取消"):
         try:
             btn = lab_frame.get_by_role("button", name=label)
@@ -1095,21 +1383,6 @@ def _setup_notebook_rtunnel_sync(
                 pass
             timer.mark("wait_spinner")
 
-            if not _open_or_create_terminal(context, page, lab_frame):
-                raise ValueError("Failed to open Jupyter terminal")
-            timer.mark("open_terminal")
-
-            # Focus xterm textarea (needed for both REST API and DOM paths)
-            try:
-                term_focus = lab_frame.locator("textarea.xterm-helper-textarea").first
-                if term_focus.count() > 0:
-                    term_focus.click(timeout=2000)
-            except Exception:
-                pass
-
-            page.wait_for_timeout(120)
-            timer.mark("focus_xterm")
-
             cmd_lines = build_rtunnel_setup_commands(
                 port=port,
                 ssh_port=ssh_port,
@@ -1118,13 +1391,46 @@ def _setup_notebook_rtunnel_sync(
             )
             batch_cmd = _build_batch_setup_script(cmd_lines)
 
-            _sys.stderr.write(
-                f"  Executing setup script ({len(batch_cmd)} chars) " f"in notebook terminal...\n"
-            )
-            _sys.stderr.flush()
-            page.keyboard.insert_text(batch_cmd)
-            page.keyboard.press("Enter")
-            timer.mark("build_and_send_cmd")
+            setup_sent_via_ws = False
+            try:
+                setup_sent_via_ws = _send_setup_command_via_terminal_ws(
+                    context=context,
+                    page=page,
+                    lab_frame=lab_frame,
+                    batch_cmd=batch_cmd,
+                )
+            except Exception:
+                setup_sent_via_ws = False
+
+            if setup_sent_via_ws:
+                _sys.stderr.write("  Sent setup script via Jupyter terminal WebSocket.\n")
+                _sys.stderr.flush()
+                timer.mark("open_terminal")
+                timer.mark("focus_xterm")
+                timer.mark("build_and_send_cmd")
+            else:
+                if not _open_or_create_terminal(context, page, lab_frame):
+                    raise ValueError("Failed to open Jupyter terminal")
+                timer.mark("open_terminal")
+
+                if not _focus_terminal_input(lab_frame, page):
+                    page.wait_for_timeout(350)
+                    if not _wait_for_terminal_surface(lab_frame, timeout_ms=2000):
+                        raise ValueError(
+                            "Failed to focus Jupyter terminal: xterm surface not ready"
+                        )
+                    if not _focus_terminal_input(lab_frame, page):
+                        raise ValueError("Failed to focus Jupyter terminal input")
+                timer.mark("focus_xterm")
+
+                _sys.stderr.write(
+                    f"  Executing setup script ({len(batch_cmd)} chars) "
+                    f"in notebook terminal...\n"
+                )
+                _sys.stderr.flush()
+                page.keyboard.insert_text(batch_cmd)
+                page.keyboard.press("Enter")
+                timer.mark("build_and_send_cmd")
 
             # xterm.js renders to <canvas>, so Playwright text locators are
             # blind to terminal output.  A short fixed delay lets the setup

@@ -153,6 +153,71 @@ def test_browser_client_reset_on_expired(monkeypatch: pytest.MonkeyPatch):
     assert closed["called"] is True
 
 
+def test_request_json_reauth_refreshes_session_in_place(monkeypatch: pytest.MonkeyPatch):
+    session = WebSession(
+        storage_state={"cookies": [{"name": "session", "value": "old"}]},
+        cookies={"session": "old"},
+        workspace_id="ws-old",
+        login_username="old-user",
+        created_at=1.0,
+    )
+    refreshed = WebSession(
+        storage_state={"cookies": [{"name": "session", "value": "new"}]},
+        cookies={"session": "new"},
+        workspace_id="ws-new",
+        login_username="new-user",
+        created_at=2.0,
+    )
+
+    class ExpiringBrowserClient:
+        def request_json(self, *_args, **_kwargs):
+            raise ws.SessionExpiredError("expired")
+
+    class WorkingBrowserClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def request_json(self, *_args, **_kwargs):
+            self.calls += 1
+            return {"ok": True}
+
+    working = WorkingBrowserClient()
+    refresh_calls = {"count": 0}
+
+    def fake_get_browser_client(current_session: WebSession):  # type: ignore[no-untyped-def]
+        cookie_value = current_session.storage_state.get("cookies", [{}])[0].get(
+            "value"
+        )  # type: ignore[index]
+        if cookie_value == "old":
+            return ExpiringBrowserClient()
+        return working
+
+    def fake_get_web_session(**_kwargs):
+        refresh_calls["count"] += 1
+        return refreshed
+
+    monkeypatch.setattr(ws, "_get_browser_client", fake_get_browser_client)
+    monkeypatch.setattr(ws, "_close_browser_client", lambda: None)
+    monkeypatch.setattr(ws, "clear_session_cache", lambda: None)
+    monkeypatch.setattr(ws, "get_web_session", fake_get_web_session)
+    monkeypatch.setattr(ws, "_BROWSER_API_FORCE_BROWSER", True)
+
+    result = ws.request_json(session, "GET", "https://example.test")
+    assert result == {"ok": True}
+    assert refresh_calls["count"] == 1
+    assert session.storage_state == refreshed.storage_state
+    assert session.cookies == refreshed.cookies
+    assert session.workspace_id == refreshed.workspace_id
+    assert session.login_username == refreshed.login_username
+    assert session.created_at == refreshed.created_at
+    assert working.calls == 1
+
+    second_result = ws.request_json(session, "GET", "https://example.test")
+    assert second_result == {"ok": True}
+    assert refresh_calls["count"] == 1
+    assert working.calls == 2
+
+
 def test_browser_request_context_posts_json_bytes():
     client = ws._BrowserRequestClient.__new__(ws._BrowserRequestClient)
     context = DummyBrowserContext()

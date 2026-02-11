@@ -6,11 +6,18 @@ import base64
 
 import pytest
 
+from inspire.platform.web.browser_api import rtunnel as rtunnel_module
 from inspire.platform.web.browser_api.rtunnel import (
     _StepTimer,
     _build_batch_setup_script,
+    _build_terminal_websocket_url,
     _create_terminal_via_api,
+    _extract_jupyter_token,
+    _focus_terminal_input,
     _jupyter_server_base,
+    _send_terminal_command_via_websocket,
+    _wait_for_terminal_surface,
+    _wait_for_terminal_surface_progressive,
 )
 
 
@@ -124,6 +131,242 @@ def test_create_terminal_via_api_proxy_url() -> None:
     result = _create_terminal_via_api(ctx, "https://example.com/api/v1/notebook/lab/nb-123/lab")
     assert result == "2"
     assert ctx.request.calls[0][0] == "https://example.com/api/v1/notebook/lab/nb-123/api/terminals"
+
+
+# ---------------------------------------------------------------------------
+# websocket url/token helpers
+# ---------------------------------------------------------------------------
+
+
+def test_extract_jupyter_token_prefers_query_token() -> None:
+    lab_url = "https://example.com/jupyter/nb/path-token/lab?token=query-token"
+    assert _extract_jupyter_token(lab_url) == "query-token"
+
+
+def test_extract_jupyter_token_from_path() -> None:
+    lab_url = "https://example.com/jupyter/nb-123/path-token/lab"
+    assert _extract_jupyter_token(lab_url) == "path-token"
+
+
+def test_extract_jupyter_token_missing() -> None:
+    lab_url = "https://example.com/api/v1/notebook/lab/nb-123/"
+    assert _extract_jupyter_token(lab_url) is None
+
+
+def test_build_terminal_websocket_url_https() -> None:
+    lab_url = "https://example.com/jupyter/nb-123/path-token/lab?token=query-token"
+    ws_url = _build_terminal_websocket_url(lab_url, "7")
+    assert (
+        ws_url
+        == "wss://example.com/jupyter/nb-123/path-token/terminals/websocket/7?token=query-token"
+    )
+
+
+def test_build_terminal_websocket_url_http_without_token() -> None:
+    lab_url = "http://example.com/api/v1/notebook/lab/nb-123/"
+    ws_url = _build_terminal_websocket_url(lab_url, "term-a")
+    assert ws_url == "ws://example.com/api/v1/notebook/lab/nb-123/terminals/websocket/term-a"
+
+
+def test_send_terminal_command_via_websocket_success() -> None:
+    captured: dict = {}
+
+    class _EvalPage:
+        def evaluate(self, script: str, payload: dict):  # noqa: ANN201
+            captured["script"] = script
+            captured["payload"] = payload
+            return True
+
+    page = _EvalPage()
+    result = _send_terminal_command_via_websocket(
+        page,
+        ws_url="wss://example.test/terminals/websocket/1",
+        command="echo hi",
+        timeout_ms=1234,
+    )
+
+    assert result is True
+    assert "WebSocket" in captured["script"]
+    assert captured["payload"]["wsUrl"] == "wss://example.test/terminals/websocket/1"
+    assert captured["payload"]["stdinData"] == "echo hi\r"
+    assert captured["payload"]["timeoutMs"] == 1234
+
+
+def test_send_terminal_command_via_websocket_exception() -> None:
+    class _BrokenPage:
+        def evaluate(self, script: str, payload: dict):  # noqa: ANN201
+            raise RuntimeError("eval failed")
+
+    page = _BrokenPage()
+    result = _send_terminal_command_via_websocket(
+        page,
+        ws_url="wss://example.test/terminals/websocket/1",
+        command="echo hi",
+    )
+    assert result is False
+
+
+# ---------------------------------------------------------------------------
+# terminal surface and focus helpers
+# ---------------------------------------------------------------------------
+
+
+class _LocatorStub:
+    def __init__(
+        self,
+        *,
+        count: int = 0,
+        wait_ok: bool = False,
+    ) -> None:
+        self._count = count
+        self._wait_ok = wait_ok
+        self.first = self
+        self.wait_calls: list[tuple[str, int]] = []
+        self.click_calls: list[int] = []
+
+    def count(self) -> int:
+        return self._count
+
+    def wait_for(self, *, state: str, timeout: int) -> None:
+        self.wait_calls.append((state, timeout))
+        if not self._wait_ok:
+            raise TimeoutError("not ready")
+
+    def click(self, timeout: int = 0) -> None:
+        self.click_calls.append(timeout)
+
+
+class _FrameStub:
+    def __init__(self, selectors: dict[str, _LocatorStub]) -> None:
+        self._selectors = selectors
+
+    def locator(self, selector: str) -> _LocatorStub:
+        return self._selectors.setdefault(selector, _LocatorStub())
+
+
+class _PageStub:
+    def __init__(self) -> None:
+        self.wait_calls: list[int] = []
+
+    def wait_for_timeout(self, timeout_ms: int) -> None:
+        self.wait_calls.append(timeout_ms)
+
+
+def test_wait_for_terminal_surface_uses_xterm_wait() -> None:
+    xterm = _LocatorStub(wait_ok=True)
+    frame = _FrameStub({".xterm": xterm})
+
+    assert _wait_for_terminal_surface(frame, timeout_ms=1234) is True
+    assert xterm.wait_calls == [("attached", 1234)]
+
+
+def test_wait_for_terminal_surface_falls_back_to_textarea_count() -> None:
+    frame = _FrameStub(
+        {
+            ".xterm": _LocatorStub(wait_ok=False),
+            "textarea.xterm-helper-textarea": _LocatorStub(count=1),
+        }
+    )
+
+    assert _wait_for_terminal_surface(frame, timeout_ms=500) is True
+
+
+def test_wait_for_terminal_surface_progressive_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_time = [0.0]
+    attempts = {"count": 0}
+
+    def fake_monotonic() -> float:
+        return fake_time[0]
+
+    def fake_wait_surface(_frame, *, timeout_ms: int) -> bool:  # type: ignore[no-untyped-def]
+        assert timeout_ms > 0
+        attempts["count"] += 1
+        return attempts["count"] >= 3
+
+    monkeypatch.setattr(rtunnel_module.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(rtunnel_module, "_wait_for_terminal_surface", fake_wait_surface)
+    monkeypatch.setattr(rtunnel_module, "_click_terminal_tab", lambda *_args, **_kwargs: False)
+
+    class _ProgressPage:
+        def __init__(self, now_ref: list[float]) -> None:
+            self.now_ref = now_ref
+            self.wait_calls: list[int] = []
+
+        def wait_for_timeout(self, timeout_ms: int) -> None:
+            self.wait_calls.append(timeout_ms)
+            self.now_ref[0] += timeout_ms / 1000.0
+
+    page = _ProgressPage(fake_time)
+    frame = _FrameStub({})
+
+    assert (
+        _wait_for_terminal_surface_progressive(
+            frame,
+            page,
+            total_timeout_ms=1200,
+            poll_ms=200,
+            tab_poke_interval_ms=500,
+        )
+        is True
+    )
+    assert attempts["count"] >= 3
+    assert page.wait_calls
+
+
+def test_wait_for_terminal_surface_progressive_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_time = [0.0]
+
+    def fake_monotonic() -> float:
+        return fake_time[0]
+
+    monkeypatch.setattr(rtunnel_module.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(
+        rtunnel_module, "_wait_for_terminal_surface", lambda *_args, **_kwargs: False
+    )
+    monkeypatch.setattr(rtunnel_module, "_click_terminal_tab", lambda *_args, **_kwargs: False)
+
+    class _ProgressPage:
+        def __init__(self, now_ref: list[float]) -> None:
+            self.now_ref = now_ref
+            self.wait_calls: list[int] = []
+
+        def wait_for_timeout(self, timeout_ms: int) -> None:
+            self.wait_calls.append(timeout_ms)
+            self.now_ref[0] += timeout_ms / 1000.0
+
+    page = _ProgressPage(fake_time)
+    frame = _FrameStub({})
+
+    assert (
+        _wait_for_terminal_surface_progressive(
+            frame,
+            page,
+            total_timeout_ms=700,
+            poll_ms=150,
+            tab_poke_interval_ms=300,
+        )
+        is False
+    )
+    assert page.wait_calls
+    assert fake_time[0] > 0.0
+
+
+def test_focus_terminal_input_clicks_first_textarea() -> None:
+    text_area = _LocatorStub(count=1, wait_ok=True)
+    frame = _FrameStub({"textarea.xterm-helper-textarea": text_area})
+    page = _PageStub()
+
+    assert _focus_terminal_input(frame, page) is True
+    assert len(text_area.click_calls) == 1
+    assert text_area.click_calls[0] > 0
+    assert 40 in page.wait_calls
+
+
+def test_focus_terminal_input_returns_false_when_unavailable() -> None:
+    frame = _FrameStub({})
+    page = _PageStub()
+
+    assert _focus_terminal_input(frame, page) is False
 
 
 # ---------------------------------------------------------------------------

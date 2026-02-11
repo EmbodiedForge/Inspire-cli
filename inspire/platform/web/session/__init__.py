@@ -57,6 +57,15 @@ _BROWSER_API_FORCE_BROWSER = False
 atexit.register(_close_browser_client)
 
 
+def _refresh_session_in_place(current: "WebSession", refreshed: "WebSession") -> None:
+    """Replace an existing session object's fields with refreshed credentials/state."""
+    current.storage_state = refreshed.storage_state
+    current.cookies = refreshed.cookies
+    current.workspace_id = refreshed.workspace_id
+    current.login_username = refreshed.login_username
+    current.created_at = refreshed.created_at
+
+
 def request_json(
     session: "WebSession",
     method: str,
@@ -114,9 +123,10 @@ def request_json(
             sys.stderr.write("Session expired, re-authenticating...\n")
             sys.stderr.flush()
             clear_session_cache()
-            new_session = get_web_session()
+            new_session = get_web_session(force_refresh=True)
+            _refresh_session_in_place(session, new_session)
             return request_json(
-                new_session,
+                session,
                 method,
                 url,
                 headers=headers,
