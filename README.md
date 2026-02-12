@@ -46,17 +46,23 @@ inspire resources list
 | Command | Description |
 |---------|-------------|
 | `inspire job create` | Submit a training job |
-| `inspire job status <id>` | Check job status |
-| `inspire job logs <id>` | View job logs |
-| `inspire job list` | List cached jobs |
-| `inspire notebook list` | List notebook instances |
-| `inspire notebook create` | Create interactive notebook |
-| `inspire notebook ssh <id>` | SSH into notebook |
-| `inspire notebook start <id>` | Start stopped notebook |
-| `inspire resources list` | View GPU availability |
+| `inspire job status/logs/list` | Monitor and manage jobs |
+| `inspire job stop/wait` | Stop or wait for a job |
 | `inspire run "<cmd>"` | Quick job with auto resource selection |
-| `inspire sync` | Sync code to shared filesystem |
-| `inspire bridge exec "<cmd>"` | Run command via Git Actions |
+| `inspire sync` | Sync code to shared filesystem (via SSH tunnel) |
+| `inspire bridge exec "<cmd>"` | Run command on Bridge runner |
+| `inspire bridge ssh` | Interactive SSH shell to Bridge |
+| `inspire notebook list/create` | List or create notebook instances |
+| `inspire notebook start/stop` | Start or stop a notebook |
+| `inspire notebook ssh <id>` | SSH into notebook (sets up tunnel) |
+| `inspire image list/detail` | Browse Docker images |
+| `inspire image save/register` | Save or register custom images |
+| `inspire tunnel add/list/status` | Manage SSH tunnels to Bridge |
+| `inspire tunnel ssh-config` | Generate SSH config for direct access |
+| `inspire project list` | View projects and GPU quota |
+| `inspire resources list/nodes` | View GPU availability |
+| `inspire config show/check` | Inspect and validate configuration |
+| `inspire init` | Initialize configuration |
 
 ## Examples
 
@@ -64,29 +70,29 @@ inspire resources list
 # Submit a training job
 inspire job create --name "train-v1" --resource "4xH200" --command "bash train.sh"
 
-# Quick run with auto-selected resources
-inspire run "python train.py --epochs 100"
+# Quick run with auto-selected resources, sync code and follow logs
+inspire run "python train.py --epochs 100" --sync --watch
 
-# Check GPU availability
+# Sync code and verify
+inspire sync && inspire bridge exec "git log -1"
+
+# Set up SSH tunnel to a notebook
+inspire notebook ssh <notebook-id> --save-as mybridge
+ssh mybridge
+
+# Check GPU availability and project quota
 inspire resources list
-
-# SSH into a notebook
-inspire notebook ssh <notebook-id>
-
-# Sync and run remotely
-inspire sync && inspire bridge exec "cd /target && bash train.sh"
+inspire project list
 ```
 
 ## Configuration
 
-Config files are loaded from:
-- Global: `~/.config/inspire/config.toml`
-- Project: `./.inspire/config.toml`
+Config files are loaded in order (later overrides earlier):
+1. Global: `~/.config/inspire/config.toml`
+2. Project: `./.inspire/config.toml`
+3. Environment variables
 
-Download the official config template (internal network only):
-```bash
-curl https://nc.sii.e-forge.org/public.php/dav/files/b42pj6oxfY7ikrM -o config.toml.example
-```
+Run `inspire init` to generate a starter config, or `inspire config show` to inspect the merged result.
 
 Example `config.toml`:
 
@@ -126,16 +132,8 @@ gpu_type = "H100"
 View current config:
 ```bash
 inspire config show
+inspire config check   # Validate config + API auth
 ```
-
-SSH config precedence for `inspire notebook ssh` and tunnel rtunnel download settings:
-- `--rtunnel-bin` CLI flag (only for `rtunnel_bin`)
-- Project TOML or env, based on `[cli].prefer_source`
-- Global TOML
-- Built-in defaults
-
-When `[cli].prefer_source = "toml"`, project `./.inspire/config.toml` wins over environment
-variables for fields defined in project TOML.
 
 ## Environment Variables
 
