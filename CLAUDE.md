@@ -179,6 +179,9 @@ git push origin main
 git fetch github-public
 git checkout -b public-sync github-public/main
 git checkout main -- .        # Copy ALL files from main (overwrites everything)
+# Remove private-only files (not in .gitignore but should stay private)
+git rm -r --cached .claude/skills/check-ci .claude/skills/playwright-cli .claude/plans 2>/dev/null
+rm -rf .claude/skills/check-ci .claude/skills/playwright-cli .claude/plans
 git add -A
 git commit -m "v1.x - Description"
 git push github-public public-sync:main
@@ -219,6 +222,15 @@ git commit               # Clean commit, no merge conflicts
 - `API_ENDPOINTS.md` - API documentation with internal URLs
 - `inspire/Inspire_OpenAPI_Reference.md` - OpenAPI spec
 - `CLAUDE.md` - This file
+
+### Private-Only Files (tracked on origin, excluded from github-public)
+
+These files are tracked in the private repo but must be removed during
+the `github-public` sync step (see STEP 4 above):
+
+- `.claude/skills/check-ci/` - CI skill tied to Codeberg Forgejo Actions
+- `.claude/skills/playwright-cli/` - Internal browser automation skill
+- `.claude/plans/` - Development plans
 
 ## Remote Environment Variables
 
