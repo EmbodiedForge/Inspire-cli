@@ -5,8 +5,11 @@ Usage:
 
 This command:
 1. Pushes the current (or specified) branch to the remote
-2. Syncs code on Bridge via SSH tunnel (if available) or Gitea Actions
+2. Syncs code on Bridge via SSH tunnel (requires active tunnel)
 3. Returns the synced commit SHA
+
+Pass --via-action to allow fallback to Gitea/GitHub Actions when the
+tunnel is unavailable.
 """
 
 from __future__ import annotations
@@ -339,6 +342,11 @@ def sync_via_workflow(
     default=120,
     help="Timeout in seconds when waiting for sync (default: 120)",
 )
+@click.option(
+    "--via-action",
+    is_flag=True,
+    help="Allow fallback to Gitea/GitHub Actions workflow if SSH tunnel is unavailable",
+)
 @pass_context
 def sync(
     ctx: Context,
@@ -348,19 +356,23 @@ def sync(
     force: bool,
     wait: bool,
     timeout: int,
+    via_action: bool,
 ) -> None:
     """Sync local code to the Bridge shared filesystem.
 
-    This command pushes your local branch to Gitea, then triggers a
-    workflow on the self-hosted runner to sync the code to the shared
-    filesystem used by the Inspire training platform.
+    This command pushes your local branch to the remote, then syncs the
+    code on Bridge via SSH tunnel. An SSH tunnel must be active.
+
+    To fall back to Gitea/GitHub Actions workflow when the tunnel is
+    unavailable, pass --via-action.
 
     \b
     Examples:
-        inspire sync                          # Sync current branch via origin
+        inspire sync                          # Sync current branch via SSH tunnel
+        inspire sync --via-action             # Allow action fallback if tunnel is down
         inspire sync --remote upstream        # Sync via upstream remote
         inspire sync --branch feature/new     # Sync specific branch
-        inspire sync --no-wait                # Don't wait for completion
+        inspire sync --no-wait                # Don't wait for completion (action path)
 
     \b
     Environment variables:
@@ -427,7 +439,7 @@ def sync(
                 sys.exit(EXIT_GENERAL_ERROR)
             raise
 
-    # Try SSH tunnel first (much faster), fall back to Gitea Actions
+    # Try SSH tunnel first (much faster)
     # For sync, we need a bridge with internet access (for git fetch)
     tunnel_config = load_tunnel_config()
     internet_bridge = tunnel_config.get_bridge_with_internet()
@@ -448,20 +460,44 @@ def sync(
             tunnel_config=tunnel_config,
         )
         sys.exit(exit_code)
-    else:
-        # Fall back to Gitea Actions
-        if not ctx.json_output and tunnel_config.bridges and not internet_bridge:
+
+    # SSH tunnel not available
+    if not via_action:
+        # No fallback allowed — error out
+        if ctx.json_output:
+            click.echo(
+                json_formatter.format_json_error(
+                    "TunnelUnavailable",
+                    "SSH tunnel is not available and --via-action was not specified",
+                    EXIT_GENERAL_ERROR,
+                ),
+                err=True,
+            )
+        else:
+            if not internet_bridge:
+                click.echo("Error: No bridge with internet access configured.", err=True)
+            else:
+                click.echo("Error: SSH tunnel is not available.", err=True)
+            click.echo(
+                "Hint: Use --via-action to fall back to Gitea/GitHub Actions workflow.",
+                err=True,
+            )
+        sys.exit(EXIT_GENERAL_ERROR)
+
+    # --via-action: fall back to workflow
+    if not ctx.json_output:
+        if tunnel_config.bridges and not internet_bridge:
             click.echo("Warning: No bridge with internet access configured.", err=True)
-            click.echo("Falling back to Gitea Actions for sync.", err=True)
-        exit_code = sync_via_workflow(
-            ctx,
-            config,
-            branch=branch,
-            commit_sha=commit_sha,
-            commit_msg=commit_msg,
-            remote=remote,
-            force=force,
-            wait=wait,
-            timeout=timeout,
-        )
-        sys.exit(exit_code)
+        click.echo("Falling back to Gitea/GitHub Actions workflow.", err=True)
+    exit_code = sync_via_workflow(
+        ctx,
+        config,
+        branch=branch,
+        commit_sha=commit_sha,
+        commit_msg=commit_msg,
+        remote=remote,
+        force=force,
+        wait=wait,
+        timeout=timeout,
+    )
+    sys.exit(exit_code)

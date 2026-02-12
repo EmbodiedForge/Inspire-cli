@@ -840,6 +840,7 @@ def _print_notebook_detail(notebook: dict) -> None:
 )
 @click.option(
     "--all-workspaces",
+    "-A",
     is_flag=True,
     help="List notebooks across all configured workspaces (cpu/gpu/internet)",
 )

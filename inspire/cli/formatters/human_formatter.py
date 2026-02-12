@@ -401,6 +401,46 @@ def format_image_list(images: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def format_project_list(projects: List[Dict[str, Any]]) -> str:
+    """Format project list as a table.
+
+    Args:
+        projects: List of project data dictionaries
+
+    Returns:
+        Formatted table string
+    """
+    if not projects:
+        return "\nNo projects found.\n"
+
+    import click
+
+    lines = [
+        "",
+        f"{'Name':<24} {'Priority':<10} {'GPU-hours':<12} {'Status':<12}",
+        "\u2500" * 60,
+    ]
+
+    for proj in projects:
+        name = str(proj.get("name", "N/A"))[:24]
+        priority = str(proj.get("priority_level", ""))[:10] or "-"
+        gpu_hours = proj.get("member_remain_gpu_hours", 0.0)
+        has_quota = proj.get("has_quota", True)
+
+        gpu_str = f"{gpu_hours:.1f}"
+        if has_quota:
+            status = click.style("OK", fg="green")
+        else:
+            status = click.style("over quota", fg="red")
+
+        lines.append(f"{name:<24} {priority:<10} {gpu_str:<12} {status:<12}")
+
+    lines.append("\u2500" * 60)
+    lines.append(f"Total: {len(projects)} project(s)")
+
+    return "\n".join(lines)
+
+
 def format_image_detail(image_data: Dict[str, Any]) -> str:
     """Format image detail as a pretty box.
 

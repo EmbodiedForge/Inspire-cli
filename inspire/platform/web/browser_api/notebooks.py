@@ -357,7 +357,7 @@ def create_notebook(
 
     # Match the exact field set the platform UI sends (captured via Playwright).
     # Proto-compatible names: mirror_id/mirror_url (not image_id/image_url).
-    # The UI does NOT send: shared_memory_size, gpu_type (top-level).
+    # The UI does NOT send: gpu_type (top-level).
     body: dict[str, Any] = {
         "workspace_id": workspace_id,
         "name": name,
@@ -371,6 +371,7 @@ def create_notebook(
         "cpu_count": cpu_count,
         "gpu_count": gpu_count,
         "memory_size": memory_size,
+        "shared_memory_size": shared_memory_size,
     }
 
     # resource_spec_price is required for GPU notebooks.

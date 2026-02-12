@@ -28,6 +28,7 @@ from inspire.cli.commands import (
     notebook,
     init,
     image,
+    project,
 )
 
 
@@ -93,6 +94,7 @@ main.add_command(run)
 main.add_command(notebook)
 main.add_command(init)
 main.add_command(image)
+main.add_command(project)
 
 
 def cli() -> None:

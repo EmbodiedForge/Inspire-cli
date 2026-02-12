@@ -70,9 +70,13 @@
 - When preparing `github-public` sync, avoid introducing dependencies on ignored paths in docs, examples, tests, or command instructions.
 
 ## Current Debug Status (rtunnel/browser automation)
-- Two major bottlenecks in `notebook ssh` browser automation were fixed in `rtunnel.py`, reducing setup from ~183s to ~35s:
-  - `open_terminal`: When the REST API creates the terminal but xterm doesn't attach, the code now skips the 45s launcher-card wait (which can never match on a terminal page) and does a short File-menu readiness check instead (~56s to ~11s).
-  - `wait_marker`: xterm.js renders to `<canvas>`, making Playwright text locators blind to terminal output. The broken DOM locator (which always timed out at ~120s) was replaced with a 3s fixed delay; actual readiness is handled by `_ensure_proxy_readiness_with_fallback()`.
-- HTTP proxy readiness checks can return non-ready responses (often `404`) even when SSH tunnel connectivity succeeds. HTTP probe is treated as advisory; SSH preflight (`inspire tunnel test` semantics) is the authoritative success/failure gate.
-- Set `INSPIRE_RTUNNEL_TIMING=1` to enable per-step timing instrumentation in `_setup_notebook_rtunnel_sync()` (prints a summary table to stderr).
-- Keep all tracked tests/docs free of credentials, tokens, and private endpoint values while iterating on this debugging work.
+- `notebook ssh` setup now uses a direct Jupyter terminal path first: create terminal via `POST .../api/terminals`, then send setup script via terminal WebSocket (`.../terminals/websocket/<name>`). If WS delivery fails, code falls back to the Playwright UI terminal path.
+- `open_lab` no longer waits the full 60s iframe loop on restart-heavy cases. `open_notebook_lab()` now probes `/ide` briefly, then fails over early to direct `/api/v1/notebook/lab/<id>/`.
+- Session expiry handling now refreshes in place (`request_json()` updates the same `WebSession` object after re-auth), which avoids repeated stale-session retries in a single command flow.
+- HTTP proxy readiness checks can still return non-ready responses (often `404` or `ECONNREFUSED`) even when SSH tunnel connectivity later succeeds. HTTP probe remains advisory; SSH preflight (`inspire tunnel test` semantics) is authoritative.
+- Typical current pipeline profile:
+  - Dominant: platform notebook start/allocate time (`inspire notebook start --wait`, often ~30–40s).
+  - CLI setup after notebook is running: now often ~5–6s end-to-end when WS path succeeds.
+  - Fixed guard delay: `wait_marker` remains 3s (xterm/canvas limitation).
+- Set `INSPIRE_RTUNNEL_TIMING=1` to enable per-step timing instrumentation in `_setup_notebook_rtunnel_sync()` (summary table to stderr).
+- Keep tracked tests/docs free of credentials, tokens, and private endpoint values.

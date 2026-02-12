@@ -126,8 +126,11 @@ Version is tracked in three places (kept in sync by commitizen):
 4. Environment variables (highest)
 
 **rtunnel Browser Automation (`rtunnel.py`):**
-- `_open_or_create_terminal()` uses REST API first, then DOM fallbacks (launcher card, tab click, File menu). When the REST API creates the terminal, the launcher-card readiness wait is skipped (no launcher on a terminal page).
-- `_setup_notebook_rtunnel_sync()` sends setup commands via base64-encoded script, then waits a short fixed delay. xterm.js renders to `<canvas>`, so Playwright text locators cannot detect terminal output; actual readiness is verified by `_ensure_proxy_readiness_with_fallback()`.
+- `_setup_notebook_rtunnel_sync()` now tries direct Jupyter terminal delivery first: create a terminal via `POST .../api/terminals`, then send setup script over terminal WebSocket (`.../terminals/websocket/<name>`). If WS send fails, it falls back to the Playwright UI terminal flow.
+- `_open_or_create_terminal()` remains as fallback, using REST API + DOM recovery (tab/card/File menu) for terminal acquisition when direct WS path is unavailable.
+- `open_notebook_lab()` uses a two-phase navigation strategy: short `/ide?notebook_id=...` probe, then early fallback to direct `/api/v1/notebook/lab/<id>/` to avoid long iframe waits after cold starts.
+- `wait_marker` stays as a fixed 3s guard because xterm.js renders to `<canvas>` (DOM text locators are not reliable); real readiness remains enforced by `_ensure_proxy_readiness_with_fallback()` and SSH preflight.
+- `request_json()` session-expiry retry refreshes `WebSession` in place, reducing repeated stale-session retries in one command flow.
 - Set `INSPIRE_RTUNNEL_TIMING=1` to enable per-step timing output to stderr.
 
 ## Git Workflow

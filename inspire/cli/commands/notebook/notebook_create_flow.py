@@ -873,6 +873,20 @@ def run_notebook_create(
     if not selected_project:
         return
 
+    # Cap task priority to the selected project's max priority
+    if selected_project.priority_name:
+        try:
+            max_priority = int(selected_project.priority_name)
+            if task_priority is not None and task_priority > max_priority:
+                if not json_output:
+                    click.echo(
+                        f"Capping priority {task_priority} → {max_priority} "
+                        f"(max for project '{selected_project.name}')"
+                    )
+                task_priority = max_priority
+        except ValueError:
+            pass
+
     try:
         images = browser_api_module.list_images(workspace_id=workspace_id, session=session)
     except Exception as e:

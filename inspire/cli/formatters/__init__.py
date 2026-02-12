@@ -8,6 +8,7 @@ from inspire.cli.formatters.human_formatter import (
     format_nodes,
     format_error,
     format_success,
+    format_project_list,
 )
 
 __all__ = [
@@ -19,4 +20,5 @@ __all__ = [
     "format_nodes",
     "format_error",
     "format_success",
+    "format_project_list",
 ]

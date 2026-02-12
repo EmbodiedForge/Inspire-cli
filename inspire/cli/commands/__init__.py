@@ -10,6 +10,7 @@ from inspire.cli.commands.run import run
 from inspire.cli.commands.notebook import notebook
 from inspire.cli.commands.init import init
 from inspire.cli.commands.image import image
+from inspire.cli.commands.project import project
 
 __all__ = [
     "job",
@@ -22,4 +23,5 @@ __all__ = [
     "notebook",
     "init",
     "image",
+    "project",
 ]

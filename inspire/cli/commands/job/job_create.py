@@ -132,6 +132,20 @@ def run_job_create(
 
         selected_project_id = selected.project_id
 
+        # Cap priority to the selected project's max priority
+        if selected.priority_name:
+            try:
+                max_priority = int(selected.priority_name)
+                if priority is not None and priority > max_priority:
+                    if not ctx.json_output:
+                        click.echo(
+                            f"Capping priority {priority} → {max_priority} "
+                            f"(max for project '{selected.name}')"
+                        )
+                    priority = max_priority
+            except ValueError:
+                pass
+
         if not ctx.json_output:
             if fallback_msg:
                 click.echo(fallback_msg)
