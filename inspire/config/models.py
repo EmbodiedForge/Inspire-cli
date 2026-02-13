@@ -98,7 +98,7 @@ class Config:
     # Project alias map for project_id resolution (alias -> project-...)
     projects: dict[str, str] = field(default_factory=dict)
 
-    # Discovered per-account project metadata (loaded from global [accounts."<user>"] catalog)
+    # Discovered per-account project metadata (loaded from layered [accounts."<user>"] catalog)
     # project_id -> metadata dict (best-effort, schema may evolve)
     project_catalog: dict[str, dict[str, Any]] = field(default_factory=dict)
     # project_id -> shared-path grouping key (e.g. "/train/global_user/<user>")

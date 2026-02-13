@@ -92,13 +92,26 @@ Config files are loaded in order (later overrides earlier):
 2. Project: `./.inspire/config.toml`
 3. Environment variables
 
+Account password lookup follows the same layered model:
+1. `[accounts."<username>"].password` from global config
+2. `[accounts."<username>"].password` from project config (overrides global for same username)
+3. `INSPIRE_PASSWORD` (fallback only if no account password was found)
+
 Run `inspire init` to generate a starter config, or `inspire config show` to inspect the merged result.
+
+`inspire init` probe-only options are effective only with `--discover --probe-shared-path`:
+`--probe-limit`, `--probe-keep-notebooks`, `--probe-pubkey`/`--pubkey`, and `--probe-timeout`.
+Without that combination, they are accepted but ignored.
 
 Example `config.toml`:
 
 ```toml
 [auth]
 username = "your_username"
+
+[accounts."your_username"]
+# Optional: supports multi-account setups in global and/or project config
+password = "your_password"
 
 [api]
 base_url = "https://your-inspire-platform.com"
@@ -132,7 +145,11 @@ gpu_type = "H100"
 View current config:
 ```bash
 inspire config show
+inspire config show --json
 inspire config check   # Validate config + API auth
+inspire --json config check
+inspire config check --json
+inspire init --json --template --project --force
 ```
 
 ## Environment Variables

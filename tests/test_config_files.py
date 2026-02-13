@@ -558,6 +558,52 @@ class TestInitCommand:
         assert "your_username" in content
         assert "testuser" not in content
 
+    def test_init_json_template_output(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test that init supports command-local --json output."""
+        monkeypatch.chdir(tmp_path)
+        runner = CliRunner()
+
+        result = runner.invoke(init, ["--json", "--template", "--project", "--force"])
+
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["success"] is True
+        assert payload["data"]["mode"] == "template"
+        assert payload["data"]["files_written"] == [str(tmp_path / ".inspire" / "config.toml")]
+        assert payload["data"]["detected_env_count"] == 0
+        assert payload["data"]["secret_env_count"] == 0
+
+    def test_init_json_fails_when_overwrite_prompt_would_be_needed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test that JSON mode fails fast instead of entering interactive overwrite prompts."""
+        monkeypatch.chdir(tmp_path)
+        config_dir = tmp_path / ".inspire"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text("[auth]\nusername = 'existing'")
+
+        runner = CliRunner()
+        result = runner.invoke(init, ["--json", "--template", "--project"])
+
+        assert result.exit_code != 0
+        payload = json.loads(result.output)
+        assert payload["success"] is False
+        assert payload["error"]["type"] == "ValidationError"
+        assert "--force" in payload["error"]["message"]
+
+    def test_init_help_includes_probe_pubkey_alias_and_scope_note(self) -> None:
+        """Test probe option help text clearly states discover+probe scope."""
+        runner = CliRunner()
+        result = runner.invoke(init, ["--help"])
+
+        assert result.exit_code == 0
+        assert "--probe-pubkey" in result.output
+        assert "--pubkey" in result.output
+        assert "Only effective with --discover" in result.output
+        assert "shared-path" in result.output
+
     def test_init_global_creates_global_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
     ) -> None:
@@ -1069,6 +1115,22 @@ class TestConfigShowCommand:
         assert "values" in data
         assert "INSPIRE_USERNAME" in data["values"]
 
+    def test_config_show_json_alias(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test config show supports --json alias."""
+        monkeypatch.setenv("INSPIRE_USERNAME", "testuser")
+        monkeypatch.setenv("INSPIRE_PASSWORD", "testpass")
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "nonexistent" / "config.toml")
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(config_command, ["show", "--json"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "config_files" in data
+        assert "values" in data
+        assert "INSPIRE_USERNAME" in data["values"]
+
     def test_config_show_filter(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test config show with category filter."""
         monkeypatch.setenv("INSPIRE_USERNAME", "testuser")
@@ -1346,6 +1408,169 @@ username = "toml-user"
         assert cfg.username == "toml-user"
         assert cfg.password == "global-pass"
         assert sources["password"] == SOURCE_GLOBAL
+
+    def test_password_resolves_from_project_accounts_map(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Project config [accounts] password should be used for the selected user."""
+        project_dir = tmp_path / ".inspire"
+        project_dir.mkdir()
+        project_config = project_dir / "config.toml"
+        project_config.write_text(
+            """
+[auth]
+username = "toml-user"
+
+[accounts."toml-user"]
+password = "project-pass"
+"""
+        )
+
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "missing" / "config.toml")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("INSPIRE_PASSWORD", "env-pass")
+
+        cfg, sources = Config.from_files_and_env(require_credentials=False)
+
+        assert cfg.password == "project-pass"
+        assert sources["password"] == SOURCE_PROJECT
+        assert sources["accounts"] == SOURCE_PROJECT
+
+    def test_password_project_accounts_override_global_accounts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Project [accounts] password should override global for the same username."""
+        global_dir = tmp_path / "global"
+        global_dir.mkdir()
+        global_config = global_dir / "config.toml"
+        global_config.write_text(
+            """
+[accounts."toml-user"]
+password = "global-pass"
+"""
+        )
+
+        project_dir = tmp_path / ".inspire"
+        project_dir.mkdir()
+        project_config = project_dir / "config.toml"
+        project_config.write_text(
+            """
+[auth]
+username = "toml-user"
+
+[accounts."toml-user"]
+password = "project-pass"
+"""
+        )
+
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("INSPIRE_PASSWORD", "env-pass")
+
+        cfg, sources = Config.from_files_and_env(require_credentials=False)
+
+        assert cfg.password == "project-pass"
+        assert sources["password"] == SOURCE_PROJECT
+        assert sources["accounts"] == SOURCE_PROJECT
+
+    def test_project_account_catalog_merges_with_global(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Project account metadata should merge with global and take precedence on conflicts."""
+        global_dir = tmp_path / "global"
+        global_dir.mkdir()
+        global_config = global_dir / "config.toml"
+        global_config.write_text(
+            """
+[accounts."toml-user"]
+shared_path_group = "global-shared"
+train_job_workdir = "/global/workdir"
+
+[accounts."toml-user".projects]
+common = "project-global-common"
+global_only = "project-global-only"
+
+[accounts."toml-user".workspaces]
+cpu = "ws-global-cpu"
+gpu = "ws-global-gpu"
+
+[accounts."toml-user".api]
+timeout = 70
+
+[[accounts."toml-user".compute_groups]]
+name = "Global CG"
+id = "lcg-global"
+gpu_type = "H100"
+
+[accounts."toml-user".project_catalog."project-global-common"]
+shared_path_group = "group-global"
+workdir = "/global/common"
+"""
+        )
+
+        project_dir = tmp_path / ".inspire"
+        project_dir.mkdir()
+        project_config = project_dir / "config.toml"
+        project_config.write_text(
+            """
+[context]
+account = "toml-user"
+
+[accounts."toml-user"]
+password = "project-pass"
+shared_path_group = "project-shared"
+train_job_workdir = "/project/workdir"
+
+[accounts."toml-user".projects]
+common = "project-project-common"
+project_only = "project-project-only"
+
+[accounts."toml-user".workspaces]
+gpu = "ws-project-gpu"
+internet = "ws-project-internet"
+
+[accounts."toml-user".api]
+timeout = 99
+
+[[accounts."toml-user".compute_groups]]
+name = "Project CG"
+id = "lcg-project"
+gpu_type = "H200"
+
+[accounts."toml-user".project_catalog."project-global-common"]
+shared_path_group = "group-project"
+
+[accounts."toml-user".project_catalog."project-project-only"]
+workdir = "/project/only"
+"""
+        )
+
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("INSPIRE_PASSWORD", "env-pass")
+
+        cfg, sources = Config.from_files_and_env(require_credentials=False)
+
+        assert cfg.password == "project-pass"
+        assert cfg.timeout == 99
+        assert cfg.projects["common"] == "project-project-common"
+        assert cfg.projects["global_only"] == "project-global-only"
+        assert cfg.projects["project_only"] == "project-project-only"
+        assert cfg.workspaces["cpu"] == "ws-global-cpu"
+        assert cfg.workspaces["gpu"] == "ws-project-gpu"
+        assert cfg.workspaces["internet"] == "ws-project-internet"
+        assert cfg.compute_groups[0]["id"] == "lcg-project"
+        assert cfg.account_shared_path_group == "project-shared"
+        assert cfg.account_train_job_workdir == "/project/workdir"
+        assert cfg.project_shared_path_groups["project-global-common"] == "group-project"
+        assert cfg.project_workdirs["project-project-only"] == "/project/only"
+        assert sources["accounts"] == SOURCE_PROJECT
+        assert sources["password"] == SOURCE_PROJECT
+        assert sources["project_catalog"] == SOURCE_PROJECT
+        assert sources["project_shared_path_groups"] == SOURCE_PROJECT
+        assert sources["project_workdirs"] == SOURCE_PROJECT
+        assert sources["account_shared_path_group"] == SOURCE_PROJECT
+        assert sources["account_train_job_workdir"] == SOURCE_PROJECT
 
     def test_password_env_used_when_global_account_missing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None

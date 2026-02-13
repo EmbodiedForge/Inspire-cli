@@ -144,7 +144,7 @@ def _validate_required_credentials(cfg: Config) -> None:
     if not cfg.password:
         raise ConfigError(
             "Missing password configuration.\n"
-            "Set INSPIRE_PASSWORD env var or add a global account password:\n"
+            "Set INSPIRE_PASSWORD env var or add an account password in config.toml:\n"
             '  [accounts."your_username"]\n'
             "  password = 'your_password'"
         )
@@ -203,13 +203,22 @@ def _build_base_url_resolution(
 
 
 @click.command("check")
+@click.option(
+    "--json",
+    "json_output_local",
+    is_flag=True,
+    help="Output as JSON (machine-readable). Equivalent to top-level --json.",
+)
 @pass_context
-def check_config(ctx: Context) -> None:
+def check_config(ctx: Context, json_output_local: bool) -> None:
     """Check environment configuration and API authentication.
 
     Verifies configuration (from files and environment) and attempts to
     authenticate with the Inspire API.
     """
+    ctx.json_output = bool(ctx.json_output or json_output_local)
+    effective_json = ctx.json_output
+
     try:
         cfg, sources = Config.from_files_and_env(
             require_credentials=False,
@@ -261,7 +270,7 @@ def check_config(ctx: Context) -> None:
         if auth_error:
             result["auth_error"] = auth_error
 
-        if ctx.json_output:
+        if effective_json:
             click.echo(json_formatter.format_json(result, success=auth_ok))
         else:
             if auth_ok:

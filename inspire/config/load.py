@@ -170,7 +170,7 @@ def _coerce_project_default(field_name: str, raw_value: Any) -> Any:
 
 
 def _parse_global_accounts(raw_accounts: Any) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
-    """Parse global [accounts.\"<username>\"] entries."""
+    """Parse [accounts.\"<username>\"] entries from a TOML layer."""
     if not isinstance(raw_accounts, dict):
         return {}, {}
 
@@ -216,6 +216,71 @@ def _parse_global_accounts(raw_accounts: Any) -> tuple[dict[str, str], dict[str,
         catalogs[username] = account_data
 
     return passwords, catalogs
+
+
+def _merge_account_catalog(
+    global_catalog: dict[str, Any],
+    project_catalog: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge one account catalog entry with project values overriding global values."""
+    merged_projects = dict(global_catalog.get("projects", {}))
+    merged_projects.update(project_catalog.get("projects", {}))
+
+    merged_workspaces = dict(global_catalog.get("workspaces", {}))
+    merged_workspaces.update(project_catalog.get("workspaces", {}))
+
+    merged_project_catalog = dict(global_catalog.get("project_catalog", {}))
+    merged_project_catalog.update(project_catalog.get("project_catalog", {}))
+
+    global_overrides = global_catalog.get("overrides", {})
+    project_overrides = project_catalog.get("overrides", {})
+    merged_overrides = dict(global_overrides)
+    merged_overrides.update(project_overrides)
+
+    global_compute_groups = global_catalog.get("compute_groups", [])
+    project_compute_groups = project_catalog.get("compute_groups", [])
+
+    shared_path_group = project_catalog.get("shared_path_group")
+    if not shared_path_group:
+        shared_path_group = global_catalog.get("shared_path_group")
+
+    train_job_workdir = project_catalog.get("train_job_workdir")
+    if not train_job_workdir:
+        train_job_workdir = global_catalog.get("train_job_workdir")
+
+    return {
+        "projects": merged_projects,
+        "workspaces": merged_workspaces,
+        "compute_groups": (
+            project_compute_groups if project_compute_groups else list(global_compute_groups)
+        ),
+        "project_catalog": merged_project_catalog,
+        "shared_path_group": shared_path_group,
+        "train_job_workdir": train_job_workdir,
+        "overrides": merged_overrides,
+    }
+
+
+def _merge_account_catalogs(
+    global_catalogs: dict[str, dict[str, Any]],
+    project_catalogs: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Merge account catalogs keyed by username with project values overriding global values."""
+    merged_catalogs: dict[str, dict[str, Any]] = {}
+    usernames = set(global_catalogs.keys()) | set(project_catalogs.keys())
+
+    for username in usernames:
+        global_catalog = global_catalogs.get(username, {})
+        project_catalog = project_catalogs.get(username, {})
+
+        if global_catalog and project_catalog:
+            merged_catalogs[username] = _merge_account_catalog(global_catalog, project_catalog)
+        elif project_catalog:
+            merged_catalogs[username] = project_catalog
+        elif global_catalog:
+            merged_catalogs[username] = global_catalog
+
+    return merged_catalogs
 
 
 def config_from_files_and_env(
@@ -343,6 +408,8 @@ def config_from_files_and_env(
     project_projects: dict[str, str] = {}
     project_defaults: dict[str, Any] = {}
     project_context: dict[str, Any] = {}
+    project_account_catalogs: dict[str, dict[str, Any]] = {}
+    project_accounts: dict[str, str] = {}
     prefer_source = "env"
     if project_config_path:
         project_raw = _load_toml(project_config_path)
@@ -365,8 +432,9 @@ def config_from_files_and_env(
         raw_context = project_raw.pop("context", {})
         if isinstance(raw_context, dict):
             project_context = raw_context
-        # Keep account passwords global-only to avoid storing secrets in repos.
-        project_raw.pop("accounts", None)
+        project_accounts, project_account_catalogs = _parse_global_accounts(
+            project_raw.pop("accounts", {})
+        )
 
         raw_workspaces = project_raw.get("workspaces") or {}
         if isinstance(raw_workspaces, dict):
@@ -390,6 +458,11 @@ def config_from_files_and_env(
             merged_workspaces.update(project_workspaces)
             config_dict["workspaces"] = merged_workspaces
             sources["workspaces"] = SOURCE_PROJECT
+        if project_accounts:
+            merged_accounts = dict(config_dict.get("accounts", {}))
+            merged_accounts.update(project_accounts)
+            config_dict["accounts"] = merged_accounts
+            sources["accounts"] = SOURCE_PROJECT
 
     context_account = str(project_context.get("account") or "").strip()
     if context_account:
@@ -401,7 +474,15 @@ def config_from_files_and_env(
         or str(config_dict.get("username") or "").strip()
         or str(os.getenv("INSPIRE_USERNAME") or "").strip()
     )
-    account_catalog = global_account_catalogs.get(selected_account, {})
+    merged_account_catalogs = _merge_account_catalogs(
+        global_account_catalogs, project_account_catalogs
+    )
+    account_catalog = merged_account_catalogs.get(selected_account, {})
+    account_catalog_source = (
+        SOURCE_PROJECT
+        if selected_account and selected_account in project_account_catalogs
+        else SOURCE_GLOBAL
+    )
 
     account_projects = account_catalog.get("projects", {}) if account_catalog else {}
     account_workspaces = account_catalog.get("workspaces", {}) if account_catalog else {}
@@ -422,34 +503,34 @@ def config_from_files_and_env(
             if sources.get(field_name) == SOURCE_PROJECT:
                 continue
             config_dict[field_name] = value
-            sources[field_name] = SOURCE_GLOBAL
+            sources[field_name] = account_catalog_source
 
     if account_workspaces:
         merged_workspaces = dict(account_workspaces)
         merged_workspaces.update(config_dict.get("workspaces", {}))
         config_dict["workspaces"] = merged_workspaces
         if sources.get("workspaces") == SOURCE_DEFAULT:
-            sources["workspaces"] = SOURCE_GLOBAL
+            sources["workspaces"] = account_catalog_source
 
         if not config_dict.get("workspace_cpu_id") and merged_workspaces.get("cpu"):
             config_dict["workspace_cpu_id"] = merged_workspaces["cpu"]
-            sources["workspace_cpu_id"] = SOURCE_GLOBAL
+            sources["workspace_cpu_id"] = account_catalog_source
         if not config_dict.get("workspace_gpu_id") and merged_workspaces.get("gpu"):
             config_dict["workspace_gpu_id"] = merged_workspaces["gpu"]
-            sources["workspace_gpu_id"] = SOURCE_GLOBAL
+            sources["workspace_gpu_id"] = account_catalog_source
         if not config_dict.get("workspace_internet_id") and merged_workspaces.get("internet"):
             config_dict["workspace_internet_id"] = merged_workspaces["internet"]
-            sources["workspace_internet_id"] = SOURCE_GLOBAL
+            sources["workspace_internet_id"] = account_catalog_source
 
     merged_projects = dict(account_projects)
     merged_projects.update(project_projects)
     if merged_projects:
         config_dict["projects"] = merged_projects
-        sources["projects"] = SOURCE_PROJECT if project_projects else SOURCE_GLOBAL
+        sources["projects"] = SOURCE_PROJECT if project_projects else account_catalog_source
 
     if isinstance(account_project_catalog, dict) and account_project_catalog:
         config_dict["project_catalog"] = account_project_catalog
-        sources["project_catalog"] = SOURCE_GLOBAL
+        sources["project_catalog"] = account_catalog_source
 
         shared_groups: dict[str, str] = {}
         workdirs: dict[str, str] = {}
@@ -467,21 +548,21 @@ def config_from_files_and_env(
 
         if shared_groups:
             config_dict["project_shared_path_groups"] = shared_groups
-            sources["project_shared_path_groups"] = SOURCE_GLOBAL
+            sources["project_shared_path_groups"] = account_catalog_source
         if workdirs:
             config_dict["project_workdirs"] = workdirs
-            sources["project_workdirs"] = SOURCE_GLOBAL
+            sources["project_workdirs"] = account_catalog_source
 
     if account_shared_path_group:
         config_dict["account_shared_path_group"] = str(account_shared_path_group)
-        sources["account_shared_path_group"] = SOURCE_GLOBAL
+        sources["account_shared_path_group"] = account_catalog_source
     if account_train_job_workdir:
         config_dict["account_train_job_workdir"] = str(account_train_job_workdir)
-        sources["account_train_job_workdir"] = SOURCE_GLOBAL
+        sources["account_train_job_workdir"] = account_catalog_source
 
     if account_compute_groups and not config_dict.get("compute_groups"):
         config_dict["compute_groups"] = account_compute_groups
-        sources["compute_groups"] = SOURCE_GLOBAL
+        sources["compute_groups"] = account_catalog_source
 
     if context_account and not config_dict.get("username"):
         config_dict["username"] = context_account
@@ -554,14 +635,17 @@ def config_from_files_and_env(
 
     # Password precedence:
     # 1) explicit [auth].password from config layers
-    # 2) global [accounts."<username>"].password
+    # 2) merged [accounts."<username>"].password (project overrides global)
     # 3) INSPIRE_PASSWORD env var (fallback only if still unset)
     if not config_dict.get("password"):
         resolved_username = str(config_dict.get("username") or "").strip()
         account_password = config_dict.get("accounts", {}).get(resolved_username)
         if account_password:
             config_dict["password"] = account_password
-            sources["password"] = SOURCE_GLOBAL
+            if resolved_username in project_accounts:
+                sources["password"] = SOURCE_PROJECT
+            else:
+                sources["password"] = SOURCE_GLOBAL
 
     if not config_dict.get("password") and env_password:
         config_dict["password"] = env_password
@@ -584,7 +668,7 @@ def config_from_files_and_env(
         if not config_dict["password"]:
             raise ConfigError(
                 "Missing password configuration.\n"
-                "Set INSPIRE_PASSWORD env var or add a global account password:\n"
+                "Set INSPIRE_PASSWORD env var or add an account password in config.toml:\n"
                 '  [accounts."your_username"]\n'
                 "  password = 'your_password'"
             )

@@ -893,6 +893,39 @@ base_url = "https://my-inspire.internal"
     assert resolution["global_config_path"] == str(global_config)
 
 
+def test_config_check_accepts_local_json_alias(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_test_config(tmp_path)
+    config.base_url = "https://my-inspire.internal"
+    config.docker_registry = TEST_DOCKER_REGISTRY
+
+    def fake_from_files_and_env(
+        cls, require_target_dir: bool = False, require_credentials: bool = True
+    ):  # type: ignore[override]
+        return config, {"base_url": config_module.SOURCE_ENV}
+
+    def fake_get_config_paths(cls):  # type: ignore[override]
+        return None, None
+
+    monkeypatch.setattr(
+        config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env)
+    )
+    monkeypatch.setattr(
+        config_module.Config, "get_config_paths", classmethod(fake_get_config_paths)
+    )
+    monkeypatch.setattr(auth_module.AuthManager, "get_api", lambda _cls, cfg=None: DummyAPI())
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["config", "check", "--json"])
+
+    assert result.exit_code == EXIT_SUCCESS
+    payload = json.loads(result.output)
+    assert payload["success"] is True
+    assert payload["data"]["auth_ok"] is True
+    assert "base_url_resolution" in payload["data"]
+
+
 def test_config_check_rejects_placeholder_base_url(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1037,6 +1070,51 @@ def test_config_check_allows_path_defaults_for_endpoint_fields(
 
     assert result.exit_code == EXIT_SUCCESS
     assert "Configuration looks good" in result.output
+
+
+def test_init_json_global_contract_via_top_level_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+
+    result = runner.invoke(cli_main, ["--json", "init", "--template", "--project", "--force"])
+
+    assert result.exit_code == EXIT_SUCCESS
+    payload = json.loads(result.output)
+    assert payload["success"] is True
+    assert payload["data"]["mode"] == "template"
+    assert payload["data"]["files_written"] == [str(tmp_path / ".inspire" / "config.toml")]
+
+
+def test_config_show_respects_global_json_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_test_config(tmp_path)
+
+    def fake_from_files_and_env(
+        cls, require_target_dir: bool = False, require_credentials: bool = True
+    ):  # type: ignore[override]
+        return config, {"username": config_module.SOURCE_ENV}
+
+    def fake_get_config_paths(cls):  # type: ignore[override]
+        return None, None
+
+    monkeypatch.setattr(
+        config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env)
+    )
+    monkeypatch.setattr(
+        config_module.Config, "get_config_paths", classmethod(fake_get_config_paths)
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["--json", "config", "show"])
+
+    assert result.exit_code == EXIT_SUCCESS
+    payload = json.loads(result.output)
+    assert "config_files" in payload
+    assert "values" in payload
+    assert "INSPIRE_USERNAME" in payload["values"]
 
 
 def test_notebook_list_all_workspaces_combines_results(

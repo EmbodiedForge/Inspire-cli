@@ -1111,7 +1111,7 @@ def run_notebook_ssh(
         hint=(
             "Notebook SSH requires web authentication. "
             "Set [auth].username and configure password via INSPIRE_PASSWORD "
-            'or global [accounts."<username>"].password.'
+            'or [accounts."<username>"].password.'
         ),
     )
 

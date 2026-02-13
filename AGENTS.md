@@ -80,3 +80,4 @@
   - Fixed guard delay: `wait_marker` remains 3s (xterm/canvas limitation).
 - Set `INSPIRE_RTUNNEL_TIMING=1` to enable per-step timing instrumentation in `_setup_notebook_rtunnel_sync()` (summary table to stderr).
 - Keep tracked tests/docs free of credentials, tokens, and private endpoint values.
+- `inspire init` probe controls (`--probe-limit`, `--probe-keep-notebooks`, `--probe-pubkey`/`--pubkey`, `--probe-timeout`) are only effective with `--discover --probe-shared-path`; otherwise they are accepted but ignored.
