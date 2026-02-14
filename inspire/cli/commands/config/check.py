@@ -46,8 +46,6 @@ _HOST_VALIDATION_FIELDS = (
     ("github_server", "INSP_GITHUB_SERVER"),
     ("docker_registry", "INSPIRE_DOCKER_REGISTRY"),
     ("rtunnel_download_url", "INSPIRE_RTUNNEL_DOWNLOAD_URL"),
-    ("apt_mirror_url", "INSPIRE_APT_MIRROR_URL"),
-    ("pip_index_url", "INSPIRE_PIP_INDEX_URL"),
 )
 
 # ---------------------------------------------------------------------------

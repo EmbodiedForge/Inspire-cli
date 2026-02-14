@@ -111,8 +111,6 @@ class TestConfigSchema:
         # SSH paths should be global
         assert "INSPIRE_RTUNNEL_BIN" in global_env_vars
 
-        # Mirrors should be global
-        assert "INSPIRE_APT_MIRROR_URL" in global_env_vars
         # Password should remain global-scope for security defaults
         assert "INSPIRE_PASSWORD" in global_env_vars
 

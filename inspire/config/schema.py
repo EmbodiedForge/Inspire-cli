@@ -22,7 +22,6 @@ from inspire.config.options.forge import GITEA_OPTIONS, GITHUB_OPTIONS, GIT_PLAT
 from inspire.config.options.infra import SSH_OPTIONS, TUNNEL_OPTIONS, BRIDGE_OPTIONS, PATHS_OPTIONS
 from inspire.config.options.project import (
     JOB_OPTIONS,
-    MIRRORS_OPTIONS,
     NOTEBOOK_OPTIONS,
     SYNC_OPTIONS,
     WORKSPACES_OPTIONS,
@@ -43,7 +42,6 @@ CONFIG_OPTIONS: list[ConfigOption] = [
     *NOTEBOOK_OPTIONS,
     *SSH_OPTIONS,
     *TUNNEL_OPTIONS,
-    *MIRRORS_OPTIONS,
 ]
 
 

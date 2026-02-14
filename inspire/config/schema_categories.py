@@ -17,5 +17,4 @@ CATEGORY_ORDER = [
     "Notebook",
     "SSH",
     "Tunnel",
-    "Mirrors",
 ]

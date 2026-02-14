@@ -126,11 +126,6 @@ class Config:
         "https://github.com/Sarfflow/rtunnel/releases/download/nightly/rtunnel-linux-amd64.tar.gz"
     )
 
-    # Mirror settings
-    apt_mirror_url: Optional[str] = None
-    pip_index_url: Optional[str] = None
-    pip_trusted_host: Optional[str] = None
-
     # Tunnel retry settings
     tunnel_retries: int = 3
     tunnel_retry_pause: float = 2.0

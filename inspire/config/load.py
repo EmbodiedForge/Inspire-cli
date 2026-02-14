@@ -38,9 +38,6 @@ _ACCOUNT_OVERRIDE_FIELDS = {
     "dropbear_deb_dir",
     "setup_script",
     "rtunnel_download_url",
-    "apt_mirror_url",
-    "pip_index_url",
-    "pip_trusted_host",
 }
 
 _ACCOUNT_SECTION_KEY_MAP = {
@@ -62,11 +59,6 @@ _ACCOUNT_SECTION_KEY_MAP = {
         "dropbear_deb_dir": "dropbear_deb_dir",
         "setup_script": "setup_script",
         "rtunnel_download_url": "rtunnel_download_url",
-    },
-    "mirrors": {
-        "apt_mirror_url": "apt_mirror_url",
-        "pip_index_url": "pip_index_url",
-        "pip_trusted_host": "pip_trusted_host",
     },
 }
 
@@ -350,9 +342,6 @@ def config_from_files_and_env(
             "https://github.com/Sarfflow/rtunnel/releases/download/nightly/"
             "rtunnel-linux-amd64.tar.gz"
         ),
-        "apt_mirror_url": None,
-        "pip_index_url": None,
-        "pip_trusted_host": None,
         "tunnel_retries": 3,
         "tunnel_retry_pause": 2.0,
         "shm_size": None,
