@@ -713,6 +713,7 @@ def maybe_start_keepalive(
         )
         if not json_output:
             click.echo("GPU keepalive script started (log: /tmp/keepalive.log)")
+            click.echo('  To stop: inspire bridge exec "kill $(cat /tmp/keepalive.pid)"')
     except Exception as e:
         if not json_output:
             click.echo(f"Warning: Failed to start keepalive script: {e}", err=True)

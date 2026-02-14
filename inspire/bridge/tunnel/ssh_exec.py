@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import select
-import shlex
 import subprocess
 import time
 from typing import Callable, Optional
@@ -46,8 +45,14 @@ def _resolve_bridge_and_proxy(
     return config, bridge, proxy_cmd
 
 
-def _wrap_command_in_login_shell(command: str) -> str:
-    return f"LC_ALL=C LANG=C bash -l -c {shlex.quote(command)}"
+def _build_stdin_script(command: str) -> str:
+    """Build a short shell script to pipe into ``bash -l`` via stdin.
+
+    This avoids embedding *command* in the SSH process's command-line
+    arguments, which would otherwise make ``pkill -f <pattern>`` match
+    the parent bash process and tear down the SSH session.
+    """
+    return f"export LC_ALL=C LANG=C; {command}\n"
 
 
 def _build_ssh_base_args(
@@ -93,10 +98,11 @@ def run_ssh_command(
     """Execute a command on Bridge via SSH ProxyCommand."""
     _config, bridge, proxy_cmd = _resolve_bridge_and_proxy(bridge_name, config, quiet=quiet_proxy)
     ssh_cmd = _build_ssh_base_args(bridge=bridge, proxy_cmd=proxy_cmd)
-    ssh_cmd.append(_wrap_command_in_login_shell(command))
+    ssh_cmd.append("bash -l")
 
     return subprocess.run(
         ssh_cmd,
+        input=_build_stdin_script(command),
         capture_output=capture_output,
         text=True,
         timeout=timeout,
@@ -139,7 +145,7 @@ def run_ssh_command_streaming(
 
     _config, bridge, proxy_cmd = _resolve_bridge_and_proxy(bridge_name, config)
     ssh_cmd = _build_ssh_base_args(bridge=bridge, proxy_cmd=proxy_cmd)
-    ssh_cmd.append(_wrap_command_in_login_shell(command))
+    ssh_cmd.append("bash -l")
 
     # Default callback: print to stdout
     if output_callback is None:
@@ -151,11 +157,17 @@ def run_ssh_command_streaming(
 
     process = subprocess.Popen(
         ssh_cmd,
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         bufsize=1,
         universal_newlines=True,
     )
+
+    # Feed the command via stdin so it never appears in the process cmdline.
+    script = _build_stdin_script(command)
+    process.stdin.write(script)
+    process.stdin.close()
 
     start_time = time.time()
 
@@ -202,8 +214,8 @@ def run_ssh_command_streaming(
 
 __all__ = [
     "_build_ssh_base_args",
+    "_build_stdin_script",
     "_resolve_bridge_and_proxy",
-    "_wrap_command_in_login_shell",
     "get_ssh_command_args",
     "run_ssh_command",
     "run_ssh_command_streaming",
