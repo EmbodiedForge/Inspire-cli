@@ -413,29 +413,21 @@ def format_project_list(projects: List[Dict[str, Any]]) -> str:
     if not projects:
         return "\nNo projects found.\n"
 
-    import click
-
     lines = [
         "",
-        f"{'Name':<24} {'Priority':<10} {'GPU-hours':<12} {'Status':<12}",
-        "\u2500" * 60,
+        f"{'Name':<24} {'Priority':<10} {'Budget remain':<16}",
+        "\u2500" * 52,
     ]
 
     for proj in projects:
         name = str(proj.get("name", "N/A"))[:24]
         priority = str(proj.get("priority_level", ""))[:10] or "-"
-        gpu_hours = proj.get("member_remain_gpu_hours", 0.0)
-        has_quota = proj.get("has_quota", True)
+        budget = proj.get("member_remain_budget", 0.0)
+        budget_str = f"{budget:,.0f}"
 
-        gpu_str = f"{gpu_hours:.1f}"
-        if has_quota:
-            status = click.style("OK", fg="green")
-        else:
-            status = click.style("over quota", fg="red")
+        lines.append(f"{name:<24} {priority:<10} {budget_str:<16}")
 
-        lines.append(f"{name:<24} {priority:<10} {gpu_str:<12} {status:<12}")
-
-    lines.append("\u2500" * 60)
+    lines.append("\u2500" * 52)
     lines.append(f"Total: {len(projects)} project(s)")
 
     return "\n".join(lines)

@@ -32,12 +32,10 @@ def _project_to_dict(proj: browser_api_module.ProjectInfo) -> dict:
         "budget": proj.budget,
         "remain_budget": proj.remain_budget,
         "member_remain_budget": proj.member_remain_budget,
-        "member_remain_gpu_hours": proj.member_remain_gpu_hours,
         "gpu_limit": proj.gpu_limit,
         "member_gpu_limit": proj.member_gpu_limit,
         "priority_level": proj.priority_level,
         "priority_name": proj.priority_name,
-        "has_quota": proj.has_quota(),
     }
 
 

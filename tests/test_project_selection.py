@@ -13,9 +13,9 @@ def _project(
     project_id: str,
     name: str,
     *,
-    member_gpu_limit: bool,
-    member_remain_gpu_hours: float,
-    priority_name: str,
+    member_gpu_limit: bool = False,
+    member_remain_gpu_hours: float = 0.0,
+    priority_name: str = "0",
 ) -> ProjectInfo:
     return ProjectInfo(
         project_id=project_id,
@@ -27,7 +27,126 @@ def _project(
     )
 
 
-def test_select_project_requested_over_quota_falls_back_by_default() -> None:
+# ---------------------------------------------------------------------------
+# has_quota() — platform does NOT enforce cumulative GPU-hours
+# ---------------------------------------------------------------------------
+
+
+def test_has_quota_always_true_even_with_negative_hours() -> None:
+    """Negative member_remain_gpu_hours should NOT make a project over-quota."""
+    proj = _project(
+        "p1",
+        "Test",
+        member_gpu_limit=True,
+        member_remain_gpu_hours=-9520985.6,
+        priority_name="10",
+    )
+    assert proj.has_quota(needs_gpu=True) is True
+
+
+def test_has_quota_true_without_gpu_limit() -> None:
+    proj = _project("p1", "Test", member_gpu_limit=False, member_remain_gpu_hours=0.0)
+    assert proj.has_quota(needs_gpu=True) is True
+
+
+def test_has_quota_true_for_cpu_only() -> None:
+    proj = _project(
+        "p1",
+        "Test",
+        member_gpu_limit=True,
+        member_remain_gpu_hours=-100.0,
+    )
+    assert proj.has_quota(needs_gpu=False) is True
+
+
+# ---------------------------------------------------------------------------
+# Auto-selection (no --project): priority-first ordering
+# ---------------------------------------------------------------------------
+
+
+def test_auto_select_prefers_high_priority_over_low_with_more_hours() -> None:
+    """HIGH-priority project should win over LOW with vastly more hours."""
+    high_negative = _project(
+        "p-high",
+        "CI-高优先级",
+        member_gpu_limit=True,
+        member_remain_gpu_hours=-490226.4,
+        priority_name="10",  # HIGH
+    )
+    low_huge = _project(
+        "p-low",
+        "项目兜底任务",
+        member_gpu_limit=True,
+        member_remain_gpu_hours=2399383493.5,
+        priority_name="2",  # LOW
+    )
+    normal_zero = _project(
+        "p-normal",
+        "分布式测试",
+        member_gpu_limit=False,
+        member_remain_gpu_hours=0.0,
+        priority_name="4",  # NORMAL
+    )
+
+    selected, message = select_project([low_huge, normal_zero, high_negative])
+
+    assert selected.project_id == "p-high"
+    assert message is None
+
+
+def test_auto_select_breaks_tie_by_gpu_hours() -> None:
+    """Same priority → prefer more remaining GPU-hours."""
+    a = _project(
+        "p-a",
+        "Project A",
+        member_gpu_limit=True,
+        member_remain_gpu_hours=100.0,
+        priority_name="10",
+    )
+    b = _project(
+        "p-b",
+        "Project B",
+        member_gpu_limit=True,
+        member_remain_gpu_hours=500.0,
+        priority_name="10",
+    )
+
+    selected, _ = select_project([a, b])
+    assert selected.project_id == "p-b"
+
+
+def test_auto_select_breaks_tie_by_name() -> None:
+    """Same priority and hours → alphabetical name."""
+    a = _project("p-a", "Alpha", priority_name="10")
+    b = _project("p-b", "Beta", priority_name="10")
+
+    selected, _ = select_project([b, a])
+    assert selected.project_id == "p-a"
+
+
+def test_auto_select_negative_gpu_hours_selectable() -> None:
+    """Projects with negative member_remain_gpu_hours are still selectable."""
+    proj = _project(
+        "p1",
+        "Only Project",
+        member_gpu_limit=True,
+        member_remain_gpu_hours=-186350.6,
+        priority_name="10",
+    )
+
+    selected, message = select_project([proj])
+
+    assert selected.project_id == "p1"
+    assert message is None
+
+
+# ---------------------------------------------------------------------------
+# Explicit --project: always returns the requested project
+# ---------------------------------------------------------------------------
+
+
+def test_select_project_requested_returns_directly() -> None:
+    """Requested project is returned directly — no fallback needed."""
     requested = _project(
         "project-requested",
         "Requested Project",
@@ -35,22 +154,21 @@ def test_select_project_requested_over_quota_falls_back_by_default() -> None:
         member_remain_gpu_hours=-10.0,
         priority_name="10",
     )
-    fallback = _project(
-        "project-fallback",
-        "Fallback Project",
+    other = _project(
+        "project-other",
+        "Other Project",
         member_gpu_limit=False,
         member_remain_gpu_hours=0.0,
         priority_name="4",
     )
 
     selected, message = select_project(
-        [requested, fallback],
+        [requested, other],
         requested="project-requested",
     )
 
-    assert selected.project_id == "project-fallback"
-    assert message is not None
-    assert "over quota" in message
+    assert selected.project_id == "project-requested"
+    assert message is None
 
 
 def test_select_project_requested_over_quota_allowed_for_cpu() -> None:
@@ -79,31 +197,16 @@ def test_select_project_requested_over_quota_allowed_for_cpu() -> None:
     assert message is None
 
 
-def test_select_project_requested_over_quota_can_be_forced_to_proceed() -> None:
-    requested = _project(
-        "project-requested",
-        "Requested Project",
-        member_gpu_limit=True,
-        member_remain_gpu_hours=-10.0,
-        priority_name="10",
-    )
-    fallback = _project(
-        "project-fallback",
-        "Fallback Project",
-        member_gpu_limit=False,
-        member_remain_gpu_hours=0.0,
-        priority_name="4",
-    )
+def test_select_project_requested_not_found_raises() -> None:
+    proj = _project("p1", "Exists", priority_name="4")
 
-    selected, message = select_project(
-        [requested, fallback],
-        requested="project-requested",
-        allow_requested_over_quota=True,
-    )
+    with pytest.raises(ValueError, match="not found"):
+        select_project([proj], requested="nonexistent")
 
-    assert selected.project_id == "project-requested"
-    assert message is not None
-    assert "continuing" in message
+
+# ---------------------------------------------------------------------------
+# resolve_notebook_project integration
+# ---------------------------------------------------------------------------
 
 
 def test_resolve_notebook_project_passes_quota_and_shared_path_settings(monkeypatch) -> None:
@@ -151,67 +254,3 @@ def test_resolve_notebook_project_passes_quota_and_shared_path_settings(monkeypa
     assert called["allow_requested_over_quota"] is True
     assert called["shared_path_group_by_id"] is None
     assert called["needs_gpu_quota"] is False
-
-
-def test_select_project_filters_known_incompatible_shared_path_group() -> None:
-    requested = _project(
-        "project-requested",
-        "Requested",
-        member_gpu_limit=True,
-        member_remain_gpu_hours=-1.0,
-        priority_name="10",
-    )
-    incompatible = _project(
-        "project-incompatible",
-        "Incompatible",
-        member_gpu_limit=False,
-        member_remain_gpu_hours=0.0,
-        priority_name="4",
-    )
-    unknown = _project(
-        "project-unknown",
-        "Unknown",
-        member_gpu_limit=False,
-        member_remain_gpu_hours=0.0,
-        priority_name="6",
-    )
-
-    selected, message = select_project(
-        [requested, incompatible, unknown],
-        requested="project-requested",
-        shared_path_group_by_id={
-            "project-requested": "/train/global_user/u",
-            "project-incompatible": "/train/global_user/other",
-        },
-    )
-
-    assert selected.project_id == "project-unknown"
-    assert message is not None
-    assert "unknown shared-path" in message
-
-
-def test_select_project_shared_path_group_excludes_all_raises() -> None:
-    requested = _project(
-        "project-requested",
-        "Requested",
-        member_gpu_limit=True,
-        member_remain_gpu_hours=-1.0,
-        priority_name="10",
-    )
-    incompatible = _project(
-        "project-incompatible",
-        "Incompatible",
-        member_gpu_limit=False,
-        member_remain_gpu_hours=0.0,
-        priority_name="4",
-    )
-
-    with pytest.raises(ValueError, match="shared-path mismatch"):
-        select_project(
-            [requested, incompatible],
-            requested="project-requested",
-            shared_path_group_by_id={
-                "project-requested": "/train/global_user/u",
-                "project-incompatible": "/train/global_user/other",
-            },
-        )

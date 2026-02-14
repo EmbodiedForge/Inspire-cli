@@ -40,21 +40,18 @@ class ProjectInfo:
     def has_quota(self, *, needs_gpu: bool = True) -> bool:
         """Check if the project has available quota.
 
-        The browser endpoint currently exposes GPU quota metadata. For CPU-only
-        workflows (no GPUs requested), treat quota as available.
+        The platform enforces concurrent GPU limits only, not cumulative
+        GPU-hours.  A negative ``member_remain_gpu_hours`` is informational
+        and does not block job/notebook creation.  This method therefore
+        always returns ``True`` for GPU projects (the platform itself will
+        reject the request if the concurrent limit is hit).
         """
-        if not needs_gpu:
-            return True
-        if not self.gpu_limit and not self.member_gpu_limit:
-            return True
-        return self.member_remain_gpu_hours >= 0
+        return True
 
     def get_quota_status(self, *, needs_gpu: bool = True) -> str:
         """Get formatted quota status string for display."""
         if not needs_gpu:
             return ""
-        if not self.has_quota(needs_gpu=needs_gpu):
-            return " (over quota)"
         if self.member_gpu_limit:
             return f" ({self.member_remain_gpu_hours:.0f} GPU-hours remaining)"
         return ""
@@ -152,8 +149,8 @@ def select_project(
         return sorted(
             items,
             key=lambda p: (
-                -_effective_remain_gpu_hours(p),
                 -_priority_value(p),
+                -_effective_remain_gpu_hours(p),
                 p.name.lower(),
             ),
         )[0]
@@ -163,8 +160,8 @@ def select_project(
             items,
             key=lambda p: (
                 not p.has_quota(needs_gpu=needs_gpu_quota),
-                -_effective_remain_gpu_hours(p),
                 -_priority_value(p),
+                -_effective_remain_gpu_hours(p),
                 p.name.lower(),
             ),
         )
