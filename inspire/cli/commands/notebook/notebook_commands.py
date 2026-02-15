@@ -829,23 +829,65 @@ def _print_notebook_detail(notebook: dict) -> None:
     click.echo(f"Notebook: {notebook.get('name', 'N/A')}")
     click.echo(f"{'='*60}")
 
+    project = notebook.get("project") or {}
+    quota = notebook.get("quota") or {}
+    compute_group = notebook.get("logic_compute_group") or {}
+    extra = notebook.get("extra_info") or {}
+    image = notebook.get("image") or {}
+    start_cfg = notebook.get("start_config") or {}
+    workspace = notebook.get("workspace") or {}
+    node = notebook.get("node") or {}
+
+    # GPU type: try node gpu_info first, then resource_spec fallback
+    gpu_type = ""
+    node_gpu_info = node.get("gpu_info")
+    if isinstance(node_gpu_info, dict):
+        gpu_type = node_gpu_info.get("gpu_product_simple", "")
+    if not gpu_type:
+        spec = notebook.get("resource_spec") or {}
+        gpu_type = spec.get("gpu_type", "")
+
+    gpu_count = quota.get("gpu_count", 0)
+    gpu_str = f"{gpu_count}x {gpu_type}" if gpu_type and gpu_count else str(gpu_count or "N/A")
+
+    # Image string
+    img_name = image.get("name", "")
+    img_ver = image.get("version", "")
+    img_str = f"{img_name}:{img_ver}" if img_name and img_ver else img_name or "N/A"
+
+    # Uptime from live_time (seconds)
+    live_seconds = int(notebook.get("live_time") or 0)
+    uptime = ""
+    if live_seconds > 0:
+        hours, rem = divmod(live_seconds, 3600)
+        minutes = rem // 60
+        parts = []
+        if hours:
+            parts.append(f"{hours}h")
+        if minutes:
+            parts.append(f"{minutes}m")
+        uptime = " ".join(parts) or "< 1m"
+
+    # Shared memory
+    shm = start_cfg.get("shared_memory_size", 0) or 0
+
     fields = [
-        ("ID", notebook.get("id")),
+        ("ID", notebook.get("notebook_id") or notebook.get("id")),
         ("Status", notebook.get("status")),
-        ("Project", notebook.get("project_name")),
+        ("Project", project.get("name") or notebook.get("project_name")),
+        ("Priority", project.get("priority_name")),
+        ("Compute Group", compute_group.get("name")),
+        ("Image", img_str),
+        ("GPU", gpu_str),
+        ("CPU", quota.get("cpu_count")),
+        ("Memory", f"{quota['memory_size']} GiB" if quota.get("memory_size") else None),
+        ("SHM", f"{shm} GiB" if shm else None),
+        ("Node", extra.get("NodeName") or None),
+        ("Host IP", extra.get("HostIP") or None),
+        ("Uptime", uptime or None),
+        ("Workspace", workspace.get("name")),
         ("Created", notebook.get("created_at")),
     ]
-
-    if "resource_spec" in notebook:
-        spec = notebook["resource_spec"]
-        fields.extend(
-            [
-                ("GPU Count", spec.get("gpu_count")),
-                ("GPU Type", spec.get("gpu_type")),
-                ("CPU", spec.get("cpu_count")),
-                ("Memory", spec.get("memory_size")),
-            ]
-        )
 
     for label, value in fields:
         if value:
