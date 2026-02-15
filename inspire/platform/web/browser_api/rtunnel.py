@@ -109,6 +109,23 @@ def build_rtunnel_setup_commands(
         "-o PasswordAuthentication=no -o PubkeyAuthentication=yes "
         ">/dev/null 2>&1 & fi"
     )
+    # Dropbear may die between sessions (container restart, OOM, etc.).
+    # Ensure it is running when dropbear_deb_dir is configured.
+    start_dropbear_cmd = (
+        'if [ -n "${DROPBEAR_DEB_DIR:-}" ]; then '
+        'DB_BIN="$DROPBEAR_DEB_DIR/usr/sbin/dropbear"; '
+        "export LD_LIBRARY_PATH="
+        '"$DROPBEAR_DEB_DIR/lib/x86_64-linux-gnu:'
+        "$DROPBEAR_DEB_DIR/usr/lib/x86_64-linux-gnu:"
+        '${LD_LIBRARY_PATH:-}"; '
+        'if [ -x "$DB_BIN" ] && ! ps -ef | grep -q "[d]ropbear.*-p.*$SSH_PORT"; then '
+        'DB_KEY="$DROPBEAR_DEB_DIR/usr/bin/dropbearkey"; '
+        'if [ ! -f /tmp/dropbear_ed25519_host_key ] && [ -x "$DB_KEY" ]; then '
+        '"$DB_KEY" -t ed25519 -f /tmp/dropbear_ed25519_host_key >/dev/null 2>&1; fi; '
+        '"$DB_BIN" -E -s -g -p "127.0.0.1:$SSH_PORT" '
+        "-r /tmp/dropbear_ed25519_host_key -P /tmp/dropbear.pid "
+        "2>>/tmp/dropbear.log; fi; fi"
+    )
     start_rtunnel_cmd = (
         "if [ -x /tmp/rtunnel ] && ! ps -ef | "
         'grep -Eq "[r]tunnel .*([[:space:]]|:)$PORT([[:space:]]|$)"; then '
@@ -139,6 +156,7 @@ def build_rtunnel_setup_commands(
             f"else {openssh_bootstrap_cmd}; fi"
         )
         cmd_lines.append("tail -40 /tmp/setup_ssh.log 2>/dev/null || true")
+        cmd_lines.append(start_dropbear_cmd)
         cmd_lines.append(start_sshd_cmd)
         cmd_lines.append(start_rtunnel_cmd)
     else:
@@ -361,12 +379,11 @@ def _is_rtunnel_proxy_ready(*, status: int, body: str) -> bool:
             return False
         return True
 
-    # Some deployments return a plain-text 404 from the rtunnel WebSocket server
-    # when probed with an HTTP GET. Treat that as "reachable" to avoid long
-    # waits before SSH preflight.
-    if status == 404 and text and "page not found" in text and "<html" not in text:
-        return True
-
+    # A plain-text 404 is ambiguous: it could be the platform gateway
+    # returning "route not found" for a non-existent /vscode/ path, or
+    # an rtunnel WebSocket server replying to an HTTP GET.  Treating it
+    # as ready caused false positives when the derived vscode URL didn't
+    # exist, so we no longer accept 404 as "reachable" during polling.
     return False
 
 
@@ -412,6 +429,7 @@ def wait_for_rtunnel_reachable(
     last_status = None
     last_progress_time = start
     attempt = 0
+    consecutive_404 = 0
     while time.time() - start < timeout_s:
         attempt += 1
         elapsed = time.time() - start
@@ -431,11 +449,30 @@ def wait_for_rtunnel_reachable(
                 _sys.stderr.flush()
             if _is_rtunnel_proxy_ready(status=resp.status, body=body):
                 return
+            # Track consecutive plain-text 404 responses.  Both the
+            # platform gateway and rtunnel's Go HTTP handler return this
+            # for non-WebSocket requests.  Either way the HTTP probe
+            # will never succeed, so bail out early.
+            text = (body or "").strip().lower()
+            if resp.status == 404 and "page not found" in text and "<html" not in text:
+                consecutive_404 += 1
+            else:
+                consecutive_404 = 0
         except Exception as e:
             last_status = _summarize_request_error(e)
             if attempt <= 3:
                 _sys.stderr.write(f"  Attempt {attempt}: {last_status}\n")
                 _sys.stderr.flush()
+
+        # Early-exit check is outside the try/except so the ValueError
+        # propagates to the caller instead of being swallowed.
+        if consecutive_404 >= 3 and (time.time() - start) >= 2:
+            raise ValueError(
+                f"rtunnel server returned plain-text 404 on {consecutive_404} "
+                f"consecutive attempts ({int(time.time() - start)}s elapsed).\n"
+                f"Proxy URL: {display_url}\n"
+                f"Last response: {last_status}"
+            )
 
         elapsed = time.time() - start
         if elapsed < 3:
@@ -488,11 +525,11 @@ def _is_reachable_proxy_response(*, status_code: int, body: str) -> bool:
             return False
         return True
 
-    # The rtunnel WebSocket server may return a plain-text 404 when probed
-    # with an HTTP GET. Treat that as reachable so we can skip Playwright.
-    if status_code == 404 and text and "page not found" in text and "<html" not in text:
-        return True
-
+    # A plain-text 404 is ambiguous: it could be the platform gateway
+    # returning "route not found" for a non-existent proxy path, or
+    # an rtunnel WebSocket server replying to an HTTP GET.  The false
+    # positives from gateway 404s cause broken proxy URLs to be cached
+    # and reused, so we no longer accept 404 as "reachable".
     return False
 
 
@@ -1257,9 +1294,12 @@ def _ensure_proxy_readiness_with_fallback(
         )
         _sys.stderr.flush()
         try:
+            # Short timeout: the vscode path is speculative (derived by
+            # replacing /jupyter/ → /vscode/).  If it exists, the proxy
+            # will respond quickly; don't burn the full timeout here.
             wait_for_rtunnel_reachable(
                 proxy_url=derived_vscode_url,
-                timeout_s=max(12, min(timeout, 45)),
+                timeout_s=min(6, timeout),
                 context=context,
                 page=page,
             )
@@ -1290,8 +1330,6 @@ def _ensure_proxy_readiness_with_fallback(
         fallback_proxy_url = _build_vscode_proxy_url(page, port=port)
 
     best_for_ssh = proxy_url
-    if derived_vscode_url and derived_vscode_url != proxy_url:
-        best_for_ssh = derived_vscode_url
     if fallback_proxy_url and fallback_proxy_url != proxy_url:
         best_for_ssh = fallback_proxy_url
 

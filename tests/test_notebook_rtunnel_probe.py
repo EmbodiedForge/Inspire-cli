@@ -100,7 +100,7 @@ def test_probe_uses_cached_candidate(monkeypatch: pytest.MonkeyPatch) -> None:
     http = DummyHTTP(
         {
             known_url: DummyResponse(404, "not found"),
-            cached_url: DummyResponse(404, "404 page not found"),
+            cached_url: DummyResponse(200, ""),
         }
     )
     monkeypatch.setattr(rtunnel_module, "build_requests_session", lambda _session, _base: http)

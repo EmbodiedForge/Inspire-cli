@@ -151,7 +151,10 @@ def test_ensure_proxy_readiness_without_fallback_url(
         page=DummyPage(),
     )
 
-    assert resolved == derived_url
+    # When all probes fail and no page-built fallback is found, the primary
+    # (jupyter) URL should be returned as the best guess -- not the
+    # speculative derived vscode URL.
+    assert resolved == primary_url
     assert calls == [derived_url, primary_url]
     assert len(diagnostics) == 2
     assert diagnostics[0].startswith("derived=")

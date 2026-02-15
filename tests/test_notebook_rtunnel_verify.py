@@ -18,6 +18,10 @@ from inspire.platform.web.browser_api.rtunnel import (
         (200, "ECONNREFUSED", False),
         (200, "404 page not found", False),
         (200, "<html><title>Jupyter Server</title></html>", False),
+        # Plain-text 404 must NOT be treated as ready (could be a platform
+        # gateway returning "route not found" for a non-existent proxy path).
+        (404, "404 page not found", False),
+        (404, "page not found\n", False),
     ],
 )
 def test_is_rtunnel_proxy_ready(status: int, body: str, expected: bool) -> None:
