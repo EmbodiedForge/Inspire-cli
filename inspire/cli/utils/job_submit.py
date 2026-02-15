@@ -86,6 +86,7 @@ def select_project_for_workspace(
         projects,
         requested_value,
         shared_path_group_by_id=shared_groups,
+        project_order=config.project_order or None,
     )
 
 

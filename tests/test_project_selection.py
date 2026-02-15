@@ -226,11 +226,13 @@ def test_resolve_notebook_project_passes_quota_and_shared_path_settings(monkeypa
         allow_requested_over_quota=False,
         shared_path_group_by_id=None,
         needs_gpu_quota=True,
+        project_order=None,
     ):
         called["requested"] = requested_value
         called["allow_requested_over_quota"] = allow_requested_over_quota
         called["shared_path_group_by_id"] = shared_path_group_by_id
         called["needs_gpu_quota"] = needs_gpu_quota
+        called["project_order"] = project_order
         return requested, None
 
     monkeypatch.setattr(
@@ -254,3 +256,67 @@ def test_resolve_notebook_project_passes_quota_and_shared_path_settings(monkeypa
     assert called["allow_requested_over_quota"] is True
     assert called["shared_path_group_by_id"] is None
     assert called["needs_gpu_quota"] is False
+
+
+# ---------------------------------------------------------------------------
+# project_order: user-defined selection order
+# ---------------------------------------------------------------------------
+
+
+def test_project_order_overrides_priority() -> None:
+    """User-defined project_order should override priority-based selection."""
+    high = _project("p-high", "HighPri", priority_name="10")
+    low = _project("p-low", "LowPri", priority_name="2")
+
+    # Without project_order: high priority wins
+    selected, _ = select_project([high, low])
+    assert selected.project_id == "p-high"
+
+    # With project_order: low priority wins because user listed it first
+    selected, _ = select_project([high, low], project_order=["LowPri", "HighPri"])
+    assert selected.project_id == "p-low"
+
+
+def test_project_order_by_project_id() -> None:
+    """project_order can match by project_id."""
+    a = _project("p-aaa", "Alpha", priority_name="10")
+    b = _project("p-bbb", "Beta", priority_name="4")
+
+    selected, _ = select_project([a, b], project_order=["p-bbb"])
+    assert selected.project_id == "p-bbb"
+
+
+def test_project_order_case_insensitive_name() -> None:
+    """project_order name matching should be case-insensitive."""
+    a = _project("p-a", "Alpha", priority_name="10")
+    b = _project("p-b", "Beta", priority_name="4")
+
+    selected, _ = select_project([a, b], project_order=["beta"])
+    assert selected.project_id == "p-b"
+
+
+def test_project_order_unlisted_projects_fall_through() -> None:
+    """Projects not in project_order sort after listed ones by priority."""
+    listed = _project("p-listed", "Listed", priority_name="2")
+    unlisted_high = _project("p-unlisted", "Unlisted", priority_name="10")
+
+    selected, _ = select_project([unlisted_high, listed], project_order=["Listed"])
+    assert selected.project_id == "p-listed"
+
+
+def test_project_order_empty_list_uses_default_sort() -> None:
+    """Empty project_order should behave like no project_order."""
+    high = _project("p-high", "HighPri", priority_name="10")
+    low = _project("p-low", "LowPri", priority_name="2")
+
+    selected, _ = select_project([high, low], project_order=[])
+    assert selected.project_id == "p-high"
+
+
+def test_project_order_does_not_affect_explicit_request() -> None:
+    """Explicit --project should ignore project_order."""
+    a = _project("p-a", "Alpha", priority_name="10")
+    b = _project("p-b", "Beta", priority_name="4")
+
+    selected, _ = select_project([a, b], requested="p-a", project_order=["Beta"])
+    assert selected.project_id == "p-a"

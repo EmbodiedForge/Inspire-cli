@@ -133,6 +133,9 @@ class Config:
     # Other
     shm_size: Optional[int] = None
 
+    # User-defined project selection order (list of project names or IDs)
+    project_order: list[str] = field(default_factory=list)
+
     # Compute groups (loaded from config.toml [[compute_groups]] sections)
     compute_groups: list[dict] = field(default_factory=list)
 

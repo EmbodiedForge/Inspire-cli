@@ -70,6 +70,7 @@ _DEFAULTS_FIELD_MAP = {
     "shm_size": "shm_size",
     "target_dir": "target_dir",
     "log_pattern": "log_pattern",
+    "project_order": "project_order",
 }
 
 _CONTEXT_WORKSPACE_FIELD_MAP = {
@@ -158,6 +159,10 @@ def _coerce_project_default(field_name: str, raw_value: Any) -> Any:
         "log_pattern",
     }:
         return str(raw_value)
+    if field_name == "project_order":
+        if isinstance(raw_value, list):
+            return [str(v) for v in raw_value]
+        return raw_value
     return raw_value
 
 
@@ -357,6 +362,7 @@ def config_from_files_and_env(
     global_compute_groups: list[dict] = []
     global_remote_env: dict[str, str] = {}
     global_workspaces: dict[str, str] = {}
+    global_defaults: dict[str, Any] = {}
     global_account_catalogs: dict[str, dict[str, Any]] = {}
     global_accounts: dict[str, str] = {}
     if Config.GLOBAL_CONFIG_PATH.exists():
@@ -367,6 +373,9 @@ def config_from_files_and_env(
         global_accounts, global_account_catalogs = _parse_global_accounts(
             global_raw.pop("accounts", {})
         )
+        raw_global_defaults = global_raw.pop("defaults", {})
+        if isinstance(raw_global_defaults, dict):
+            global_defaults = raw_global_defaults
 
         raw_workspaces = global_raw.get("workspaces") or {}
         if isinstance(raw_workspaces, dict):
@@ -389,6 +398,18 @@ def config_from_files_and_env(
         if global_accounts:
             config_dict["accounts"] = global_accounts
             sources["accounts"] = SOURCE_GLOBAL
+        for key, field_name in _DEFAULTS_FIELD_MAP.items():
+            if key not in global_defaults:
+                continue
+            raw_value = global_defaults.get(key)
+            if raw_value is None or raw_value == "":
+                continue
+            try:
+                coerced = _coerce_project_default(field_name, raw_value)
+            except (ValueError, TypeError):
+                continue
+            config_dict[field_name] = coerced
+            sources[field_name] = SOURCE_GLOBAL
 
     project_config_path = _find_project_config()
     project_compute_groups: list[dict] = []

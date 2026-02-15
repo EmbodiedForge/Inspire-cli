@@ -124,6 +124,7 @@ def select_project(
     allow_requested_over_quota: bool = False,
     shared_path_group_by_id: dict[str, str] | None = None,
     needs_gpu_quota: bool = True,
+    project_order: list[str] | None = None,
 ) -> tuple[ProjectInfo, Optional[str]]:
     """Select a project, with auto-fallback if over quota."""
 
@@ -140,6 +141,19 @@ def select_project(
             return float("inf")
         return float(project.member_remain_gpu_hours or 0.0)
 
+    def _order_rank(project: ProjectInfo) -> int:
+        """Return position in user-defined project_order (lower is better).
+
+        Projects not in the list get a large rank so they sort after listed ones.
+        Matching is case-insensitive on name, and exact on project_id.
+        """
+        if not project_order:
+            return 0  # no preference — all equal
+        for i, entry in enumerate(project_order):
+            if project.name.lower() == entry.lower() or project.project_id == entry:
+                return i
+        return len(project_order)  # unlisted → after all listed
+
     def _quota_candidates(items: list[ProjectInfo]) -> list[ProjectInfo]:
         return [p for p in items if p.has_quota(needs_gpu=needs_gpu_quota)]
 
@@ -149,6 +163,7 @@ def select_project(
         return sorted(
             items,
             key=lambda p: (
+                _order_rank(p),
                 -_priority_value(p),
                 -_effective_remain_gpu_hours(p),
                 p.name.lower(),
@@ -160,6 +175,7 @@ def select_project(
             items,
             key=lambda p: (
                 not p.has_quota(needs_gpu=needs_gpu_quota),
+                _order_rank(p),
                 -_priority_value(p),
                 -_effective_remain_gpu_hours(p),
                 p.name.lower(),

@@ -396,6 +396,7 @@ def resolve_notebook_project(
             allow_requested_over_quota=allow_requested_over_quota,
             shared_path_group_by_id=shared_groups,
             needs_gpu_quota=needs_gpu_quota,
+            project_order=config.project_order or None,
         )
 
         if not json_output:
