@@ -23,6 +23,7 @@ from .jobs import (
 )
 from .notebooks import (
     ImageInfo,
+    NotebookFailedError,
     create_notebook,
     get_notebook_detail,
     get_notebook_schedule,
@@ -80,6 +81,7 @@ __all__ = [
     "wait_for_image_ready",
     # Notebooks
     "ImageInfo",
+    "NotebookFailedError",
     "create_notebook",
     "get_notebook_detail",
     "get_notebook_schedule",

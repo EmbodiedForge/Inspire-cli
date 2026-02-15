@@ -21,6 +21,8 @@ from inspire.config import (
 from .env_detect import _redact_token_like_text
 from .toml_helpers import _toml_dumps
 
+from inspire.platform.web.browser_api.notebooks import NotebookFailedError
+
 
 def _slugify_alias(value: str) -> str:
     text = (value or "").strip().lower()
@@ -478,6 +480,11 @@ def _probe_project_shared_path_group(
             global_user_dir = str(probe_data.get("global_user_dir") or "").strip()
             if global_user_dir:
                 result["shared_path_group"] = global_user_dir
+        return result
+    except NotebookFailedError as e:
+        result["probe_error"] = f"Notebook failed: {e.status}"
+        if e.events:
+            result["probe_error"] += f" - {e.events}"
         return result
     except Exception as e:  # pragma: no cover - network/runtime dependent
         result["probe_error"] = _redact_token_like_text(str(e))

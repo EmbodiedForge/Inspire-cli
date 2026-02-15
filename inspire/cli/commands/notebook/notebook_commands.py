@@ -12,7 +12,7 @@ from urllib import request as urllib_request
 
 import click
 
-from .notebook_create_flow import run_notebook_create
+from .notebook_create_flow import maybe_start_keepalive, run_notebook_create
 from inspire.cli.context import (
     Context,
     EXIT_API_ERROR,
@@ -33,6 +33,7 @@ from inspire.config.ssh_runtime import resolve_ssh_runtime_config
 from inspire.config.workspaces import select_workspace_id
 from inspire.platform.web import browser_api as browser_api_module
 from inspire.platform.web import session as web_session_module
+from inspire.platform.web.browser_api import NotebookFailedError
 from inspire.platform.web.browser_api.rtunnel import redact_proxy_url
 
 _ZERO_WORKSPACE_ID = "ws-00000000-0000-0000-0000-000000000000"
@@ -625,6 +626,11 @@ def stop_notebook_cmd(
     help="Wait for notebook to reach RUNNING status",
 )
 @click.option(
+    "--keepalive/--no-keepalive",
+    default=True,
+    help="Run a GPU keepalive script after notebook reaches RUNNING (default: enabled)",
+)
+@click.option(
     "--json",
     "json_output",
     is_flag=True,
@@ -635,6 +641,7 @@ def start_notebook_cmd(
     ctx: Context,
     notebook: str,
     wait: bool,
+    keepalive: bool,
     json_output: bool,
 ) -> None:
     """Start a stopped notebook instance.
@@ -644,6 +651,7 @@ def start_notebook_cmd(
         inspire notebook start 78822a57-3830-44e7-8d45-e8b0d674fc44
         inspire notebook start ring-8h100-test
         inspire notebook start ring-8h100-test --wait
+        inspire notebook start ring-8h100-test --no-keepalive
     """
     json_output = resolve_json_output(ctx, json_output)
 
@@ -676,13 +684,25 @@ def start_notebook_cmd(
     if not json_output:
         click.echo(f"Notebook '{notebook_id}' is being started.")
 
-    if wait:
+    notebook_detail = None
+    if wait or keepalive:
         if not json_output:
             click.echo("Waiting for notebook to reach RUNNING status...")
         try:
-            browser_api_module.wait_for_notebook_running(notebook_id=notebook_id, session=session)
+            notebook_detail = browser_api_module.wait_for_notebook_running(
+                notebook_id=notebook_id, session=session
+            )
             if not json_output:
                 click.echo("Notebook is now RUNNING.")
+        except NotebookFailedError as e:
+            _handle_error(
+                ctx,
+                "NotebookFailed",
+                f"Notebook failed to start: {e}",
+                EXIT_API_ERROR,
+                hint=e.events or "Check Events tab in web UI for details.",
+            )
+            return
         except TimeoutError as e:
             _handle_error(
                 ctx,
@@ -691,6 +711,18 @@ def start_notebook_cmd(
                 EXIT_API_ERROR,
             )
             return
+
+    if notebook_detail and keepalive:
+        quota = notebook_detail.get("quota") or {}
+        gpu_count = quota.get("gpu_count", 0) or 0
+        maybe_start_keepalive(
+            ctx,
+            notebook_id=notebook_id,
+            session=session,
+            keepalive=True,
+            gpu_count=gpu_count,
+            json_output=json_output,
+        )
 
     if json_output:
         click.echo(
@@ -1135,6 +1167,15 @@ def run_notebook_ssh(
             notebook_detail = browser_api_module.get_notebook_detail(
                 notebook_id=notebook_id, session=session
             )
+    except NotebookFailedError as e:
+        _handle_error(
+            ctx,
+            "NotebookFailed",
+            f"Notebook failed to start: {e}",
+            EXIT_API_ERROR,
+            hint=e.events or "Check Events tab in web UI for details.",
+        )
+        return
     except TimeoutError as e:
         _handle_error(
             ctx,

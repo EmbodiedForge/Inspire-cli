@@ -16,6 +16,7 @@ from inspire.cli.utils.notebook_cli import load_config, require_web_session, res
 from inspire.config import Config, ConfigError
 from inspire.config.workspaces import select_workspace_id
 from inspire.platform.web import browser_api as browser_api_module
+from inspire.platform.web.browser_api import NotebookFailedError
 from inspire.platform.web.session import WebSession
 
 
@@ -678,6 +679,21 @@ def maybe_wait_for_running(
         if not json_output:
             click.echo("Notebook is now RUNNING.")
         return True
+    except NotebookFailedError as e:
+        msg = f"Notebook failed to start: {e}"
+        hint_parts = []
+        if e.events:
+            hint_parts.append(e.events)
+        extra = e.detail.get("extra_info") or {}
+        for key in ("NodeName", "HostIP"):
+            if extra.get(key):
+                hint_parts.append(f"{key}: {extra[key]}")
+        if not hint_parts:
+            hint_parts.append(
+                "Check Events tab in web UI: Jobs > Interactive Modeling > notebook detail"
+            )
+        _handle_error(ctx, "NotebookFailed", msg, EXIT_API_ERROR, hint="\n".join(hint_parts))
+        return False
     except TimeoutError as e:
         _handle_error(
             ctx,

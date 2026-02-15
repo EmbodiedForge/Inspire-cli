@@ -1292,6 +1292,15 @@ def test_notebook_start_accepts_name(monkeypatch: pytest.MonkeyPatch, tmp_path: 
 
     monkeypatch.setattr(browser_api_module, "start_notebook", fake_start_notebook)
 
+    def fake_wait_for_notebook_running(
+        notebook_id: str, session=None, timeout: int = 600, poll_interval: int = 5
+    ) -> dict:
+        return {"status": "RUNNING", "notebook_id": notebook_id, "quota": {"gpu_count": 8}}
+
+    monkeypatch.setattr(
+        browser_api_module, "wait_for_notebook_running", fake_wait_for_notebook_running
+    )
+
     runner = CliRunner()
     result = runner.invoke(cli_main, ["notebook", "start", "ring-8h100-test"])
 
@@ -1388,6 +1397,15 @@ def test_notebook_start_name_conflict_prompts_selection(
         return {"ok": True}
 
     monkeypatch.setattr(browser_api_module, "start_notebook", fake_start_notebook)
+
+    def fake_wait_for_notebook_running(
+        notebook_id: str, session=None, timeout: int = 600, poll_interval: int = 5
+    ) -> dict:
+        return {"status": "RUNNING", "notebook_id": notebook_id, "quota": {"gpu_count": 8}}
+
+    monkeypatch.setattr(
+        browser_api_module, "wait_for_notebook_running", fake_wait_for_notebook_running
+    )
 
     runner = CliRunner()
     result = runner.invoke(cli_main, ["notebook", "start", "ring-8h100-test"], input="2\n")

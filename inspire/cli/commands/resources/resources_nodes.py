@@ -8,7 +8,6 @@ from inspire.cli.context import Context, EXIT_API_ERROR, EXIT_AUTH_ERROR, pass_c
 from inspire.cli.formatters import json_formatter
 from inspire.platform.web import browser_api as browser_api_module
 from inspire.cli.utils.errors import exit_with_error as _handle_error
-from inspire.platform.web.resources import KNOWN_COMPUTE_GROUPS
 from inspire.platform.web.session import SessionExpiredError
 
 
@@ -28,18 +27,19 @@ def list_nodes(ctx: Context, group: str) -> None:
         inspire resources nodes --group H200
     """
     try:
-        group_ids = list(KNOWN_COMPUTE_GROUPS.keys())
-        counts = browser_api_module.get_full_free_node_counts(group_ids, gpu_per_node=8)
-
-        # Get accurate GPU availability for matching free GPU counts
+        # Fetch compute groups dynamically from the API
         accurate_availability = browser_api_module.get_accurate_gpu_availability()
         accurate_map = {a.group_id: a.available_gpus for a in accurate_availability}
+        name_map = {a.group_id: a.group_name for a in accurate_availability}
 
-        # Fill missing names from KNOWN_COMPUTE_GROUPS and apply filter
+        group_ids = [a.group_id for a in accurate_availability]
+        counts = browser_api_module.get_full_free_node_counts(group_ids, gpu_per_node=8)
+
+        # Fill missing names and apply filter
         filtered: list[dict] = []
         group_lower = (group or "").lower()
         for c in counts:
-            name = c.group_name or KNOWN_COMPUTE_GROUPS.get(c.group_id, c.group_id[-12:])
+            name = c.group_name or name_map.get(c.group_id, c.group_id[-12:])
             if group_lower and group_lower not in name.lower():
                 continue
             # Use accurate available GPUs if available, otherwise fall back to computed

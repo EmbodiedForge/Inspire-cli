@@ -16,6 +16,24 @@ from inspire.platform.web.session import DEFAULT_WORKSPACE_ID, WebSession, get_w
 # ---------------------------------------------------------------------------
 
 
+class NotebookFailedError(Exception):
+    """Raised when a notebook reaches a terminal failure state."""
+
+    def __init__(self, notebook_id: str, status: str, detail: dict, events: str = ""):
+        self.notebook_id = notebook_id
+        self.status = status
+        self.detail = detail
+        self.events = events
+        parts = [f"Notebook '{notebook_id}' reached terminal status: {status}"]
+        sub = detail.get("sub_status")
+        if sub:
+            parts.append(f"Sub-status: {sub}")
+        super().__init__(". ".join(parts))
+
+
+_NOTEBOOK_TERMINAL_STATUSES = frozenset({"FAILED", "ERROR", "STOPPED", "DELETED"})
+
+
 @dataclass
 class ImageInfo:
     """Docker image information."""
@@ -458,6 +476,35 @@ def get_notebook_detail(
 # ---------------------------------------------------------------------------
 
 
+def _try_fetch_events(notebook_id: str, session: WebSession) -> str:
+    """Best-effort fetch of notebook events (K8s scheduling/allocation details)."""
+    for path in [
+        f"/notebook/{notebook_id}/events",
+        f"/notebook/event/{notebook_id}",
+    ]:
+        try:
+            data = _request_notebooks_data(session, "GET", path, timeout=5, default_data=[])
+            if not data:
+                continue
+            items = data if isinstance(data, list) else data.get("events", data.get("list", []))
+            if not isinstance(items, list) or not items:
+                continue
+            lines = []
+            for ev in items[-10:]:
+                if not isinstance(ev, dict):
+                    continue
+                reason = ev.get("reason") or ""
+                message = ev.get("message") or ""
+                ev_type = ev.get("type") or ""
+                prefix = f"[{ev_type}] " if ev_type else ""
+                label = f"{reason}: " if reason else ""
+                lines.append(f"{prefix}{label}{message}")
+            return "\n".join(lines) if lines else ""
+        except Exception:
+            continue
+    return ""
+
+
 def wait_for_notebook_running(
     notebook_id: str,
     session: Optional[WebSession] = None,
@@ -480,6 +527,10 @@ def wait_for_notebook_running(
         if status == "RUNNING":
             return notebook
 
+        if status in _NOTEBOOK_TERMINAL_STATUSES:
+            events = _try_fetch_events(notebook_id, session)
+            raise NotebookFailedError(notebook_id, status, notebook, events=events)
+
         if time.time() - start >= timeout:
             raise TimeoutError(
                 f"Notebook '{notebook_id}' did not reach RUNNING within {timeout}s "
@@ -491,6 +542,7 @@ def wait_for_notebook_running(
 
 __all__ = [
     "ImageInfo",
+    "NotebookFailedError",
     "create_notebook",
     "get_notebook_detail",
     "get_notebook_schedule",
