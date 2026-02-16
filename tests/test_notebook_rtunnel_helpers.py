@@ -190,6 +190,8 @@ def test_send_terminal_command_via_websocket_success() -> None:
     assert captured["payload"]["wsUrl"] == "wss://example.test/terminals/websocket/1"
     assert captured["payload"]["stdinData"] == "echo hi\r"
     assert captured["payload"]["timeoutMs"] == 1234
+    # promptTimeoutMs = min(1234 - 500, 3000) = 734
+    assert captured["payload"]["promptTimeoutMs"] == 734
 
 
 def test_send_terminal_command_via_websocket_exception() -> None:

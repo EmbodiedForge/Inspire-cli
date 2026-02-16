@@ -111,16 +111,29 @@ def build_rtunnel_setup_commands(
     )
     # Dropbear may die between sessions (container restart, OOM, etc.).
     # Ensure it is running when dropbear_deb_dir is configured.
+    # Supports two layouts:
+    #  1. Extracted deb tree: $DROPBEAR_DEB_DIR/usr/sbin/dropbear exists
+    #  2. Raw .deb packages: $DROPBEAR_DEB_DIR/*.deb  (installed via dpkg -i)
     start_dropbear_cmd = (
         'if [ -n "${DROPBEAR_DEB_DIR:-}" ]; then '
         'DB_BIN="$DROPBEAR_DEB_DIR/usr/sbin/dropbear"; '
+        # If extracted tree exists, set LD_LIBRARY_PATH for it
+        'if [ -x "$DB_BIN" ]; then '
         "export LD_LIBRARY_PATH="
         '"$DROPBEAR_DEB_DIR/lib/x86_64-linux-gnu:'
         "$DROPBEAR_DEB_DIR/usr/lib/x86_64-linux-gnu:"
         '${LD_LIBRARY_PATH:-}"; '
+        # If not extracted but .deb files exist, install via dpkg
+        'elif ls "$DROPBEAR_DEB_DIR"/*.deb >/dev/null 2>&1; then '
+        'dpkg -i "$DROPBEAR_DEB_DIR"/*.deb >/dev/null 2>&1 || true; '
+        "DB_BIN=/usr/sbin/dropbear; fi; "
+        # Also check system-installed dropbear as fallback
+        'if [ ! -x "$DB_BIN" ] && [ -x /usr/sbin/dropbear ]; then '
+        "DB_BIN=/usr/sbin/dropbear; fi; "
         'if [ -x "$DB_BIN" ] && ! ps -ef | grep -q "[d]ropbear.*-p.*$SSH_PORT"; then '
         'DB_KEY="$DROPBEAR_DEB_DIR/usr/bin/dropbearkey"; '
-        'if [ ! -f /tmp/dropbear_ed25519_host_key ] && [ -x "$DB_KEY" ]; then '
+        '[ -x "$DB_KEY" ] || DB_KEY=$(which dropbearkey 2>/dev/null || true); '
+        'if [ ! -f /tmp/dropbear_ed25519_host_key ] && [ -n "$DB_KEY" ] && [ -x "$DB_KEY" ]; then '
         '"$DB_KEY" -t ed25519 -f /tmp/dropbear_ed25519_host_key >/dev/null 2>&1; fi; '
         '"$DB_BIN" -E -s -g -p "127.0.0.1:$SSH_PORT" '
         "-r /tmp/dropbear_ed25519_host_key -P /tmp/dropbear.pid "
@@ -135,27 +148,27 @@ def build_rtunnel_setup_commands(
 
     if dropbear_deb_dir:
         setup_script = ssh_runtime.setup_script
-        if not setup_script:
-            raise ValueError(
-                "ssh.setup_script (or INSPIRE_SETUP_SCRIPT) is required when using "
-                "ssh.dropbear_deb_dir."
+        if setup_script:
+            cmd_lines.append(f"SETUP_SCRIPT={shlex.quote(setup_script)}")
+            cmd_lines.append(f"RTUNNEL_URL={rtunnel_download_url!r}")
+            cmd_lines.append(
+                '[ -f "$SETUP_SCRIPT" ] || echo "WARN: setup script not found: $SETUP_SCRIPT '
+                '(falling back to openssh bootstrap)"'
             )
-        cmd_lines.append(f"SETUP_SCRIPT={shlex.quote(setup_script)}")
-        cmd_lines.append(f"RTUNNEL_URL={rtunnel_download_url!r}")
-        cmd_lines.append(
-            '[ -f "$SETUP_SCRIPT" ] || echo "WARN: setup script not found: $SETUP_SCRIPT '
-            '(falling back to openssh bootstrap)"'
-        )
-        cmd_lines.append(
-            'if [ -f "$SETUP_SCRIPT" ]; then '
-            'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x /tmp/rtunnel ]; then '
-            'bash "$SETUP_SCRIPT" "$DROPBEAR_DEB_DIR" "$RTUNNEL_BIN_PATH" '
-            '"$SSH_PORT" "$PORT" >/tmp/setup_ssh.log 2>&1; '
-            'if [ $? -eq 0 ] && [ -x /tmp/rtunnel ]; then touch "$BOOTSTRAP_SENTINEL"; '
-            'else rm -f "$BOOTSTRAP_SENTINEL"; fi; fi; '
-            f"else {openssh_bootstrap_cmd}; fi"
-        )
-        cmd_lines.append("tail -40 /tmp/setup_ssh.log 2>/dev/null || true")
+            cmd_lines.append(
+                'if [ -f "$SETUP_SCRIPT" ]; then '
+                'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x /tmp/rtunnel ]; then '
+                'bash "$SETUP_SCRIPT" "$DROPBEAR_DEB_DIR" "$RTUNNEL_BIN_PATH" '
+                '"$SSH_PORT" "$PORT" >/tmp/setup_ssh.log 2>&1; '
+                'if [ $? -eq 0 ] && [ -x /tmp/rtunnel ]; then touch "$BOOTSTRAP_SENTINEL"; '
+                'else rm -f "$BOOTSTRAP_SENTINEL"; fi; fi; '
+                f"else {openssh_bootstrap_cmd}; fi"
+            )
+            cmd_lines.append("tail -40 /tmp/setup_ssh.log 2>/dev/null || true")
+        else:
+            # No external setup_script: use internal dpkg-based bootstrap.
+            # The start_dropbear_cmd handles dpkg -i when .deb files are found.
+            cmd_lines.append(f"RTUNNEL_URL={rtunnel_download_url!r}")
         cmd_lines.append(start_dropbear_cmd)
         cmd_lines.append(start_sshd_cmd)
         cmd_lines.append(start_rtunnel_cmd)
@@ -776,9 +789,10 @@ def _send_terminal_command_via_websocket(
         return bool(
             page.evaluate(
                 """
-                async ({ wsUrl, stdinData, timeoutMs }) => {
+                async ({ wsUrl, stdinData, timeoutMs, promptTimeoutMs }) => {
                   return await new Promise((resolve) => {
                     let settled = false;
+                    let sent = false;
                     let socket = null;
                     const finish = (ok) => {
                       if (settled) return;
@@ -791,15 +805,9 @@ def _send_terminal_command_via_websocket(
 
                     const timer = setTimeout(() => finish(false), timeoutMs);
 
-                    try {
-                      socket = new WebSocket(wsUrl);
-                    } catch (_) {
-                      clearTimeout(timer);
-                      finish(false);
-                      return;
-                    }
-
-                    socket.addEventListener("open", () => {
+                    const doSend = () => {
+                      if (sent || settled) return;
+                      sent = true;
                       try {
                         socket.send(JSON.stringify(["stdin", stdinData]));
                       } catch (_) {
@@ -811,6 +819,30 @@ def _send_terminal_command_via_websocket(
                         clearTimeout(timer);
                         finish(true);
                       }, 180);
+                    };
+
+                    try {
+                      socket = new WebSocket(wsUrl);
+                    } catch (_) {
+                      clearTimeout(timer);
+                      finish(false);
+                      return;
+                    }
+
+                    socket.addEventListener("message", (ev) => {
+                      try {
+                        const msg = JSON.parse(ev.data);
+                        if (Array.isArray(msg) && msg[0] === "stdout") {
+                          doSend();
+                        }
+                      } catch (_) {}
+                    });
+
+                    socket.addEventListener("open", () => {
+                      // Wait for a stdout message (shell prompt) before
+                      // sending.  Fall back after promptTimeoutMs in case
+                      // the shell never emits a visible prompt.
+                      setTimeout(() => doSend(), promptTimeoutMs);
                     });
 
                     socket.addEventListener("error", () => {
@@ -831,6 +863,7 @@ def _send_terminal_command_via_websocket(
                     "wsUrl": ws_url,
                     "stdinData": stdin_payload,
                     "timeoutMs": int(timeout_ms),
+                    "promptTimeoutMs": min(int(timeout_ms) - 500, 3000),
                 },
             )
         )

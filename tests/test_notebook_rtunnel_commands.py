@@ -35,19 +35,28 @@ def test_build_commands_uses_explicit_runtime_config(monkeypatch: pytest.MonkeyP
     assert "/env/sshd" not in joined
 
 
-def test_dropbear_requires_setup_script() -> None:
+def test_dropbear_without_setup_script_uses_dpkg() -> None:
+    """When dropbear_deb_dir is set but setup_script is not, the internal
+    dpkg-based installation should be used instead of raising ValueError."""
     runtime = SshRuntimeConfig(
         dropbear_deb_dir="/project/dropbear",
         setup_script=None,
     )
 
-    with pytest.raises(ValueError, match="setup_script"):
-        build_rtunnel_setup_commands(
-            port=31337,
-            ssh_port=22222,
-            ssh_public_key=None,
-            ssh_runtime=runtime,
-        )
+    commands = build_rtunnel_setup_commands(
+        port=31337,
+        ssh_port=22222,
+        ssh_public_key=None,
+        ssh_runtime=runtime,
+    )
+    joined = "\n".join(commands)
+
+    # Should contain the DROPBEAR_DEB_DIR variable
+    assert "DROPBEAR_DEB_DIR=" in joined
+    # Should contain dpkg -i fallback for raw .deb packages
+    assert "dpkg -i" in joined
+    # Should NOT contain SETUP_SCRIPT (no external script)
+    assert "SETUP_SCRIPT=" not in joined
 
 
 def test_dropbear_command_contains_setup_script_and_args() -> None:
