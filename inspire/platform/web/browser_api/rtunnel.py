@@ -783,13 +783,24 @@ def _send_terminal_command_via_websocket(
     ws_url: str,
     command: str,
     timeout_ms: int = 5000,
+    completion_marker: str | None = None,
 ) -> bool:
+    """Send a command to a Jupyter terminal via WebSocket.
+
+    Waits for a shell prompt (``["stdout", ...]`` message) before sending
+    stdin so that the command is not lost if bash hasn't initialized yet.
+
+    When *completion_marker* is set, the function keeps the WebSocket open
+    after sending and waits until the marker string appears in a subsequent
+    stdout message.  This allows callers to block until a setup script
+    finishes (e.g. ``INSPIRE_RTUNNEL_SETUP_DONE``).
+    """
     stdin_payload = command.rstrip("\r\n") + "\r"
     try:
         return bool(
             page.evaluate(
                 """
-                async ({ wsUrl, stdinData, timeoutMs, promptTimeoutMs }) => {
+                async ({ wsUrl, stdinData, timeoutMs, promptTimeoutMs, marker }) => {
                   return await new Promise((resolve) => {
                     let settled = false;
                     let sent = false;
@@ -815,10 +826,14 @@ def _send_terminal_command_via_websocket(
                         finish(false);
                         return;
                       }
-                      setTimeout(() => {
-                        clearTimeout(timer);
-                        finish(true);
-                      }, 180);
+                      if (!marker) {
+                        setTimeout(() => {
+                          clearTimeout(timer);
+                          finish(true);
+                        }, 180);
+                      }
+                      // When marker is set, we keep listening for it
+                      // in the message handler below.
                     };
 
                     try {
@@ -833,7 +848,12 @@ def _send_terminal_command_via_websocket(
                       try {
                         const msg = JSON.parse(ev.data);
                         if (Array.isArray(msg) && msg[0] === "stdout") {
-                          doSend();
+                          if (!sent) {
+                            doSend();
+                          } else if (marker && String(msg[1]).includes(marker)) {
+                            clearTimeout(timer);
+                            finish(true);
+                          }
                         }
                       } catch (_) {}
                     });
@@ -864,6 +884,7 @@ def _send_terminal_command_via_websocket(
                     "stdinData": stdin_payload,
                     "timeoutMs": int(timeout_ms),
                     "promptTimeoutMs": min(int(timeout_ms) - 500, 3000),
+                    "marker": completion_marker or "",
                 },
             )
         )
@@ -887,6 +908,12 @@ def _send_setup_command_via_terminal_ws(
         page,
         ws_url=ws_url,
         command=batch_cmd,
+        # The setup script ends with `echo INSPIRE_RTUNNEL_SETUP_DONE`.
+        # Wait for this marker so the caller knows the script finished
+        # (dpkg -i can take 5-10s on GPU notebooks).  Use a generous
+        # timeout; the overall setup_timeout guards against hangs.
+        timeout_ms=30000,
+        completion_marker="INSPIRE_RTUNNEL_SETUP_DONE",
     )
 
 
@@ -1503,11 +1530,16 @@ def _setup_notebook_rtunnel_sync(
                 page.keyboard.press("Enter")
                 timer.mark("build_and_send_cmd")
 
-            # xterm.js renders to <canvas>, so Playwright text locators are
-            # blind to terminal output.  A short fixed delay lets the setup
-            # script finish; actual readiness is verified by
-            # _ensure_proxy_readiness_with_fallback() below.
-            page.wait_for_timeout(3000)
+            # When the setup script was sent via WebSocket with a completion
+            # marker, the function already blocked until the script finished
+            # (or timed out).  Only use the fixed 3s delay for the DOM
+            # keyboard fallback where we can't observe terminal output.
+            if not setup_sent_via_ws:
+                # xterm.js renders to <canvas>, so Playwright text locators
+                # are blind to terminal output.  A short fixed delay lets
+                # the setup script finish; actual readiness is verified by
+                # _ensure_proxy_readiness_with_fallback() below.
+                page.wait_for_timeout(3000)
             timer.mark("wait_marker")
 
             try:
