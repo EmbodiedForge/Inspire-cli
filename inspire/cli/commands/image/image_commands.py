@@ -16,6 +16,12 @@ from inspire.cli.context import (
 )
 from inspire.cli.formatters import human_formatter, json_formatter
 from inspire.cli.utils.errors import exit_with_error as _handle_error
+from inspire.cli.utils.id_resolver import (
+    is_full_uuid,
+    is_partial_id,
+    normalize_partial,
+    resolve_partial_id,
+)
 from inspire.cli.utils.notebook_cli import (
     require_web_session,
     resolve_json_output,
@@ -43,6 +49,51 @@ def _image_to_dict(img: browser_api_module.CustomImageInfo) -> dict:
         "description": img.description,
         "created_at": img.created_at,
     }
+
+
+def _resolve_image_id(
+    ctx: Context,
+    image_id: str,
+    json_output: bool,
+    session,
+) -> str:
+    """Resolve a full or partial image ID.
+
+    Full UUIDs pass through; partial hex triggers a list + prefix match.
+    """
+    image_id = image_id.strip()
+
+    if is_full_uuid(image_id):
+        return image_id
+
+    if not is_partial_id(image_id):
+        return image_id  # not hex — let the API handle the error
+
+    partial = normalize_partial(image_id)
+
+    try:
+        all_images: list[browser_api_module.CustomImageInfo] = []
+        for src_key in ("official", "public", "private"):
+            items = browser_api_module.list_images_by_source(source=src_key, session=session)
+            all_images.extend(items)
+    except Exception:
+        return image_id  # can't list — pass through and let the API error
+
+    matches: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for img in all_images:
+        iid = img.image_id
+        if iid in seen:
+            continue
+        seen.add(iid)
+        if iid.lower().startswith(partial):
+            label = img.name or img.status or ""
+            matches.append((iid, label))
+
+    if not matches:
+        return image_id  # no match — pass through for API error
+
+    return resolve_partial_id(ctx, partial, "image", matches, json_output)
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +199,8 @@ def image_detail(
             "INSPIRE_USERNAME/INSPIRE_PASSWORD."
         ),
     )
+
+    image_id = _resolve_image_id(ctx, image_id, json_output, session)
 
     try:
         image = browser_api_module.get_image_detail(image_id=image_id, session=session)
@@ -436,11 +489,6 @@ def delete_image_cmd(
     """
     json_output = resolve_json_output(ctx, json_output)
 
-    if not force and not json_output:
-        if not click.confirm(f"Delete image '{image_id}'?"):
-            click.echo("Cancelled.")
-            return
-
     session = require_web_session(
         ctx,
         hint=(
@@ -449,6 +497,13 @@ def delete_image_cmd(
             "INSPIRE_USERNAME/INSPIRE_PASSWORD."
         ),
     )
+
+    image_id = _resolve_image_id(ctx, image_id, json_output, session)
+
+    if not force and not json_output:
+        if not click.confirm(f"Delete image '{image_id}'?"):
+            click.echo("Cancelled.")
+            return
 
     try:
         result = browser_api_module.delete_image(image_id=image_id, session=session)

@@ -25,7 +25,7 @@ from inspire.cli.context import (
 from inspire.cli.formatters import human_formatter, json_formatter
 from inspire.cli.utils.auth import AuthManager, AuthenticationError
 from inspire.cli.utils.errors import exit_with_error as _handle_error
-from inspire.cli.utils.job_cli import ensure_valid_job_id
+from inspire.cli.utils.job_cli import resolve_job_id
 from inspire.config import Config, ConfigError
 
 
@@ -256,8 +256,7 @@ def status(ctx: Context, job_id: str) -> None:
     Example:
         inspire job status job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf
     """
-    if not ensure_valid_job_id(ctx, job_id):
-        return
+    job_id = resolve_job_id(ctx, job_id)
 
     try:
         config = Config.from_env()
@@ -297,8 +296,7 @@ def stop(ctx: Context, job_id: str) -> None:
     Example:
         inspire job stop job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf
     """
-    if not ensure_valid_job_id(ctx, job_id):
-        return
+    job_id = resolve_job_id(ctx, job_id)
 
     try:
         config = Config.from_env()
@@ -341,8 +339,7 @@ def wait(ctx: Context, job_id: str, timeout: int, interval: int) -> None:
     Example:
         inspire job wait job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf --timeout 7200
     """
-    if not ensure_valid_job_id(ctx, job_id):
-        return
+    job_id = resolve_job_id(ctx, job_id)
 
     try:
         config = Config.from_env()
@@ -537,8 +534,7 @@ def update_jobs(ctx: Context, status: tuple, limit: int, delay: float) -> None:
 @pass_context
 def show_command(ctx: Context, job_id: str) -> None:
     """Show the training command used for a job."""
-    if not ensure_valid_job_id(ctx, job_id):
-        return
+    job_id = resolve_job_id(ctx, job_id)
 
     cached_command = None
     cache = job_deps.JobCache(os.getenv("INSPIRE_JOB_CACHE"))

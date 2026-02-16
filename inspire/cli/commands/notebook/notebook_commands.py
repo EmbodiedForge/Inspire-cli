@@ -29,6 +29,7 @@ from inspire.cli.utils.notebook_cli import (
     resolve_json_output,
 )
 from inspire.config import ConfigError
+from inspire.cli.utils.id_resolver import is_partial_id, normalize_partial, resolve_partial_id
 from inspire.config.ssh_runtime import resolve_ssh_runtime_config
 from inspire.config.workspaces import select_workspace_id
 from inspire.platform.web import browser_api as browser_api_module
@@ -308,6 +309,68 @@ def _resolve_notebook_id(
 
     if _looks_like_notebook_id(identifier):
         return identifier, None
+
+    # Partial hex UUID (4+ hex chars that aren't a full UUID)
+    if is_partial_id(identifier, prefix="notebook-"):
+        partial = normalize_partial(identifier, prefix="notebook-")
+        # Gather workspace IDs for listing
+        candidates: list[str] = []
+        for ws_id in (
+            getattr(config, "workspace_cpu_id", None),
+            getattr(config, "workspace_gpu_id", None),
+            getattr(config, "workspace_internet_id", None),
+            getattr(config, "job_workspace_id", None),
+        ):
+            if ws_id:
+                candidates.append(str(ws_id))
+        workspaces_map = getattr(config, "workspaces", None)
+        if isinstance(workspaces_map, dict):
+            candidates.extend(str(v) for v in workspaces_map.values() if v)
+        if getattr(session, "workspace_id", None):
+            candidates.append(str(session.workspace_id))
+
+        workspace_ids = _unique_workspace_ids(candidates)
+        if not workspace_ids:
+            resolved_ws = None
+            try:
+                resolved_ws = select_workspace_id(config)
+            except Exception:
+                pass
+            resolved_ws = resolved_ws or getattr(session, "workspace_id", None)
+            if resolved_ws and resolved_ws != _ZERO_WORKSPACE_ID:
+                workspace_ids = [str(resolved_ws)]
+
+        if workspace_ids:
+            user_ids = _try_get_current_user_ids(session, base_url=base_url)
+            nb_matches: list[tuple[str, str]] = []
+            seen_ids: set[str] = set()
+            for ws_id in workspace_ids:
+                try:
+                    items = _list_notebooks_for_workspace(
+                        session,
+                        base_url=base_url,
+                        workspace_id=ws_id,
+                        user_ids=user_ids,
+                    )
+                except Exception:
+                    continue
+                for item in items:
+                    nid = _notebook_id_from_item(item)
+                    if not nid or nid in seen_ids:
+                        continue
+                    seen_ids.add(nid)
+                    uuid_part = nid
+                    if nid.lower().startswith("notebook-"):
+                        uuid_part = nid[9:]
+                    if uuid_part.lower().startswith(partial):
+                        label = item.get("name") or item.get("status") or ""
+                        nb_matches.append((nid, label))
+
+            if nb_matches:
+                resolved_id = resolve_partial_id(ctx, partial, "notebook", nb_matches, json_output)
+                return resolved_id, None
+
+        # No matches found — fall through to name resolution below
 
     candidates: list[str] = []
     for ws_id in (
