@@ -32,12 +32,13 @@ from .ssh import (
     install_ssh_config,
     is_tunnel_available,
 )
+from .scp import run_scp_transfer
 from .ssh_exec import (
     get_ssh_command_args,
     run_ssh_command,
     run_ssh_command_streaming,
 )
-from .sync import sync_via_ssh
+from .sync import sync_via_ssh, sync_via_ssh_bundle
 
 __all__ = [
     # Models / errors
@@ -63,6 +64,7 @@ __all__ = [
     "get_ssh_command_args",
     "get_tunnel_status",
     "is_tunnel_available",
+    "run_scp_transfer",
     "run_ssh_command",
     "run_ssh_command_streaming",
     # ssh-config
@@ -71,4 +73,5 @@ __all__ = [
     "install_ssh_config",
     # Sync
     "sync_via_ssh",
+    "sync_via_ssh_bundle",
 ]
