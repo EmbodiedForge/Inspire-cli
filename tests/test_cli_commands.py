@@ -1688,6 +1688,111 @@ def test_run_notebook_ssh_passes_resolved_runtime_to_setup(
     assert execvp_args["file"] == "ssh"
 
 
+def test_run_notebook_ssh_refreshes_saved_profile_on_notebook_mismatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class FakeSession:
+        workspace_id = "ws-test"
+        storage_state = {}
+
+    class FakeTunnelConfig:
+        def __init__(self) -> None:
+            self.bridges: dict[str, object] = {}
+            self.default_bridge = None
+
+        def add_bridge(self, profile: object) -> None:
+            self.bridges[str(getattr(profile, "name", "default"))] = profile
+
+    setup_called = {"value": False}
+    fake_tunnel_config = FakeTunnelConfig()
+    fake_tunnel_config.add_bridge(
+        tunnel_module.BridgeProfile(
+            name="shared-profile",
+            proxy_url="wss://proxy.example/old",
+            notebook_id="notebook-old",
+        )
+    )
+
+    monkeypatch.setattr(notebook_cmd_module, "require_web_session", lambda ctx, hint: FakeSession())
+    monkeypatch.setattr(notebook_cmd_module, "load_config", lambda ctx: make_test_config(tmp_path))
+    monkeypatch.setattr(
+        notebook_cmd_module,
+        "_resolve_notebook_id",
+        lambda *args, **kwargs: ("notebook-12345678", None),
+    )
+    monkeypatch.setattr(
+        browser_api_module,
+        "wait_for_notebook_running",
+        lambda notebook_id, session=None: {
+            "resource_spec_price": {"gpu_info": {"gpu_product_simple": "CPU"}}
+        },
+    )
+    monkeypatch.setattr(
+        notebook_cmd_module,
+        "_get_current_user_detail",
+        lambda session, base_url: {"id": "user-1", "username": "user"},
+    )
+    monkeypatch.setattr(
+        notebook_cmd_module,
+        "_validate_notebook_account_access",
+        lambda current_user, notebook_detail: (True, ""),
+    )
+    monkeypatch.setattr(
+        notebook_cmd_module, "load_ssh_public_key", lambda pubkey: "ssh-ed25519 AAA"
+    )
+    monkeypatch.setattr(
+        notebook_cmd_module,
+        "resolve_ssh_runtime_config",
+        lambda cli_overrides=None: SshRuntimeConfig(),
+    )
+
+    def fake_setup_notebook_rtunnel(**kwargs):  # type: ignore[no-untyped-def]
+        setup_called["value"] = True
+        return "wss://proxy.example/new"
+
+    monkeypatch.setattr(browser_api_module, "setup_notebook_rtunnel", fake_setup_notebook_rtunnel)
+    monkeypatch.setattr(
+        tunnel_module, "load_tunnel_config", lambda account=None: fake_tunnel_config
+    )
+    monkeypatch.setattr(tunnel_module, "save_tunnel_config", lambda config: None)
+    monkeypatch.setattr(tunnel_module, "has_internet_for_gpu_type", lambda gpu_type: True)
+    monkeypatch.setattr(
+        tunnel_module,
+        "is_tunnel_available",
+        lambda bridge_name, config, retries=0, retry_pause=0.0, progressive=True: True,
+    )
+    monkeypatch.setattr(
+        tunnel_module,
+        "get_ssh_command_args",
+        lambda bridge_name, config, remote_command=None: ["ssh", "root@localhost"],
+    )
+
+    def fake_execvp(file: str, args: list[str]) -> None:  # noqa: ARG001
+        raise SystemExit(0)
+
+    monkeypatch.setattr(notebook_cmd_module.os, "execvp", fake_execvp)
+
+    with pytest.raises(SystemExit) as exc:
+        notebook_cmd_module.run_notebook_ssh(
+            Context(),
+            notebook_id="nb-name",
+            wait=True,
+            pubkey=None,
+            save_as="shared-profile",
+            port=31337,
+            ssh_port=22222,
+            command=None,
+            rtunnel_bin="/cli/rtunnel",
+            debug_playwright=False,
+            setup_timeout=60,
+        )
+
+    assert exc.value.code == 0
+    assert setup_called["value"] is True
+    saved_profile = fake_tunnel_config.bridges["shared-profile"]
+    assert getattr(saved_profile, "notebook_id", None) == "notebook-12345678"
+
+
 def test_run_notebook_ssh_reports_when_tunnel_not_ready(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -12,7 +12,6 @@ from .config import load_tunnel_config
 from .models import BridgeProfile, TunnelConfig, TunnelError
 from .rtunnel import _ensure_rtunnel_binary
 
-
 # ---------------------------------------------------------------------------
 # ProxyCommand
 # ---------------------------------------------------------------------------
@@ -168,20 +167,15 @@ def generate_ssh_config(
     if host_alias is None:
         host_alias = bridge.name
 
-    # Convert https:// URL to wss:// for websocket
-    proxy_url = bridge.proxy_url
-    if proxy_url.startswith("https://"):
-        ws_url = "wss://" + proxy_url[8:]
-    elif proxy_url.startswith("http://"):
-        ws_url = "ws://" + proxy_url[7:]
-    else:
-        ws_url = proxy_url
+    # Keep ProxyCommand rendering consistent with runtime SSH command construction
+    # so URL/path quoting is always shell-safe in generated ~/.ssh/config entries.
+    proxy_cmd = _get_proxy_command(bridge, rtunnel_path, quiet=False)
 
     ssh_config = f"""Host {host_alias}
     HostName localhost
     User {bridge.ssh_user}
     Port {bridge.ssh_port}
-    ProxyCommand {rtunnel_path} {ws_url} stdio://%h:%p
+    ProxyCommand {proxy_cmd}
     StrictHostKeyChecking no
     UserKnownHostsFile /dev/null
     LogLevel ERROR"""

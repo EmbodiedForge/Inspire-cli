@@ -74,9 +74,30 @@ def bridge_scp(
             recursive = True
 
     tunnel_config = load_tunnel_config()
+    if bridge and tunnel_config.get_bridge(bridge) is None:
+        message = f"Bridge '{bridge}' not found."
+        hint = "Run 'inspire tunnel list' to see available bridge profiles."
+        if ctx.json_output:
+            click.echo(
+                json_formatter.format_json_error(
+                    "BridgeNotFound",
+                    message,
+                    EXIT_GENERAL_ERROR,
+                    hint=hint,
+                ),
+                err=True,
+            )
+        else:
+            click.echo(f"Error: {message}", err=True)
+            click.echo(f"Hint: {hint}", err=True)
+        sys.exit(EXIT_GENERAL_ERROR)
 
     if not is_tunnel_available(bridge_name=bridge, config=tunnel_config):
-        hint = "Run 'inspire tunnel start' first"
+        hint = (
+            "Run 'inspire tunnel status' to troubleshoot. "
+            "If needed, re-create the bridge via "
+            "'inspire notebook ssh <notebook-id> --save-as <name>'."
+        )
         if ctx.json_output:
             click.echo(
                 json_formatter.format_json_error(

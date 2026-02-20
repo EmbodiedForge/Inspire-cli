@@ -294,3 +294,33 @@ def test_bridge_scp_bridge_option(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
 
     assert result.exit_code == EXIT_SUCCESS
     assert captured["bridge_name"] == "gpu-main"
+
+
+def test_bridge_scp_missing_bridge_reports_bridge_not_found(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    local_file = tmp_path / "test.txt"
+    local_file.write_text("hello")
+
+    tunnel_config = TunnelConfig()
+    tunnel_config.add_bridge(BridgeProfile(name="gpu-main", proxy_url="https://proxy.example.com"))
+
+    monkeypatch.setattr(scp_cmd_module, "load_tunnel_config", lambda: tunnel_config)
+
+    def fail_if_checked(**kwargs: Any) -> bool:  # noqa: ARG001
+        raise AssertionError("should not check availability")
+
+    monkeypatch.setattr(
+        scp_cmd_module,
+        "is_tunnel_available",
+        fail_if_checked,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_main,
+        ["bridge", "scp", str(local_file), "/tmp/test.txt", "--bridge", "missing"],
+    )
+
+    assert result.exit_code == EXIT_GENERAL_ERROR
+    assert "Bridge 'missing' not found" in result.output

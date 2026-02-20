@@ -546,3 +546,38 @@ def test_bridge_ssh_uses_requested_bridge(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert captured["available_bridge"] == "gpu-main"
     assert captured["ssh_bridge"] == "gpu-main"
     assert captured["execvp_file"] == "ssh"
+
+
+def test_bridge_ssh_missing_bridge_reports_bridge_not_found(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_sync_config(tmp_path)
+    config.target_dir = str(tmp_path / "project")
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+
+    tunnel_config = TunnelConfig()
+    tunnel_config.add_bridge(
+        BridgeProfile(name="other-bridge", proxy_url="https://proxy.example.com")
+    )
+
+    monkeypatch.setattr(ssh_cmd_module, "load_tunnel_config", lambda: tunnel_config)
+
+    def fail_if_checked(*args: Any, **kwargs: Any) -> bool:  # noqa: ARG001
+        raise AssertionError("should not be called")
+
+    monkeypatch.setattr(
+        ssh_cmd_module,
+        "is_tunnel_available",
+        fail_if_checked,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["bridge", "ssh", "--bridge", "missing"])
+
+    assert result.exit_code == EXIT_GENERAL_ERROR
+    assert "Bridge 'missing' not found" in result.output

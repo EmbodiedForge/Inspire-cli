@@ -59,15 +59,20 @@ class BridgeProfile:
     ssh_user: str = DEFAULT_SSH_USER
     ssh_port: int = DEFAULT_SSH_PORT
     has_internet: bool = True  # Whether this bridge has internet access
+    # Optional notebook binding for saved notebook SSH profiles.
+    notebook_id: Optional[str] = None
 
     def to_dict(self) -> dict:
-        return {
+        payload = {
             "name": self.name,
             "proxy_url": self.proxy_url,
             "ssh_user": self.ssh_user,
             "ssh_port": self.ssh_port,
             "has_internet": self.has_internet,
         }
+        if self.notebook_id:
+            payload["notebook_id"] = self.notebook_id
+        return payload
 
     @classmethod
     def from_dict(cls, data: dict) -> "BridgeProfile":
@@ -77,6 +82,7 @@ class BridgeProfile:
             ssh_user=data.get("ssh_user", DEFAULT_SSH_USER),
             ssh_port=data.get("ssh_port", DEFAULT_SSH_PORT),
             has_internet=data.get("has_internet", True),  # Default True for backward compat
+            notebook_id=data.get("notebook_id"),
         )
 
 

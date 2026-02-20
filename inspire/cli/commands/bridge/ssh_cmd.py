@@ -29,12 +29,12 @@ from inspire.cli.formatters import json_formatter
 def bridge_ssh(ctx: Context, bridge: Optional[str]) -> None:
     """Open an interactive SSH shell to Bridge.
 
-    Requires an active SSH tunnel. Start with: inspire tunnel start
+    Requires a configured bridge profile with a reachable SSH tunnel.
 
     \b
     Example:
-        inspire tunnel start
-        inspire bridge ssh
+        inspire notebook ssh <notebook-id> --save-as mybridge
+        inspire bridge ssh --bridge mybridge
     """
     try:
         config, _ = Config.from_files_and_env(require_target_dir=True, require_credentials=False)
@@ -49,21 +49,43 @@ def bridge_ssh(ctx: Context, bridge: Optional[str]) -> None:
         sys.exit(EXIT_CONFIG_ERROR)
 
     tunnel_config = load_tunnel_config()
+    if bridge and tunnel_config.get_bridge(bridge) is None:
+        message = f"Bridge '{bridge}' not found."
+        hint = "Run 'inspire tunnel list' to see available bridge profiles."
+        if ctx.json_output:
+            click.echo(
+                json_formatter.format_json_error(
+                    "BridgeNotFound",
+                    message,
+                    EXIT_GENERAL_ERROR,
+                    hint=hint,
+                ),
+                err=True,
+            )
+        else:
+            click.echo(f"Error: {message}", err=True)
+            click.echo(f"Hint: {hint}", err=True)
+        sys.exit(EXIT_GENERAL_ERROR)
 
     if not is_tunnel_available(bridge_name=bridge, config=tunnel_config):
+        hint = (
+            "Run 'inspire tunnel status' to troubleshoot. "
+            "If needed, re-create the bridge via "
+            "'inspire notebook ssh <notebook-id> --save-as <name>'."
+        )
         if ctx.json_output:
             click.echo(
                 json_formatter.format_json_error(
                     "TunnelError",
                     "SSH tunnel not available",
                     EXIT_GENERAL_ERROR,
-                    hint="Run 'inspire tunnel start' first",
+                    hint=hint,
                 ),
                 err=True,
             )
         else:
             click.echo("Error: SSH tunnel not available", err=True)
-            click.echo("Hint: Run 'inspire tunnel start' first", err=True)
+            click.echo(f"Hint: {hint}", err=True)
         sys.exit(EXIT_GENERAL_ERROR)
 
     # Build interactive SSH command with env exports and cd to target dir

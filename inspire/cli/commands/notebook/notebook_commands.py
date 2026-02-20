@@ -1329,31 +1329,51 @@ def run_notebook_ssh(
     cached_config = load_tunnel_config(account=tunnel_account)
 
     if profile_name in cached_config.bridges:
-        import subprocess
+        cached_bridge = cached_config.bridges[profile_name]
+        cached_notebook_id = str(getattr(cached_bridge, "notebook_id", "") or "").strip()
+        if cached_notebook_id == notebook_id:
+            import subprocess
 
-        test_args = get_ssh_command_args(
-            bridge_name=profile_name,
-            config=cached_config,
-            remote_command="echo ok",
-        )
-        try:
-            result = subprocess.run(
-                test_args,
-                capture_output=True,
-                timeout=10,
-                text=True,
+            test_args = get_ssh_command_args(
+                bridge_name=profile_name,
+                config=cached_config,
+                remote_command="echo ok",
             )
-            if result.returncode == 0 and "ok" in result.stdout:
-                click.echo("Using cached tunnel connection (fast path).", err=True)
-                args = get_ssh_command_args(
-                    bridge_name=profile_name,
-                    config=cached_config,
-                    remote_command=command,
+            try:
+                result = subprocess.run(
+                    test_args,
+                    capture_output=True,
+                    timeout=10,
+                    text=True,
                 )
-                os.execvp("ssh", args)
-                return
-        except (subprocess.TimeoutExpired, Exception):
-            pass
+                if result.returncode == 0 and "ok" in result.stdout:
+                    click.echo("Using cached tunnel connection (fast path).", err=True)
+                    args = get_ssh_command_args(
+                        bridge_name=profile_name,
+                        config=cached_config,
+                        remote_command=command,
+                    )
+                    os.execvp("ssh", args)
+                    return
+            except (subprocess.TimeoutExpired, Exception):
+                pass
+        else:
+            if cached_notebook_id:
+                click.echo(
+                    (
+                        f"Bridge profile '{profile_name}' targets notebook '{cached_notebook_id}'; "
+                        f"refreshing tunnel for '{notebook_id}'."
+                    ),
+                    err=True,
+                )
+            else:
+                click.echo(
+                    (
+                        f"Bridge profile '{profile_name}' has no notebook binding metadata; "
+                        f"refreshing tunnel for '{notebook_id}'."
+                    ),
+                    err=True,
+                )
 
     try:
         ssh_public_key = load_ssh_public_key(pubkey)
@@ -1404,6 +1424,7 @@ def run_notebook_ssh(
         ssh_user="root",
         ssh_port=ssh_port,
         has_internet=has_internet,
+        notebook_id=notebook_id,
     )
 
     config = load_tunnel_config(account=tunnel_account)
