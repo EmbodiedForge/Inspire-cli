@@ -67,25 +67,26 @@ def get_current_branch() -> str:
         raise click.ClickException("git command not found. Please install git.")
 
 
-def get_current_commit_sha() -> str:
-    """Get the current commit SHA."""
+def get_current_commit_sha(revision: str = "HEAD") -> str:
+    """Get the commit SHA for a git revision (default: HEAD)."""
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
+            ["git", "rev-parse", revision],
             check=True,
             capture_output=True,
             text=True,
         )
         return result.stdout.strip()
     except subprocess.CalledProcessError as e:
-        raise click.ClickException(f"Failed to get commit SHA: {e.stderr}")
+        error_msg = e.stderr or e.stdout or str(e)
+        raise click.ClickException(f"Failed to get commit SHA for '{revision}': {error_msg}")
 
 
-def get_commit_message() -> str:
-    """Get the current commit message (first line)."""
+def get_commit_message(revision: str = "HEAD") -> str:
+    """Get the commit message (first line) for a git revision."""
     try:
         result = subprocess.run(
-            ["git", "log", "-1", "--format=%s"],
+            ["git", "log", "-1", "--format=%s", revision],
             check=True,
             capture_output=True,
             text=True,
@@ -174,6 +175,30 @@ def _ordered_bridges_for_sync(tunnel_config: TunnelConfig) -> list[BridgeProfile
             0 if bridge.name == default_bridge else 1,
         ),
     )
+
+
+def _effective_ssh_source(source: str, bridge: BridgeProfile) -> str:
+    """Resolve SSH sync source based on user preference and bridge capability."""
+    if source == "auto":
+        return "remote" if bridge.has_internet else "bundle"
+    return source
+
+
+def _effective_push_mode(
+    *,
+    no_push: bool,
+    push_mode: Optional[str],
+    transport: str,
+    ssh_source: Optional[str],
+) -> str:
+    """Resolve git push behavior before sync."""
+    if no_push:
+        return "skip"
+    if push_mode:
+        return push_mode
+    if transport == "ssh" and ssh_source == "bundle":
+        return "best-effort"
+    return "required"
 
 
 def sync_via_tunnel(
@@ -409,12 +434,12 @@ def sync_via_workflow(
 @click.option(
     "--no-push",
     is_flag=True,
-    help="Skip git push, only trigger sync on Bridge",
+    help="Skip git push before sync (same as --push-mode skip)",
 )
 @click.option(
     "--allow-dirty",
     is_flag=True,
-    help="Allow sync with uncommitted changes (syncs committed HEAD only)",
+    help="Allow sync with uncommitted changes (syncs committed branch tip only)",
 )
 @click.option(
     "--wait/--no-wait",
@@ -434,6 +459,19 @@ def sync_via_workflow(
     help="Sync transport to use (no automatic fallback)",
 )
 @click.option(
+    "--source",
+    type=click.Choice(["auto", "remote", "bundle"], case_sensitive=False),
+    default="auto",
+    show_default=True,
+    help="For SSH transport: choose sync source (auto uses remote on internet bridges, bundle otherwise)",
+)
+@click.option(
+    "--push-mode",
+    type=click.Choice(["required", "best-effort", "skip"], case_sensitive=False),
+    default=None,
+    help="Git push policy before sync (default: required for remote/workflow, best-effort for bundle)",
+)
+@click.option(
     "--via-action",
     is_flag=True,
     help="Deprecated alias for '--transport workflow'",
@@ -448,6 +486,8 @@ def sync(
     wait: bool,
     timeout: int,
     transport: str,
+    source: str,
+    push_mode: Optional[str],
     via_action: bool,
 ) -> None:
     """Sync local code to the Bridge shared filesystem.
@@ -463,8 +503,10 @@ def sync(
         inspire sync --transport workflow     # Sync via workflow transport
         inspire sync --remote upstream        # Sync via upstream remote
         inspire sync --branch feature/new     # Sync specific branch
-        inspire sync --no-push                # Skip git push, sync only
-        inspire sync --allow-dirty            # Sync committed HEAD even if worktree is dirty
+        inspire sync --source bundle          # Force local bundle sync over SSH
+        inspire sync --push-mode best-effort  # Continue even if git push fails
+        inspire sync --no-push                # Skip git push (equivalent to --push-mode skip)
+        inspire sync --allow-dirty            # Sync committed branch tip even if worktree is dirty
 
     \b
     Environment variables:
@@ -492,6 +534,8 @@ def sync(
         remote = config.default_remote
 
     transport = transport.lower().strip()
+    source = source.lower().strip()
+    push_mode = push_mode.lower().strip() if push_mode else None
     if via_action:
         transport = "workflow"
         if not ctx.json_output:
@@ -500,8 +544,40 @@ def sync(
                 err=True,
             )
 
+    if transport == "workflow" and source != "auto":
+        if ctx.json_output:
+            click.echo(
+                json_formatter.format_json_error(
+                    "ValidationError",
+                    "--source is only supported with '--transport ssh'",
+                    EXIT_CONFIG_ERROR,
+                ),
+                err=True,
+            )
+        else:
+            click.echo("Error: --source is only supported with '--transport ssh'.", err=True)
+        sys.exit(EXIT_CONFIG_ERROR)
+
+    if no_push and push_mode and push_mode != "skip":
+        if ctx.json_output:
+            click.echo(
+                json_formatter.format_json_error(
+                    "ValidationError",
+                    "--no-push conflicts with --push-mode values other than 'skip'",
+                    EXIT_CONFIG_ERROR,
+                ),
+                err=True,
+            )
+        else:
+            click.echo(
+                "Error: --no-push conflicts with --push-mode values other than 'skip'.",
+                err=True,
+            )
+        sys.exit(EXIT_CONFIG_ERROR)
+
     tunnel_config = None
     selected_bridge = None
+    ssh_source = None
     use_offline_bundle = False
     candidate_bridges: list[BridgeProfile] = []
     if transport == "ssh":
@@ -561,7 +637,28 @@ def sync(
                 )
             sys.exit(EXIT_GENERAL_ERROR)
 
-        use_offline_bundle = not selected_bridge.has_internet
+        ssh_source = _effective_ssh_source(source, selected_bridge)
+        if ssh_source == "remote" and not selected_bridge.has_internet:
+            hint = "Use '--source bundle' (or '--source auto') for no-internet bridges."
+            if ctx.json_output:
+                click.echo(
+                    json_formatter.format_json_error(
+                        "ValidationError",
+                        f"Bridge '{selected_bridge.name}' has no internet; remote source is unavailable",
+                        EXIT_CONFIG_ERROR,
+                        hint=hint,
+                    ),
+                    err=True,
+                )
+            else:
+                click.echo(
+                    f"Error: Bridge '{selected_bridge.name}' has no internet; remote source is unavailable.",
+                    err=True,
+                )
+                click.echo(f"Hint: {hint}", err=True)
+            sys.exit(EXIT_CONFIG_ERROR)
+
+        use_offline_bundle = ssh_source == "bundle"
         if ctx.debug and not ctx.json_output:
             has_cpu_candidate = any(
                 _is_cpu_bridge_name(bridge.name) for bridge in candidate_bridges
@@ -574,10 +671,15 @@ def sync(
                     err=True,
                 )
             if use_offline_bundle:
-                click.echo(
-                    "Selected bridge has no internet; using offline bundle sync path.",
-                    err=True,
-                )
+                if source == "bundle":
+                    click.echo("Using offline bundle sync path (--source bundle).", err=True)
+                else:
+                    click.echo(
+                        "Selected bridge has no internet; using offline bundle sync path.",
+                        err=True,
+                    )
+            elif source == "remote":
+                click.echo("Using remote git sync path (--source remote).")
     else:
         try:
             _preflight_workflow_transport(config)
@@ -614,25 +716,39 @@ def sync(
 
         if not ctx.json_output:
             click.echo(
-                "Warning: Uncommitted changes detected; syncing committed HEAD only (--allow-dirty).",
+                f"Warning: Uncommitted changes detected; syncing committed tip of '{branch}' only (--allow-dirty).",
                 err=True,
             )
 
-    commit_sha = get_current_commit_sha()
-    commit_msg = get_commit_message()
+    commit_sha = get_current_commit_sha(branch)
+    commit_msg = get_commit_message(branch)
+    effective_push_mode = _effective_push_mode(
+        no_push=no_push,
+        push_mode=push_mode,
+        transport=transport,
+        ssh_source=ssh_source,
+    )
 
-    # Push to remote (unless --no-push)
-    if not no_push:
+    if effective_push_mode != "skip":
         try:
             push_to_remote(branch, remote, show_progress=ctx.debug and not ctx.json_output)
         except click.ClickException as e:
-            if ctx.json_output:
-                click.echo(
-                    json_formatter.format_json_error("GitError", str(e), EXIT_GENERAL_ERROR),
-                    err=True,
-                )
-                sys.exit(EXIT_GENERAL_ERROR)
-            raise
+            if effective_push_mode == "best-effort":
+                if not ctx.json_output:
+                    click.echo(
+                        f"Warning: {e}. Continuing because push mode is best-effort.",
+                        err=True,
+                    )
+            else:
+                if ctx.json_output:
+                    click.echo(
+                        json_formatter.format_json_error("GitError", str(e), EXIT_GENERAL_ERROR),
+                        err=True,
+                    )
+                    sys.exit(EXIT_GENERAL_ERROR)
+                raise
+    elif ctx.debug and not ctx.json_output:
+        click.echo("Skipping git push before sync.")
 
     if transport == "ssh":
         exit_code = sync_via_tunnel(

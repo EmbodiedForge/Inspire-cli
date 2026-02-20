@@ -39,6 +39,36 @@ def _git_command_success(args: list[str]) -> bool:
         return False
 
 
+def _git_rev_count(revision_range: str) -> Optional[int]:
+    """Count commits in a revision range, returning None on errors."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-list", "--count", revision_range],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return None
+        return int((result.stdout or "").strip())
+    except Exception:
+        return None
+
+
+def _create_git_bundle(bundle_file: str, revision: str) -> Optional[str]:
+    """Create a git bundle and return an error message on failure."""
+    try:
+        subprocess.run(
+            ["git", "bundle", "create", bundle_file, revision],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return None
+    except subprocess.CalledProcessError as e:
+        return e.stderr.strip() or e.stdout.strip() or str(e)
+
+
 def _probe_remote_branch_tip(
     *,
     target_dir: str,
@@ -223,8 +253,19 @@ def sync_via_ssh_bundle(
             ["git", "merge-base", "--is-ancestor", remote_base_sha, commit_sha]
         )
         if has_remote_base and is_ancestor:
+            incremental_range = f"{remote_base_sha}..{commit_sha}"
+            incremental_count = _git_rev_count(incremental_range)
+            if incremental_count == 0:
+                # Defensive fast-path: avoid "cannot create empty bundle" errors.
+                return {
+                    "success": True,
+                    "synced_sha": commit_sha.lower(),
+                    "error": None,
+                    "bundle_mode": "up_to_date",
+                    "bundle_base_sha": remote_base_sha,
+                }
             bundle_mode = "incremental"
-            bundle_rev = f"{remote_base_sha}..{commit_sha}"
+            bundle_rev = incremental_range
 
     try:
         with tempfile.NamedTemporaryFile(
@@ -234,15 +275,29 @@ def sync_via_ssh_bundle(
         ) as tmp:
             bundle_file = tmp.name
 
-        try:
-            subprocess.run(
-                ["git", "bundle", "create", bundle_file, bundle_rev],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except subprocess.CalledProcessError as e:
-            error_msg = e.stderr.strip() or e.stdout.strip() or str(e)
+        error_msg = _create_git_bundle(bundle_file, bundle_rev)
+        if error_msg and bundle_mode == "incremental":
+            incremental_count = _git_rev_count(bundle_rev)
+            if incremental_count == 0:
+                return {
+                    "success": True,
+                    "synced_sha": commit_sha.lower(),
+                    "error": None,
+                    "bundle_mode": "up_to_date",
+                    "bundle_base_sha": remote_base_sha,
+                }
+
+            # Keep sync resilient: if incremental bundle creation fails,
+            # retry with a full bundle before failing.
+            full_error = _create_git_bundle(bundle_file, "HEAD")
+            if full_error is None:
+                bundle_mode = "full"
+                bundle_rev = "HEAD"
+                error_msg = None
+            else:
+                error_msg = full_error
+
+        if error_msg:
             return {
                 "success": False,
                 "synced_sha": None,
