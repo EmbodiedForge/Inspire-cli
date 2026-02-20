@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 import tempfile
@@ -12,6 +13,69 @@ from .config import load_tunnel_config
 from .models import TunnelConfig
 from .scp import run_scp_transfer
 from .ssh_exec import run_ssh_command
+
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _extract_sha(stdout: str) -> Optional[str]:
+    """Extract the last full SHA line from command output."""
+    for line in reversed([ln.strip().lower() for ln in stdout.splitlines() if ln.strip()]):
+        if _SHA_RE.match(line):
+            return line
+    return None
+
+
+def _git_command_success(args: list[str]) -> bool:
+    """Run a local git command and return True when it succeeds."""
+    try:
+        result = subprocess.run(
+            args,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _probe_remote_branch_tip(
+    *,
+    target_dir: str,
+    branch: str,
+    bridge_name: Optional[str],
+    config: TunnelConfig,
+    timeout: int,
+) -> Optional[str]:
+    """Best-effort probe for the current remote branch tip SHA."""
+    q_target_dir = shlex.quote(target_dir)
+    q_branch = shlex.quote(branch)
+
+    probe_cmd = f"""
+set -e
+cd {q_target_dir}
+if [ ! -d .git ]; then
+  exit 0
+fi
+branch={q_branch}
+git rev-parse --verify "refs/heads/$branch" 2>/dev/null || true
+"""
+
+    try:
+        probe = run_ssh_command(
+            probe_cmd.strip(),
+            bridge_name=bridge_name,
+            config=config,
+            timeout=max(15, min(timeout, 30)),
+            capture_output=True,
+            check=False,
+        )
+    except Exception:
+        return None
+
+    if probe.returncode != 0:
+        return None
+    return _extract_sha(probe.stdout or "")
 
 
 def sync_via_ssh(
@@ -133,6 +197,35 @@ def sync_via_ssh_bundle(
         config = load_tunnel_config()
 
     bundle_file = None
+    bundle_mode = "full"
+    remote_base_sha = _probe_remote_branch_tip(
+        target_dir=target_dir,
+        branch=branch,
+        bridge_name=bridge_name,
+        config=config,
+        timeout=timeout,
+    )
+
+    if remote_base_sha and remote_base_sha == commit_sha.lower():
+        return {
+            "success": True,
+            "synced_sha": commit_sha.lower(),
+            "error": None,
+            "bundle_mode": "up_to_date",
+        }
+
+    bundle_rev = "HEAD"
+    if remote_base_sha:
+        has_remote_base = _git_command_success(
+            ["git", "cat-file", "-e", f"{remote_base_sha}^{{commit}}"]
+        )
+        is_ancestor = _git_command_success(
+            ["git", "merge-base", "--is-ancestor", remote_base_sha, commit_sha]
+        )
+        if has_remote_base and is_ancestor:
+            bundle_mode = "incremental"
+            bundle_rev = f"{remote_base_sha}..{commit_sha}"
+
     try:
         with tempfile.NamedTemporaryFile(
             prefix="inspire-sync-",
@@ -143,7 +236,7 @@ def sync_via_ssh_bundle(
 
         try:
             subprocess.run(
-                ["git", "bundle", "create", bundle_file, "HEAD"],
+                ["git", "bundle", "create", bundle_file, bundle_rev],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -216,6 +309,8 @@ printf '%s\\n' "$actual_sha"
                 "success": True,
                 "synced_sha": synced_sha,
                 "error": None,
+                "bundle_mode": bundle_mode,
+                "bundle_base_sha": remote_base_sha,
             }
 
         error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"

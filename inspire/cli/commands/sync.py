@@ -218,22 +218,25 @@ def sync_via_tunnel(
 
     if result.get("success"):
         synced_sha = result.get("synced_sha") or commit_sha[:7]
+        bundle_mode = result.get("bundle_mode") if offline_bundle else None
+        bundle_base_sha = result.get("bundle_base_sha") if offline_bundle else None
         if ctx.json_output:
-            click.echo(
-                json_formatter.format_json(
-                    {
-                        "status": "success",
-                        "method": "ssh_bundle" if offline_bundle else "ssh_tunnel",
-                        "branch": branch,
-                        "remote": remote,
-                        "commit": commit_sha[:7],
-                        "commit_full": commit_sha,
-                        "synced_sha": synced_sha,
-                        "message": commit_msg,
-                        "target_dir": config.target_dir,
-                    }
-                )
-            )
+            payload = {
+                "status": "success",
+                "method": "ssh_bundle" if offline_bundle else "ssh_tunnel",
+                "branch": branch,
+                "remote": remote,
+                "commit": commit_sha[:7],
+                "commit_full": commit_sha,
+                "synced_sha": synced_sha,
+                "message": commit_msg,
+                "target_dir": config.target_dir,
+            }
+            if bundle_mode:
+                payload["bundle_mode"] = bundle_mode
+            if bundle_base_sha:
+                payload["bundle_base_sha"] = bundle_base_sha
+            click.echo(json_formatter.format_json(payload))
         else:
             if ctx.debug:
                 click.echo(
@@ -241,11 +244,11 @@ def sync_via_tunnel(
                     + f" Synced branch '{branch}' ({synced_sha[:7]}) to {config.target_dir}"
                 )
                 click.echo(f"  Commit: {commit_msg}")
-                click.echo(
-                    "  Method: SSH tunnel (offline bundle)"
-                    if offline_bundle
-                    else "  Method: SSH tunnel (fast)"
-                )
+                if offline_bundle:
+                    mode_suffix = f", {bundle_mode}" if bundle_mode else ""
+                    click.echo(f"  Method: SSH tunnel (offline bundle{mode_suffix})")
+                else:
+                    click.echo("  Method: SSH tunnel (fast)")
             else:
                 click.echo(
                     f"synced {synced_sha[:7]} via {'ssh-bundle' if offline_bundle else 'ssh'}"

@@ -56,6 +56,7 @@ def test_sync_via_ssh_force_uses_hard_reset(monkeypatch) -> None:
 def test_sync_via_ssh_bundle_uses_scp_and_remote_fetch(monkeypatch) -> None:
     captured: dict[str, Any] = {}
     commit_sha = "c" * 40
+    call_count = {"run_ssh_command": 0}
 
     def fake_subprocess_run(args: list[str], *unused: Any, **kwargs: Any) -> FakeCompletedProcess:
         captured["bundle_args"] = args
@@ -68,6 +69,10 @@ def test_sync_via_ssh_bundle_uses_scp_and_remote_fetch(monkeypatch) -> None:
         return FakeCompletedProcess(returncode=0)
 
     def fake_run_ssh_command(command: str, *args: Any, **kwargs: Any) -> FakeCompletedProcess:
+        call_count["run_ssh_command"] += 1
+        if call_count["run_ssh_command"] == 1:
+            # probe command: no existing branch tip on remote
+            return FakeCompletedProcess(returncode=0, stdout="")
         captured["remote_command"] = command
         captured["ssh_kwargs"] = kwargs
         return FakeCompletedProcess(returncode=0, stdout=f"done\n{commit_sha}\n")
@@ -90,3 +95,80 @@ def test_sync_via_ssh_bundle_uses_scp_and_remote_fetch(monkeypatch) -> None:
     assert captured["scp_kwargs"]["bridge_name"] == "gpu-offline"
     assert "git fetch" in captured["remote_command"]
     assert commit_sha in captured["remote_command"]
+
+
+def test_sync_via_ssh_bundle_uses_incremental_range(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+    commit_sha = "c" * 40
+    base_sha = "b" * 40
+    call_count = {"run_ssh_command": 0}
+
+    def fake_subprocess_run(args: list[str], *unused: Any, **kwargs: Any) -> FakeCompletedProcess:
+        if args[:3] == ["git", "cat-file", "-e"]:
+            return FakeCompletedProcess(returncode=0, stdout="", stderr="")
+        if args[:3] == ["git", "merge-base", "--is-ancestor"]:
+            return FakeCompletedProcess(returncode=0, stdout="", stderr="")
+        if args[:3] == ["git", "bundle", "create"]:
+            captured["bundle_args"] = args
+            return FakeCompletedProcess(returncode=0, stdout="", stderr="")
+        raise AssertionError(f"Unexpected git call: {args}")
+
+    def fake_run_scp_transfer(*args: Any, **kwargs: Any) -> FakeCompletedProcess:
+        return FakeCompletedProcess(returncode=0)
+
+    def fake_run_ssh_command(command: str, *args: Any, **kwargs: Any) -> FakeCompletedProcess:
+        call_count["run_ssh_command"] += 1
+        if call_count["run_ssh_command"] == 1:
+            # probe command
+            return FakeCompletedProcess(returncode=0, stdout=f"{base_sha}\n")
+        return FakeCompletedProcess(returncode=0, stdout=f"{commit_sha}\n")
+
+    monkeypatch.setattr(sync_module.subprocess, "run", fake_subprocess_run)
+    monkeypatch.setattr(sync_module, "run_scp_transfer", fake_run_scp_transfer)
+    monkeypatch.setattr(sync_module, "run_ssh_command", fake_run_ssh_command)
+
+    result = sync_module.sync_via_ssh_bundle(
+        target_dir="/remote/project",
+        branch="main",
+        commit_sha=commit_sha,
+        bridge_name="gpu-offline",
+    )
+
+    assert result["success"] is True
+    assert result["bundle_mode"] == "incremental"
+    assert result["bundle_base_sha"] == base_sha
+    assert captured["bundle_args"][-1] == f"{base_sha}..{commit_sha}"
+
+
+def test_sync_via_ssh_bundle_returns_fast_when_up_to_date(monkeypatch) -> None:
+    commit_sha = "d" * 40
+    called = {"scp": False, "git": False}
+
+    def fake_subprocess_run(*args: Any, **kwargs: Any) -> FakeCompletedProcess:
+        called["git"] = True
+        return FakeCompletedProcess(returncode=0, stdout="", stderr="")
+
+    def fake_run_scp_transfer(*args: Any, **kwargs: Any) -> FakeCompletedProcess:
+        called["scp"] = True
+        return FakeCompletedProcess(returncode=0)
+
+    def fake_run_ssh_command(command: str, *args: Any, **kwargs: Any) -> FakeCompletedProcess:
+        # probe command sees target already at commit_sha
+        return FakeCompletedProcess(returncode=0, stdout=f"{commit_sha}\n")
+
+    monkeypatch.setattr(sync_module.subprocess, "run", fake_subprocess_run)
+    monkeypatch.setattr(sync_module, "run_scp_transfer", fake_run_scp_transfer)
+    monkeypatch.setattr(sync_module, "run_ssh_command", fake_run_ssh_command)
+
+    result = sync_module.sync_via_ssh_bundle(
+        target_dir="/remote/project",
+        branch="main",
+        commit_sha=commit_sha,
+        bridge_name="gpu-offline",
+    )
+
+    assert result["success"] is True
+    assert result["synced_sha"] == commit_sha
+    assert result["bundle_mode"] == "up_to_date"
+    assert called["scp"] is False
+    assert called["git"] is False
