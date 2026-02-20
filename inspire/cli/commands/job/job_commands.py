@@ -385,8 +385,7 @@ def wait(ctx: Context, job_id: str, timeout: int, interval: int) -> None:
                             )
                         )
                     else:
-                        emoji = human_formatter.STATUS_EMOJI.get(current_status, "\U0001f4ca")
-                        click.echo(f"\n{emoji} Status: {current_status}")
+                        click.echo(f"\nStatus: {current_status}")
                     last_status = current_status
                 else:
                     if not ctx.json_output:

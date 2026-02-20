@@ -5,6 +5,7 @@ from __future__ import annotations
 import click
 
 from .exec_cmd import exec_command
+from .scp_cmd import bridge_scp
 from .ssh_cmd import bridge_ssh
 
 
@@ -14,6 +15,7 @@ def bridge() -> None:
 
 
 bridge.add_command(exec_command)
+bridge.add_command(bridge_scp)
 bridge.add_command(bridge_ssh)
 
 __all__ = ["bridge"]

@@ -1,10 +1,10 @@
 # Inspire CLI Feedback from Claude Code Usage
 
-> Feedback collected during an extended SPRINT profiling session using `inspire-cli` with Claude Code (2026-01-10)
+> Feedback collected across multiple extended sessions using `inspire-cli` with Claude Code (2026-01 to 2026-02)
 
 ## Executive Summary
 
-After 50+ job submissions, syncs, and log fetches during a deep learning profiling session, here are the key friction points and improvement suggestions.
+After 100+ job submissions, notebook operations, syncs, and log fetches across profiling, training, and multi-notebook management sessions, here are the key friction points and improvement suggestions.
 
 ---
 
@@ -14,32 +14,41 @@ After 50+ job submissions, syncs, and log fetches during a deep learning profili
 
 **Status**: Resolved in v0.2.4
 
-Commands are now automatically wrapped in `bash -c '...'`. No manual wrapping needed:
-
-```bash
-# Now works directly:
-inspire job create --command "cd /path && source .env && python script.py"
-```
-
-Commands already wrapped in `bash -c` or `sh -c` are detected and not double-wrapped.
+Commands are now automatically wrapped in `bash -c '...'`. No manual wrapping needed.
 
 ---
 
-### 2. Log Fetching Latency (Medium Priority)
+### 2. No `bridge scp` for File Transfer (High Priority)
 
-**Problem**: Every log fetch goes through Gitea workflow.
+**Problem**: There is no way to transfer files between local and remote notebooks via the bridge SSH tunnel. When `inspire sync` fails (e.g., Codeberg unreachable), there's no fallback to push code updates to the remote.
 
+**Real scenario**: `inspire sync` hung because Codeberg was down. The workaround requires manual steps that `bridge exec` can't handle:
+
+```bash
+# Current workaround (manual, fragile):
+git bundle create /tmp/jit.bundle HEAD~5..HEAD    # local
+# Need to somehow get this file to the remote...
+# `inspire bridge exec "cat > /tmp/jit.bundle" < /tmp/jit.bundle` doesn't work
+# (stdin piping not supported through bridge exec)
 ```
-Fetching remote log via Gitea workflow (first fetch may take ~10-30s)...
+
+**Proposed**:
+
+```bash
+# Upload file to notebook:
+inspire bridge scp /tmp/jit.bundle /tmp/jit.bundle
+
+# Download file from notebook:
+inspire bridge scp --download /remote/path/results.tar.gz ./results.tar.gz
+
+# Shorthand (detect direction by path prefix):
+inspire bridge scp local:./file remote:/tmp/file
 ```
 
-**Impact**: When debugging a failed job, waiting 10-30s per log fetch adds up quickly. In a session with 10+ failed jobs, this was 5+ minutes of waiting.
-
-**Suggestions**:
-- Direct SSH/file access for logs when possible
-- Cache recent logs locally
-- Background pre-fetch for active jobs
-- True streaming with `--stream` flag
+**Why this matters**:
+- `inspire sync` depends on Codeberg being reachable from the CPU bridge. When it's down (happens regularly), there's no way to push code changes
+- Transferring checkpoints, logs, or analysis results from notebooks requires workarounds
+- The SSH tunnel already exists (`inspire notebook ssh`), so SCP should be straightforward to add
 
 ---
 
@@ -57,23 +66,39 @@ inspire job wait <id>         # 5. Wait
 inspire job logs <id>         # 6. View logs
 ```
 
-**Suggestion**: One-liner execution:
+**Proposed**:
 
 ```bash
-# Proposed:
 inspire run scripts/test.py --resource 1xH100
-
 # Auto: commit pending changes, sync, create job, wait, stream logs
 ```
 
-**Bonus features**:
+**Options**:
 - `--no-commit` to skip auto-commit
 - `--background` to not wait
 - `--torchrun 8` for distributed
 
 ---
 
-### 4. Missing Job Templates (Medium Priority)
+### 4. Log Fetching Latency (Medium Priority)
+
+**Problem**: Every log fetch goes through Gitea workflow.
+
+```
+Fetching remote log via Gitea workflow (first fetch may take ~10-30s)...
+```
+
+**Impact**: When debugging a failed job, waiting 10-30s per log fetch adds up. In sessions with 10+ failed jobs, this is 5+ minutes of idle waiting.
+
+**Suggestions**:
+- Direct SSH/file access for logs when possible
+- Cache recent logs locally
+- Background pre-fetch for active jobs
+- True streaming with `--stream` flag
+
+---
+
+### 5. Missing Job Templates (Medium Priority)
 
 **Problem**: Repeated boilerplate for common patterns.
 
@@ -109,7 +134,7 @@ templates:
 
 ---
 
-### 5. Job History / Comparison (Low Priority)
+### 6. Job History / Comparison (Low Priority)
 
 **Problem**: Hard to compare results across multiple profiling runs.
 
@@ -124,11 +149,15 @@ templates:
 
 | Feature | Notes |
 |---------|-------|
-| `inspire sync` | Reliable, good uncommitted changes warning |
+| `inspire sync` | Reliable SSH tunnel path, good uncommitted changes warning |
+| `inspire notebook create` | Clean flow: create, wait for RUNNING, auto-keepalive |
+| `inspire notebook ssh --save-as` | Tunnel naming makes multi-notebook management practical |
+| `inspire bridge exec` | Fast SSH path, good working dir default |
 | `inspire job wait` | Handles connection errors gracefully, clean progress display |
-| Resource matching | `8xH100` auto-resolves to correct spec ID |
+| Resource matching | `8xH200`, `4xH100` auto-resolves to correct spec ID |
 | Job status display | Clear, informative output |
 | Error recovery | Timeouts/connection errors handled with retries |
+| `inspire notebook status` | Shows uptime, node, priority — useful for debugging preemptions |
 
 ---
 
@@ -137,33 +166,19 @@ templates:
 | Priority | Issue | Effort | Impact | Status |
 |----------|-------|--------|--------|--------|
 | ~~P0~~ | ~~Auto bash wrapper~~ | ~~Low~~ | ~~High~~ | **Done** |
+| P0 | `bridge scp` file transfer | Low | High | **Done** |
 | P0 | `inspire run` one-liner | Medium | High | |
-| P1 | Faster log access | Medium | Medium | |
+| P1 | Faster log access | Medium | Medium | Partial (SSH fast-path exists) |
 | P1 | Job templates | Medium | Medium | |
 | P2 | Job history/comparison | High | Low | |
 
 ---
 
-## Session Stats
+## Session Stats (cumulative)
 
-- **Jobs created**: 50+
-- **Failed due to shell issues**: 5
-- **Time spent on log fetching**: ~10 min
-- **Repeated boilerplate commands**: 20+
-
----
-
-## Appendix: Example Session Flow
-
-```bash
-# What I did 10+ times:
-git add . && git commit -m "Add profiling script"
-inspire sync
-inspire job create --name "sprint-profile-v3" --resource "1xH100" \
-  --command 'bash -c "cd /inspire/.../JiT && source .venv/bin/activate && python scripts/profile.py"'
-inspire job wait job-xxxxx
-inspire job logs job-xxxxx --tail 100
-
-# What I wish I could do:
-inspire run scripts/profile.py --resource 1xH100 --sync
-```
+- **Jobs created**: 100+
+- **Notebooks managed concurrently**: 8
+- **Sync failures (Codeberg down)**: 3
+- **Failed due to shell issues**: 5 (pre-fix)
+- **Time spent on log fetching**: ~15 min
+- **Repeated boilerplate commands**: 30+

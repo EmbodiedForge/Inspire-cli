@@ -836,7 +836,9 @@ def _run_job_logs_single_job(
         elif refresh or not cache_path.exists():
             if not ctx.json_output:
                 click.echo(
-                    "Fetching remote log via Gitea workflow (first fetch may take ~10-30s)..."
+                    "Fetching remote log via Gitea workflow "
+                    "(deprecated -- will be removed in a future release; "
+                    "first fetch may take ~10-30s)..."
                 )
 
             try:

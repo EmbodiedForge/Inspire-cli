@@ -1,6 +1,6 @@
 """Human-readable output formatter for CLI commands.
 
-Provides pretty-printed output with colors and tables.
+Provides compact plain-text output for terminal and agent use.
 """
 
 from __future__ import annotations
@@ -25,9 +25,9 @@ def format_error(message: str, hint: Optional[str] = None) -> str:
     Returns:
         Formatted error string
     """
-    lines = [f"\n\u274c Error: {message}"]
+    lines = [f"Error: {message}"]
     if hint:
-        lines.append(f"\U0001f4a1 Hint: {hint}")
+        lines.append(f"Hint: {hint}")
     return "\n".join(lines)
 
 
@@ -40,7 +40,7 @@ def format_success(message: str) -> str:
     Returns:
         Formatted success string
     """
-    return f"\u2705 {message}"
+    return f"OK {message}"
 
 
 def format_warning(message: str) -> str:
@@ -52,7 +52,7 @@ def format_warning(message: str) -> str:
     Returns:
         Formatted warning string
     """
-    return f"\u26a0\ufe0f {message}"
+    return f"Warning: {message}"
 
 
 def print_error(message: str, hint: Optional[str] = None) -> None:
@@ -68,22 +68,6 @@ def print_success(message: str) -> None:
 # ---------------------------------------------------------------------------
 # Jobs
 # ---------------------------------------------------------------------------
-
-# Status emoji mapping
-STATUS_EMOJI = {
-    "PENDING": "\u23f3",  # hourglass
-    "RUNNING": "\U0001f3c3",  # runner
-    "SUCCEEDED": "\u2705",  # check mark
-    "FAILED": "\u274c",  # cross mark
-    "CANCELLED": "\U0001f6d1",  # stop sign
-    "UNKNOWN": "\u2753",  # question mark
-    # API snake_case variants
-    "job_succeeded": "\u2705",  # check mark
-    "job_failed": "\u274c",  # cross mark
-    "job_cancelled": "\U0001f6d1",  # stop sign
-}
-
-DEFAULT_STATUS_EMOJI = "\U0001f4ca"  # bar chart
 
 
 def _format_duration(ms: str) -> str:
@@ -114,7 +98,7 @@ def _format_timestamp(timestamp_ms: str) -> str:
 
 
 def format_job_status(job_data: Dict[str, Any]) -> str:
-    """Format job status as a pretty box.
+    """Format job status as compact key-value lines.
 
     Args:
         job_data: Job data from API response
@@ -122,21 +106,14 @@ def format_job_status(job_data: Dict[str, Any]) -> str:
     Returns:
         Formatted string with job status
     """
-    status = job_data.get("status", "UNKNOWN")
-    emoji = STATUS_EMOJI.get(status, DEFAULT_STATUS_EMOJI)
-
-    lines = [
-        "",
-        "\u256d" + "\u2500" * 50 + "\u256e",
-        "\u2502" + " Job Status".ljust(50) + "\u2502",
-        "\u251c" + "\u2500" * 50 + "\u2524",
-    ]
+    status = str(job_data.get("status", "UNKNOWN"))
+    lines = ["Job Status"]
 
     # Core fields
     fields = [
         ("Job ID", job_data.get("job_id", "N/A")),
         ("Name", job_data.get("name", "N/A")),
-        ("Status", f"{emoji} {status}"),
+        ("Status", status),
         ("Running Time", _format_duration(job_data.get("running_time_ms", "0"))),
     ]
 
@@ -155,10 +132,7 @@ def format_job_status(job_data: Dict[str, Any]) -> str:
         fields.append(("Finished", _format_timestamp(job_data["finished_at"])))
 
     for label, value in fields:
-        line = f" {label}:".ljust(15) + str(value)
-        lines.append("\u2502" + line.ljust(50) + "\u2502")
-
-    lines.append("\u2570" + "\u2500" * 50 + "\u256f")
+        lines.append(f"{label}: {value}")
 
     return "\n".join(lines)
 
@@ -173,15 +147,12 @@ def format_job_list(jobs: List[Dict[str, Any]]) -> str:
         Formatted table string
     """
     if not jobs:
-        return "\nNo jobs found in local cache.\n"
+        return "No jobs found in local cache."
 
     # Determine dynamic column widths to avoid truncation while keeping the table aligned.
     job_id_width = max(len("Job ID"), *(len(str(job.get("job_id", "N/A"))) for job in jobs))
     name_width = max(len("Name"), *(len(str(job.get("name", "N/A"))) for job in jobs))
-    status_strings = [
-        f"{STATUS_EMOJI.get(job.get('status', 'UNKNOWN'), DEFAULT_STATUS_EMOJI)} {job.get('status', 'UNKNOWN')}"
-        for job in jobs
-    ]
+    status_strings = [str(job.get("status", "UNKNOWN")) for job in jobs]
     status_width = (
         max(len("Status"), *(len(s) for s in status_strings)) if status_strings else len("Status")
     )
@@ -191,15 +162,8 @@ def format_job_list(jobs: List[Dict[str, Any]]) -> str:
         f"{'Job ID':<{job_id_width}} {'Name':<{name_width}} {'Status':<{status_width}} "
         f"{'Created':<{created_width}}"
     )
-    separator = "\u2500" * len(header_line)
-
-    lines = [
-        "",
-        "\U0001f4cb Recent Jobs",
-        separator,
-        header_line,
-        separator,
-    ]
+    separator = "-" * len(header_line)
+    lines = ["Jobs", header_line, separator]
 
     for job, status_str in zip(jobs, status_strings):
         job_id = str(job.get("job_id", "N/A"))
@@ -232,38 +196,31 @@ def format_resources(specs: List[Dict[str, Any]], groups: List[Dict[str, Any]]) 
     Returns:
         Formatted string with resources
     """
-    lines = [
-        "",
-        "\U0001f4ca Available Resources",
-        "",
-        "\U0001f5a5\ufe0f  GPU Configurations:",
-        "\u2500" * 60,
-    ]
+    lines = ["Available resources", "GPU configurations:"]
 
     for spec in specs:
         desc = spec.get("description", f"{spec.get('gpu_count', '?')}x GPU")
-        lines.append(f"  \u2022 {desc}")
+        lines.append(f"- {desc}")
 
     lines.extend(
         [
             "",
-            "\U0001f3e2 Compute Groups:",
-            "\u2500" * 60,
+            "Compute groups:",
         ]
     )
 
     for group in groups:
         name = group.get("name", "Unknown")
         location = group.get("location", "")
-        lines.append(f"  \u2022 {name}" + (f" ({location})" if location else ""))
+        lines.append(f"- {name}" + (f" ({location})" if location else ""))
 
     lines.extend(
         [
             "",
-            "\U0001f4a1 Usage Examples:",
-            "  \u2022 --resource 'H200'     -> 1x H200 GPU",
-            "  \u2022 --resource '4xH200'   -> 4x H200 GPU",
-            "  \u2022 --resource '8 H200'   -> 8x H200 GPU",
+            "Usage:",
+            "- --resource 'H200' -> 1x H200 GPU",
+            "- --resource '4xH200' -> 4x H200 GPU",
+            "- --resource '8 H200' -> 8x H200 GPU",
         ]
     )
 
@@ -281,14 +238,12 @@ def format_nodes(nodes: List[Dict[str, Any]], total: int = 0) -> str:
         Formatted table string
     """
     if not nodes:
-        return "\nNo nodes found.\n"
+        return "No nodes found."
 
     lines = [
-        "",
-        "\U0001f5a5\ufe0f  Cluster Nodes",
-        "\u2500" * 80,
+        "Cluster nodes",
         f"{'Node ID':<40} {'Pool':<12} {'Status':<12} {'GPUs':<8}",
-        "\u2500" * 80,
+        "-" * 80,
     ]
 
     for node in nodes:
@@ -299,7 +254,7 @@ def format_nodes(nodes: List[Dict[str, Any]], total: int = 0) -> str:
 
         lines.append(f"{node_id:<40} {pool:<12} {status:<12} {gpus:<8}")
 
-    lines.append("\u2500" * 80)
+    lines.append("-" * 80)
     if total:
         lines.append(f"Showing {len(nodes)} of {total} nodes")
     else:
@@ -318,14 +273,12 @@ def format_groups(groups: List[Any]) -> str:
         Formatted table string
     """
     if not groups:
-        return "\nNo compute groups found.\n"
+        return "No compute groups found."
 
     lines = [
-        "",
-        "\U0001f3e2 Compute Groups",
-        "\u2500" * 100,
+        "Compute groups",
         f"{'Group ID':<40} {'Name':<18} {'GPU':<8} {'Online':<8} {'Fault':<8} {'Free GPUs':<10}",
-        "\u2500" * 100,
+        "-" * 100,
     ]
 
     for group in groups:
@@ -349,7 +302,7 @@ def format_groups(groups: List[Any]) -> str:
             f"{group_id:<40} {name:<18} {gpu_type:<8} {online:<8} {fault:<8} {free_gpus:<10}"
         )
 
-    lines.append("\u2500" * 100)
+    lines.append("-" * 100)
     lines.append(f"Total: {len(groups)} group(s)")
 
     return "\n".join(lines)
@@ -370,7 +323,7 @@ def format_image_list(images: List[Dict[str, Any]]) -> str:
         Formatted table string
     """
     if not images:
-        return "\nNo images found.\n"
+        return "No images found."
 
     # Human-readable source labels
     source_labels = {
@@ -380,9 +333,8 @@ def format_image_list(images: List[Dict[str, Any]]) -> str:
     }
 
     lines = [
-        "",
         f"{'Name':<30} {'Version':<12} {'Source':<10} {'Status':<10} {'Framework':<14}",
-        "\u2500" * 80,
+        "-" * 80,
     ]
 
     for img in images:
@@ -395,7 +347,7 @@ def format_image_list(images: List[Dict[str, Any]]) -> str:
 
         lines.append(f"{name:<30} {version:<12} {source:<10} {status:<10} {framework:<14}")
 
-    lines.append("\u2500" * 80)
+    lines.append("-" * 80)
     lines.append(f"Total: {len(images)} image(s)")
 
     return "\n".join(lines)
@@ -411,12 +363,11 @@ def format_project_list(projects: List[Dict[str, Any]]) -> str:
         Formatted table string
     """
     if not projects:
-        return "\nNo projects found.\n"
+        return "No projects found."
 
     lines = [
-        "",
         f"{'Name':<24} {'Priority':<10} {'Budget remain':<16}",
-        "\u2500" * 52,
+        "-" * 52,
     ]
 
     for proj in projects:
@@ -427,14 +378,14 @@ def format_project_list(projects: List[Dict[str, Any]]) -> str:
 
         lines.append(f"{name:<24} {priority:<10} {budget_str:<16}")
 
-    lines.append("\u2500" * 52)
+    lines.append("-" * 52)
     lines.append(f"Total: {len(projects)} project(s)")
 
     return "\n".join(lines)
 
 
 def format_image_detail(image_data: Dict[str, Any]) -> str:
-    """Format image detail as a pretty box.
+    """Format image detail as compact key-value lines.
 
     Args:
         image_data: Image data dictionary
@@ -442,13 +393,7 @@ def format_image_detail(image_data: Dict[str, Any]) -> str:
     Returns:
         Formatted string with image details
     """
-    width = 64
-    lines = [
-        "",
-        "\u256d" + "\u2500" * width + "\u256e",
-        "\u2502" + " Image Detail".ljust(width) + "\u2502",
-        "\u251c" + "\u2500" * width + "\u2524",
-    ]
+    lines = ["Image Detail"]
 
     # Human-readable source labels
     source_labels = {
@@ -474,9 +419,6 @@ def format_image_detail(image_data: Dict[str, Any]) -> str:
 
     for label, value in fields:
         if value:
-            line = f" {label}:".ljust(15) + str(value)
-            lines.append("\u2502" + line[:width].ljust(width) + "\u2502")
-
-    lines.append("\u2570" + "\u2500" * width + "\u256f")
+            lines.append(f"{label}: {value}")
 
     return "\n".join(lines)

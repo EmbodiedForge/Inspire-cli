@@ -152,10 +152,9 @@ def test_bridge_exec_displays_output_log(monkeypatch: pytest.MonkeyPatch, tmp_pa
     result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--no-tunnel"])
 
     assert result.exit_code == EXIT_SUCCESS
-    assert "--- Command Output ---" in result.output
     assert "Hello from Bridge!" in result.output
     assert "Command completed." in result.output
-    assert "--- End Output ---" in result.output
+    assert result.output.strip().endswith("OK")
 
 
 def test_bridge_exec_json_includes_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -232,10 +231,7 @@ def test_bridge_exec_ssh_streaming_success(monkeypatch: pytest.MonkeyPatch, tmp_
     result = runner.invoke(cli_main, ["bridge", "exec", "echo test"])
 
     assert result.exit_code == EXIT_SUCCESS
-    assert "Using SSH tunnel (fast path)" in result.output
-    assert "--- Command Output ---" in result.output
-    assert "--- End Output ---" in result.output
-    assert "OK Command completed successfully (via SSH)" in result.output
+    assert result.output.strip().endswith("OK")
     # Verify streaming function was called (output was streamed)
     assert len(streamed_lines) == 3
 

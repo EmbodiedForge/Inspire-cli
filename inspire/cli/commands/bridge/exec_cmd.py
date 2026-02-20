@@ -53,6 +53,10 @@ def _build_remote_command(*, command: str, target_dir: str, remote_env: dict[str
     return f'{env_exports}cd "{target_dir}" && {command}'
 
 
+def _verbose_output(ctx: Context) -> bool:
+    return not ctx.json_output and ctx.debug
+
+
 def try_exec_via_ssh_tunnel(
     ctx: Context,
     *,
@@ -167,13 +171,13 @@ def try_exec_via_ssh_tunnel(
             )
             return EXIT_SUCCESS
 
-        click.echo("Using SSH tunnel (fast path)")
-        if bridge_name:
-            click.echo(f"Bridge: {bridge_name}")
-        click.echo(f"Command: {command}")
-        click.echo(f"Working dir: {config.target_dir}")
-        click.echo("")
-        click.echo("--- Command Output ---")
+        if _verbose_output(ctx):
+            click.echo("Using SSH tunnel (fast path)")
+            if bridge_name:
+                click.echo(f"Bridge: {bridge_name}")
+            click.echo(f"Command: {command}")
+            click.echo(f"Working dir: {config.target_dir}")
+            click.echo("--- Command Output ---")
 
         exit_code = run_ssh_command_streaming_fn(
             command=full_command,
@@ -181,18 +185,18 @@ def try_exec_via_ssh_tunnel(
             timeout=timeout_s,
         )
 
-        click.echo("--- End Output ---")
-        click.echo("")
+        if _verbose_output(ctx):
+            click.echo("--- End Output ---")
 
         if exit_code != 0:
             click.echo(f"Command failed with exit code {exit_code}", err=True)
             return EXIT_GENERAL_ERROR
 
-        click.echo("OK Command completed successfully (via SSH)")
+        click.echo("OK")
         return EXIT_SUCCESS
 
     except TunnelNotAvailableError:
-        if not ctx.json_output:
+        if _verbose_output(ctx):
             click.echo("Tunnel not available, using Gitea workflow...", err=True)
         return None
     except subprocess.TimeoutExpired:
@@ -209,9 +213,16 @@ def try_exec_via_ssh_tunnel(
             click.echo(f"Command timed out after {timeout_s}s", err=True)
         return EXIT_TIMEOUT
     except Exception as e:
-        if not ctx.json_output:
+        if _verbose_output(ctx):
             click.echo(f"SSH execution failed: {e}", err=True)
             click.echo("Falling back to Gitea workflow...", err=True)
+            click.echo(
+                "Warning: Git Actions fallback is deprecated and will be removed "
+                "in a future release. Use SSH tunnel instead.",
+                err=True,
+            )
+        elif not ctx.json_output:
+            click.echo("SSH execution failed, using workflow fallback", err=True)
         return None
 
 
@@ -238,13 +249,13 @@ def exec_via_workflow(
         merged_denylist.extend(config.bridge_action_denylist)
     merged_denylist.extend(split_denylist(denylist))
 
-    if not merged_denylist and not ctx.json_output:
+    if not merged_denylist and _verbose_output(ctx):
         click.echo("Warning: no denylist provided; proceeding", err=True)
 
     request_id = f"{int(time.time())}-{os.getpid()}"
     artifact_paths_list = list(artifact_path)
 
-    if not ctx.json_output:
+    if _verbose_output(ctx):
         click.echo(f"Triggering bridge exec (request {request_id})")
         click.echo(f"Command: {command}")
         click.echo(f"Working dir: {config.target_dir}")
@@ -283,10 +294,10 @@ def exec_via_workflow(
                 )
             )
         else:
-            click.echo("Workflow dispatched; not waiting for completion")
+            click.echo(f"Triggered bridge exec request {request_id}")
         return EXIT_SUCCESS
 
-    if not ctx.json_output:
+    if _verbose_output(ctx):
         click.echo(f"Waiting for completion (timeout {timeout_s}s)...")
 
     try:
@@ -318,11 +329,14 @@ def exec_via_workflow(
         pass
 
     if output_log and not ctx.json_output:
-        click.echo("")
-        click.echo("--- Command Output ---")
-        click.echo(output_log)
-        click.echo("--- End Output ---")
-        click.echo("")
+        if _verbose_output(ctx):
+            click.echo("")
+            click.echo("--- Command Output ---")
+            click.echo(output_log)
+            click.echo("--- End Output ---")
+            click.echo("")
+        else:
+            click.echo(output_log)
 
     if result.get("conclusion") != "success":
         if ctx.json_output:
@@ -344,7 +358,7 @@ def exec_via_workflow(
         return EXIT_GENERAL_ERROR
 
     if download:
-        if not ctx.json_output:
+        if _verbose_output(ctx):
             click.echo(f"Downloading artifact to {download}...")
         try:
             download_bridge_artifact_fn(config, request_id, Path(download))
@@ -374,11 +388,16 @@ def exec_via_workflow(
             )
         )
     else:
-        click.echo("OK Action completed successfully")
-        if result.get("html_url"):
-            click.echo(f"Workflow: {result.get('html_url')}")
-        if download:
-            click.echo("Artifacts downloaded")
+        if _verbose_output(ctx):
+            click.echo("OK Action completed successfully")
+            if result.get("html_url"):
+                click.echo(f"Workflow: {result.get('html_url')}")
+            if download:
+                click.echo("Artifacts downloaded")
+        elif download:
+            click.echo("OK (artifacts downloaded)")
+        else:
+            click.echo("OK")
 
     return EXIT_SUCCESS
 
@@ -417,7 +436,7 @@ def exec_via_workflow(
     "-b",
     help="Bridge profile to use for SSH tunnel execution",
 )
-@click.option("--no-tunnel", is_flag=True, help="Force use of Gitea workflow (skip SSH tunnel)")
+@click.option("--no-tunnel", is_flag=True, help="Force use of Gitea workflow (deprecated)")
 @pass_context
 def exec_command(
     ctx: Context,

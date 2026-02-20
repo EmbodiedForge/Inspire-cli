@@ -84,7 +84,7 @@ def _run_sync_if_requested(ctx: Context, *, sync: bool, watch: bool) -> None:
     if not (sync or watch):
         return
 
-    if not ctx.json_output:
+    if ctx.debug and not ctx.json_output:
         click.echo("Syncing code...")
 
     if _check_uncommitted_changes():
@@ -118,7 +118,7 @@ def _resolve_run_resource_and_location(
     if location:
         return f"{gpus}x{gpu_type}", location
 
-    if not ctx.json_output:
+    if ctx.debug and not ctx.json_output:
         click.echo("Checking GPU availability...")
 
     best, selected_location, selected_group_name = find_best_compute_group_location(
@@ -155,7 +155,7 @@ def _resolve_run_resource_and_location(
     if selected_location:
         location = selected_location
 
-    if not ctx.json_output:
+    if ctx.debug and not ctx.json_output:
         if getattr(best, "selection_source", "") == "nodes" and getattr(best, "free_nodes", 0):
             click.echo(
                 "Auto-selected: "
@@ -236,7 +236,7 @@ def _run_flow(
             branch_suffix = f"-{branch}" if branch else ""
             name = f"run-{timestamp}{branch_suffix}"
 
-        if not ctx.json_output:
+        if ctx.debug and not ctx.json_output:
             click.echo(f"Creating job '{name}'...")
 
         time.sleep(0.5)
@@ -253,7 +253,7 @@ def _run_flow(
             return
         project_id = selected_project.project_id
 
-        if not ctx.json_output:
+        if ctx.debug and not ctx.json_output:
             if fallback_msg:
                 click.echo(fallback_msg)
             click.echo(
@@ -293,33 +293,36 @@ def _run_flow(
                 if isinstance(result, dict):
                     message = result.get("message") or "Job created (no job ID returned)"
                     click.echo(human_formatter.format_success(message))
-                    if result.get("data"):
+                    if result.get("data") and ctx.debug:
                         click.echo(str(result["data"]))
                 else:
                     click.echo(human_formatter.format_success("Job created"))
-                    click.echo(str(result))
+                    if ctx.debug:
+                        click.echo(str(result))
             sys.exit(EXIT_SUCCESS)
 
         if ctx.json_output:
             click.echo(json_formatter.format_json(data))
         else:
-            click.echo(human_formatter.format_success(f"Job created: {job_id}"))
-            click.echo(f"\nName:     {name}")
-            click.echo(f"Resource: {resource_str}")
-            if nodes > 1:
-                click.echo(f"Nodes:    {nodes}")
-            click.echo(
-                f"Command:  {wrapped_command[:80]}{'...' if len(wrapped_command) > 80 else ''}"
-            )
-            if log_path:
-                click.echo(f"Log file: {log_path}")
-            click.echo(f"\nCheck status with: inspire job status {job_id}")
+            click.echo(f"Job created: {job_id}")
+            if ctx.debug:
+                click.echo(f"Name: {name}")
+                click.echo(f"Resource: {resource_str}")
+                if nodes > 1:
+                    click.echo(f"Nodes: {nodes}")
+                click.echo(
+                    f"Command: {wrapped_command[:80]}{'...' if len(wrapped_command) > 80 else ''}"
+                )
+                if log_path:
+                    click.echo(f"Log file: {log_path}")
+                click.echo(f"Check status with: inspire job status {job_id}")
 
         if watch:
             if ctx.json_output:
                 sys.exit(EXIT_SUCCESS)
 
-            click.echo("\nFollowing logs...")
+            if ctx.debug:
+                click.echo("Following logs...")
             try:
                 _exec_inspire_subcommand(["job", "logs", job_id, "--follow"])
             except Exception as e:

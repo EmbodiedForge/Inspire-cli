@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import select
 import subprocess
 import time
@@ -21,6 +22,17 @@ from .ssh import _get_proxy_command
 # ---------------------------------------------------------------------------
 # Core helpers
 # ---------------------------------------------------------------------------
+
+
+def _build_ssh_process_env() -> dict[str, str]:
+    """Build environment for SSH subprocesses with a universally available locale.
+
+    This prevents remote login shells from inheriting unsupported locale values
+    (for example ``en_US.UTF-8``) via SSH env forwarding.
+    """
+    env = os.environ.copy()
+    env.update({"LC_ALL": "C", "LANG": "C"})
+    return env
 
 
 def _resolve_bridge_and_proxy(
@@ -107,6 +119,7 @@ def run_ssh_command(
         text=True,
         timeout=timeout,
         check=check,
+        env=_build_ssh_process_env(),
     )
 
 
@@ -162,6 +175,7 @@ def run_ssh_command_streaming(
         stderr=subprocess.STDOUT,
         bufsize=1,
         universal_newlines=True,
+        env=_build_ssh_process_env(),
     )
 
     # Feed the command via stdin so it never appears in the process cmdline.
@@ -213,6 +227,7 @@ def run_ssh_command_streaming(
 
 
 __all__ = [
+    "_build_ssh_process_env",
     "_build_ssh_base_args",
     "_build_stdin_script",
     "_resolve_bridge_and_proxy",
