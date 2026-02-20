@@ -184,7 +184,6 @@ def sync_via_tunnel(
     commit_sha: str,
     commit_msg: str,
     remote: str,
-    force: bool,
     timeout: int,
     offline_bundle: bool = False,
     bridge_name: Optional[str] = None,
@@ -202,7 +201,6 @@ def sync_via_tunnel(
             target_dir=config.target_dir,
             branch=branch,
             commit_sha=commit_sha,
-            force=force,
             bridge_name=bridge_name,
             config=tunnel_config,
             timeout=timeout,
@@ -213,7 +211,6 @@ def sync_via_tunnel(
             branch=branch,
             commit_sha=commit_sha,
             remote=remote,
-            force=force,
             bridge_name=bridge_name,
             config=tunnel_config,
             timeout=timeout,
@@ -277,7 +274,6 @@ def sync_via_workflow(
     commit_sha: str,
     commit_msg: str,
     remote: str,
-    force: bool,
     wait: bool,
     timeout: int,
 ) -> int:
@@ -286,7 +282,7 @@ def sync_via_workflow(
         click.echo("Triggering sync workflow...")
 
     try:
-        run_id = trigger_sync_workflow(config, branch, commit_sha, force)
+        run_id = trigger_sync_workflow(config, branch, commit_sha)
     except (ForgeError, ForgeAuthError, GiteaError, GiteaAuthError) as e:
         if ctx.json_output:
             click.echo(
@@ -418,12 +414,6 @@ def sync_via_workflow(
     help="Allow sync with uncommitted changes (syncs committed HEAD only)",
 )
 @click.option(
-    "--force",
-    "-f",
-    is_flag=True,
-    help="Force sync on Bridge (git reset --hard), discarding any local changes there",
-)
-@click.option(
     "--wait/--no-wait",
     default=True,
     help="Wait for sync to complete (default: wait)",
@@ -452,7 +442,6 @@ def sync(
     remote: Optional[str],
     no_push: bool,
     allow_dirty: bool,
-    force: bool,
     wait: bool,
     timeout: int,
     transport: str,
@@ -473,7 +462,6 @@ def sync(
         inspire sync --branch feature/new     # Sync specific branch
         inspire sync --no-push                # Skip git push, sync only
         inspire sync --allow-dirty            # Sync committed HEAD even if worktree is dirty
-        inspire sync --force                  # Force reset on Bridge
 
     \b
     Environment variables:
@@ -651,7 +639,6 @@ def sync(
             commit_sha=commit_sha,
             commit_msg=commit_msg,
             remote=remote,
-            force=force,
             timeout=timeout,
             offline_bundle=use_offline_bundle,
             bridge_name=selected_bridge.name,
@@ -666,7 +653,6 @@ def sync(
         commit_sha=commit_sha,
         commit_msg=commit_msg,
         remote=remote,
-        force=force,
         wait=wait,
         timeout=timeout,
     )
