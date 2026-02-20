@@ -79,6 +79,14 @@ inspire notebook ...
 inspire init
 ```
 
+## SSH/SCP Reliability Semantics
+
+- `inspire bridge ssh` and `inspire bridge scp` should validate explicit `--bridge` names first and return `BridgeNotFound` guidance when missing (`inspire tunnel list`).
+- For tunnel failures (profile exists but SSH unavailable), the recovery flow is `inspire tunnel status`, then re-create via `inspire notebook ssh <notebook-id> --save-as <name>` when needed.
+- There is no `inspire tunnel start` command in this CLI.
+- `BridgeProfile` supports optional `notebook_id`; notebook SSH fast-path reuse is only valid when cached `notebook_id` matches the requested notebook.
+- `generate_ssh_config()` must reuse `_get_proxy_command()` so `ProxyCommand` remains shell-quoted and safe for URLs/paths with special characters.
+
 ## Configuration Model
 
 ### Precedence

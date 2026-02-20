@@ -51,10 +51,14 @@ Sync requires an active SSH tunnel by default. Pass `--via-action` to allow fall
 ```bash
 inspire bridge exec "ls /path/to/output"           # Run command on Bridge
 inspire bridge exec --no-tunnel "cmd"              # Force workflow path
-inspire bridge ssh                                  # Interactive SSH shell
+inspire bridge ssh --bridge mybridge               # Interactive SSH shell
+inspire bridge scp ./model.py /tmp/model.py --bridge mybridge
+inspire bridge scp -d /tmp/results.tar.gz ./results.tar.gz --bridge mybridge
 ```
 
 Commands execute in INSPIRE_TARGET_DIR on the Bridge runner.
+If `--bridge` is missing/incorrect, use `inspire tunnel list`. If profile exists but SSH fails, use
+`inspire tunnel status` and refresh via `inspire notebook ssh <notebook-id> --save-as <name>`.
 
 ### Notebooks
 
@@ -78,7 +82,7 @@ inspire tunnel test                                # Test connection + timing
 inspire tunnel set-default mybridge
 inspire tunnel update mybridge "https://new-url..."
 inspire tunnel remove mybridge
-inspire tunnel ssh-config --install                # Add to ~/.ssh/config
+inspire tunnel ssh-config --install                # Add shell-quoted ProxyCommand to ~/.ssh/config
 ssh mybridge                                       # Direct SSH after ssh-config
 ```
 
@@ -200,6 +204,9 @@ inspire tunnel status
 ssh bridge
 ```
 
+`--save-as` profiles are notebook-bound. Reusing the same name for a different notebook refreshes the
+tunnel mapping instead of reusing stale settings.
+
 ### Install packages (compute nodes have no internet)
 
 ```bash
@@ -215,6 +222,8 @@ ssh bridge-cpu "cd /path/to/project && pip install package-name"
 4. **Compute nodes have NO internet** -- Use a CPU workspace/bridge for `pip install`, `git clone`, downloads.
 5. **Priority range is 1-10** -- Values outside this range cause errors.
 6. **SSH tunnel = instant execution** -- Without a tunnel, `bridge exec` falls back to a workflow (~30-60s).
-7. **Python output buffering** -- Use `print(..., flush=True)` or `PYTHONUNBUFFERED=1` for live log output.
-8. **`[remote_env]` vars are auto-injected** into `bridge exec`, `bridge ssh`, `job create`, and `run` commands.
-9. **`git pull` fails on GPU nodes** -- No internet. Use `inspire sync` via a bridge with internet access instead.
+7. **No `tunnel start` command** -- Create/refresh bridge profiles with `notebook ssh --save-as` or `tunnel add/update`, then verify via `tunnel status`.
+8. **Notebook `--save-as` profiles are notebook-bound** -- Reusing an alias on another notebook refreshes that alias before SSH.
+9. **Python output buffering** -- Use `print(..., flush=True)` or `PYTHONUNBUFFERED=1` for live log output.
+10. **`[remote_env]` vars are auto-injected** into `bridge exec`, `bridge ssh`, `job create`, and `run` commands.
+11. **`git pull` fails on GPU nodes** -- No internet. Use `inspire sync` via a bridge with internet access instead.
