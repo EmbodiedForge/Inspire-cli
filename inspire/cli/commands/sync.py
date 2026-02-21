@@ -201,6 +201,68 @@ def _effective_push_mode(
     return "required"
 
 
+def _is_locale_warning(line: str) -> bool:
+    """Return True when *line* is a known locale warning we intentionally hide."""
+    return "setlocale:" in line and "cannot change locale" in line
+
+
+def _normalize_sync_error(raw_error: object) -> str:
+    """Normalize sync stderr/stdout text for user-facing reporting.
+
+    - Drops locale warning chatter that does not affect sync behavior.
+    - Removes duplicate lines while preserving first-seen order.
+    """
+    text = str(raw_error or "").strip()
+    if not text:
+        return "Unknown error"
+
+    lines: list[str] = []
+    seen: set[str] = set()
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or _is_locale_warning(line):
+            continue
+        key = line.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(line)
+
+    if not lines:
+        return "Unknown error"
+    return "\n".join(lines)
+
+
+def _is_ff_divergence_error(error_text: str) -> bool:
+    """Detect fast-forward divergence errors from git output."""
+    lowered = error_text.lower()
+    return (
+        "not possible to fast-forward" in lowered
+        or "diverging branches can't be fast-forwarded" in lowered
+    )
+
+
+def _summarize_sync_failure(
+    *,
+    raw_error: object,
+    branch: str,
+    remote: str,
+) -> tuple[str, Optional[str], str]:
+    """Build concise sync failure message + hint + normalized details."""
+    normalized = _normalize_sync_error(raw_error)
+
+    if _is_ff_divergence_error(normalized):
+        message = f"Branch '{branch}' on Bridge diverged and cannot be fast-forwarded."
+        hint = (
+            f"Reconcile branch history (merge/rebase) and retry sync. "
+            f"If you expected a fresh tip, push '{branch}' to '{remote}' first."
+        )
+        return message, hint, normalized
+
+    first_line = normalized.splitlines()[0].strip() if normalized else "Unknown error"
+    return first_line, None, normalized
+
+
 def sync_via_tunnel(
     ctx: Context,
     config: Config,
@@ -280,17 +342,29 @@ def sync_via_tunnel(
                 )
         return EXIT_SUCCESS
 
+    message, hint, details = _summarize_sync_failure(
+        raw_error=result.get("error"),
+        branch=branch,
+        remote=remote,
+    )
+
     if ctx.json_output:
         click.echo(
             json_formatter.format_json_error(
                 "SyncError",
-                str(result.get("error")),
+                message,
                 EXIT_GENERAL_ERROR,
+                hint=hint,
             ),
             err=True,
         )
     else:
-        click.echo(f"Sync failed: {result.get('error')}", err=True)
+        click.echo(f"Sync failed: {message}", err=True)
+        if hint:
+            click.echo(f"Hint: {hint}", err=True)
+        if ctx.debug and details and details != message:
+            click.echo("Details:", err=True)
+            click.echo(details, err=True)
     return EXIT_GENERAL_ERROR
 
 

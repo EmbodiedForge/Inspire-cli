@@ -1,4 +1,5 @@
 import importlib
+import json
 from pathlib import Path
 from typing import Any, Dict
 
@@ -568,3 +569,122 @@ def test_sync_allow_dirty_continues_with_committed_head(
     assert result.exit_code == EXIT_SUCCESS
     assert captured["commit_sha"] == "a" * 40
     assert "syncing committed tip of 'main' only" in result.output
+
+
+def test_sync_failure_summarizes_divergence_and_filters_locale_noise(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_sync_config(tmp_path)
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+    _patch_common_git_helpers(monkeypatch)
+    monkeypatch.setattr(
+        sync_cmd_module, "load_tunnel_config", make_gpu_only_no_internet_tunnel_config
+    )
+    monkeypatch.setattr(sync_cmd_module, "is_tunnel_available", lambda *args, **kwargs: True)
+
+    raw_error = """
+bash: warning: setlocale: LC_ALL: cannot change locale (en_US.UTF-8)
+From /tmp/inspire-sync-lcfhcmjl.bundle
+ * branch            deadbeef -> FETCH_HEAD
+Already on 'main'
+hint: Diverging branches can't be fast-forwarded, you need to either:
+fatal: Not possible to fast-forward, aborting.
+""".strip()
+
+    monkeypatch.setattr(
+        sync_cmd_module,
+        "sync_via_ssh_bundle",
+        lambda *args, **kwargs: {"success": False, "synced_sha": None, "error": raw_error},
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["sync", "--no-push", "--source", "bundle"])
+
+    assert result.exit_code == EXIT_GENERAL_ERROR
+    assert (
+        "Sync failed: Branch 'main' on Bridge diverged and cannot be fast-forwarded."
+        in result.output
+    )
+    assert "Hint: Reconcile branch history (merge/rebase) and retry sync." in result.output
+    assert "setlocale" not in result.output
+    assert "Diverging branches can't be fast-forwarded" not in result.output
+
+
+def test_sync_failure_shows_raw_details_only_in_debug_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_sync_config(tmp_path)
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+    _patch_common_git_helpers(monkeypatch)
+    monkeypatch.setattr(sync_cmd_module, "load_tunnel_config", make_tunnel_config)
+    monkeypatch.setattr(sync_cmd_module, "is_tunnel_available", lambda *args, **kwargs: True)
+
+    raw_error = "fatal: example sync failure\nextra detail line"
+    monkeypatch.setattr(
+        sync_cmd_module,
+        "sync_via_ssh",
+        lambda *args, **kwargs: {"success": False, "synced_sha": None, "error": raw_error},
+    )
+
+    runner = CliRunner()
+    normal = runner.invoke(cli_main, ["sync", "--no-push", "--source", "remote"])
+    debug = runner.invoke(cli_main, ["--debug", "sync", "--no-push", "--source", "remote"])
+
+    assert normal.exit_code == EXIT_GENERAL_ERROR
+    assert "Sync failed: fatal: example sync failure" in normal.output
+    assert "extra detail line" not in normal.output
+
+    assert debug.exit_code == EXIT_GENERAL_ERROR
+    assert "Sync failed: fatal: example sync failure" in debug.output
+    assert "Details:" in debug.output
+    assert "extra detail line" in debug.output
+
+
+def test_sync_failure_json_output_uses_summarized_message_and_hint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_sync_config(tmp_path)
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+    _patch_common_git_helpers(monkeypatch)
+    monkeypatch.setattr(
+        sync_cmd_module, "load_tunnel_config", make_gpu_only_no_internet_tunnel_config
+    )
+    monkeypatch.setattr(sync_cmd_module, "is_tunnel_available", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        sync_cmd_module,
+        "sync_via_ssh_bundle",
+        lambda *args, **kwargs: {
+            "success": False,
+            "synced_sha": None,
+            "error": "bash: warning: setlocale: LC_ALL: cannot change locale (en_US.UTF-8)\n"
+            "fatal: Not possible to fast-forward, aborting.",
+        },
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["--json", "sync", "--no-push", "--source", "bundle"])
+
+    assert result.exit_code == EXIT_GENERAL_ERROR
+    payload = json.loads(result.output)
+    assert payload["success"] is False
+    assert (
+        payload["error"]["message"]
+        == "Branch 'main' on Bridge diverged and cannot be fast-forwarded."
+    )
+    assert "Reconcile branch history" in payload["error"]["hint"]
+    assert "setlocale" not in payload["error"]["message"]
