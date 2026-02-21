@@ -456,6 +456,7 @@ class TestBridgeProfile:
             proxy_url="https://proxy.example.com",
             ssh_user="admin",
             ssh_port=22222,
+            rtunnel_port=31337,
         )
 
         d = profile.to_dict()
@@ -464,6 +465,7 @@ class TestBridgeProfile:
         assert d["proxy_url"] == "https://proxy.example.com"
         assert d["ssh_user"] == "admin"
         assert d["ssh_port"] == 22222
+        assert d["rtunnel_port"] == 31337
 
     def test_from_dict(self) -> None:
         """Test creating profile from dict."""
@@ -472,6 +474,7 @@ class TestBridgeProfile:
             "proxy_url": "https://proxy.example.com",
             "ssh_user": "admin",
             "ssh_port": 22222,
+            "rtunnel_port": 31337,
         }
 
         profile = BridgeProfile.from_dict(d)
@@ -480,6 +483,7 @@ class TestBridgeProfile:
         assert profile.proxy_url == "https://proxy.example.com"
         assert profile.ssh_user == "admin"
         assert profile.ssh_port == 22222
+        assert profile.rtunnel_port == 31337
 
     def test_from_dict_with_defaults(self) -> None:
         """Test creating profile from dict with default values."""
@@ -494,6 +498,17 @@ class TestBridgeProfile:
         assert profile.ssh_user == "root"  # default
         assert profile.ssh_port == 22222  # default
         assert profile.has_internet is True  # default
+        assert profile.rtunnel_port == 31337
+
+    def test_from_dict_infers_rtunnel_port_from_proxy_url(self) -> None:
+        d = {
+            "name": "test-bridge",
+            "proxy_url": "https://proxy.example.com/notebook/abc/proxy/32222/",
+        }
+
+        profile = BridgeProfile.from_dict(d)
+
+        assert profile.rtunnel_port == 32222
 
     def test_has_internet_field(self) -> None:
         """Test has_internet field in BridgeProfile."""

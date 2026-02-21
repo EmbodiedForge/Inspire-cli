@@ -530,14 +530,13 @@ def test_bridge_ssh_uses_requested_bridge(monkeypatch: pytest.MonkeyPatch, tmp_p
         captured["ssh_bridge"] = kwargs.get("bridge_name")
         return ["ssh", "root@localhost"]
 
-    def fake_execvp(file: str, args: List[str]) -> None:
-        captured["execvp_file"] = file
-        captured["execvp_args"] = args
-        raise SystemExit(0)
+    def fake_call(args: List[str]) -> int:
+        captured["ssh_args"] = args
+        return 0
 
     monkeypatch.setattr(ssh_cmd_module, "is_tunnel_available", fake_is_tunnel_available)
     monkeypatch.setattr(ssh_cmd_module, "get_ssh_command_args", fake_get_ssh_command_args)
-    monkeypatch.setattr(ssh_cmd_module.os, "execvp", fake_execvp)
+    monkeypatch.setattr(ssh_cmd_module.subprocess, "call", fake_call)
 
     runner = CliRunner()
     result = runner.invoke(cli_main, ["bridge", "ssh", "--bridge", "gpu-main"])
@@ -545,7 +544,141 @@ def test_bridge_ssh_uses_requested_bridge(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert result.exit_code == 0
     assert captured["available_bridge"] == "gpu-main"
     assert captured["ssh_bridge"] == "gpu-main"
-    assert captured["execvp_file"] == "ssh"
+    assert captured["ssh_args"][0] == "ssh"
+
+
+def test_bridge_ssh_rebuilds_notebook_tunnel_before_connect(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_sync_config(tmp_path)
+    config.target_dir = str(tmp_path / "project")
+    config.tunnel_retries = 2
+    config.tunnel_retry_pause = 0.0
+    calls: Dict[str, Any] = {"availability": 0, "rebuild": 0, "ssh": 0}
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+
+    tunnel_config = TunnelConfig()
+    tunnel_config.add_bridge(
+        BridgeProfile(
+            name="gpu-main",
+            proxy_url="https://proxy.example.com/proxy/31337/",
+            notebook_id="notebook-1",
+        )
+    )
+    monkeypatch.setattr(ssh_cmd_module, "load_tunnel_config", lambda: tunnel_config)
+
+    def fake_is_tunnel_available(*args: Any, **kwargs: Any) -> bool:
+        calls["availability"] += 1
+        return calls["availability"] > 1
+
+    def fake_get_ssh_command_args(*args: Any, **kwargs: Any) -> List[str]:
+        return ["ssh", "root@localhost"]
+
+    def fake_call(args: List[str]) -> int:  # noqa: ARG001
+        calls["ssh"] += 1
+        return 0
+
+    def fake_rebuild(*args: Any, **kwargs: Any) -> BridgeProfile:
+        calls["rebuild"] += 1
+        return tunnel_config.bridges["gpu-main"]
+
+    monkeypatch.setattr(ssh_cmd_module, "is_tunnel_available", fake_is_tunnel_available)
+    monkeypatch.setattr(ssh_cmd_module, "get_ssh_command_args", fake_get_ssh_command_args)
+    monkeypatch.setattr(ssh_cmd_module.subprocess, "call", fake_call)
+    monkeypatch.setattr(ssh_cmd_module, "require_web_session", lambda ctx, hint: object())
+    monkeypatch.setattr(ssh_cmd_module, "load_ssh_public_key_material", lambda: "ssh-ed25519 AAA")
+    monkeypatch.setattr(ssh_cmd_module, "resolve_ssh_runtime_config", lambda: object())
+    monkeypatch.setattr(ssh_cmd_module, "rebuild_notebook_bridge_profile", fake_rebuild)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["bridge", "ssh", "--bridge", "gpu-main"])
+
+    assert result.exit_code == 0
+    assert calls["rebuild"] == 1
+    assert calls["ssh"] == 1
+
+
+def test_bridge_ssh_reconnects_after_disconnect(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_sync_config(tmp_path)
+    config.target_dir = str(tmp_path / "project")
+    config.tunnel_retries = 2
+    config.tunnel_retry_pause = 0.0
+    calls: Dict[str, Any] = {"rebuild": 0}
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+
+    tunnel_config = TunnelConfig()
+    tunnel_config.add_bridge(
+        BridgeProfile(
+            name="gpu-main",
+            proxy_url="https://proxy.example.com/proxy/31337/",
+            notebook_id="notebook-1",
+        )
+    )
+    monkeypatch.setattr(ssh_cmd_module, "load_tunnel_config", lambda: tunnel_config)
+    monkeypatch.setattr(ssh_cmd_module, "is_tunnel_available", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        ssh_cmd_module, "get_ssh_command_args", lambda *args, **kwargs: ["ssh", "root@localhost"]
+    )
+
+    ssh_return_codes = iter([255, 0])
+    monkeypatch.setattr(ssh_cmd_module.subprocess, "call", lambda args: next(ssh_return_codes))
+    monkeypatch.setattr(ssh_cmd_module, "require_web_session", lambda ctx, hint: object())
+    monkeypatch.setattr(ssh_cmd_module, "load_ssh_public_key_material", lambda: "ssh-ed25519 AAA")
+    monkeypatch.setattr(ssh_cmd_module, "resolve_ssh_runtime_config", lambda: object())
+
+    def fake_rebuild(*args: Any, **kwargs: Any) -> BridgeProfile:
+        calls["rebuild"] += 1
+        return tunnel_config.bridges["gpu-main"]
+
+    monkeypatch.setattr(ssh_cmd_module, "rebuild_notebook_bridge_profile", fake_rebuild)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["bridge", "ssh", "--bridge", "gpu-main"])
+
+    assert result.exit_code == 0
+    assert calls["rebuild"] == 1
+
+
+def test_bridge_ssh_unavailable_non_notebook_bridge_errors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_sync_config(tmp_path)
+    config.target_dir = str(tmp_path / "project")
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+
+    tunnel_config = TunnelConfig()
+    tunnel_config.add_bridge(BridgeProfile(name="gpu-main", proxy_url="https://proxy.example.com"))
+
+    monkeypatch.setattr(ssh_cmd_module, "load_tunnel_config", lambda: tunnel_config)
+    monkeypatch.setattr(ssh_cmd_module, "is_tunnel_available", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        ssh_cmd_module,
+        "rebuild_notebook_bridge_profile",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not rebuild")),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["bridge", "ssh", "--bridge", "gpu-main"])
+
+    assert result.exit_code == EXIT_GENERAL_ERROR
+    assert "cannot be rebuilt automatically" in result.output
 
 
 def test_bridge_ssh_missing_bridge_reports_bridge_not_found(

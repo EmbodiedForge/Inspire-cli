@@ -95,6 +95,7 @@ inspire project list
 - There is no `inspire tunnel start` command. Create or refresh bridge profiles with `inspire notebook ssh <notebook-id> --save-as <name>` (or `inspire tunnel add` / `inspire tunnel update`), then validate with `inspire tunnel status`.
 - `inspire bridge ssh` and `inspire bridge scp` validate `--bridge` names before connectivity checks. If a profile is missing, run `inspire tunnel list`.
 - Saved notebook profiles now store the source notebook ID. Reusing `--save-as <name>` for a different notebook refreshes the tunnel instead of reusing stale tunnel state.
+- `inspire bridge ssh` and interactive `inspire notebook ssh` now auto-rebuild and reconnect dropped tunnels for notebook-backed profiles, using `tunnel.retries` / `tunnel.retry_pause` as retry controls.
 - `inspire tunnel ssh-config` now writes shell-quoted `ProxyCommand` entries so proxy URLs with query parameters/tokens remain safe in `~/.ssh/config`.
 
 ## Configuration

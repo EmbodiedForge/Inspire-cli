@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -22,6 +23,27 @@ class BridgeNotFoundError(TunnelError):
 # Default configuration
 DEFAULT_SSH_USER = "root"
 DEFAULT_SSH_PORT = 22222
+DEFAULT_RTUNNEL_PORT = 31337
+_PROXY_PORT_RE = re.compile(r"/proxy/(\d+)/")
+
+
+def _coerce_rtunnel_port(value: object) -> Optional[int]:
+    if value in (None, ""):
+        return None
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        return None
+    if port <= 0 or port > 65535:
+        return None
+    return port
+
+
+def _proxy_port_from_url(proxy_url: str) -> Optional[int]:
+    match = _PROXY_PORT_RE.search(str(proxy_url))
+    if not match:
+        return None
+    return _coerce_rtunnel_port(match.group(1))
 
 
 def has_internet_for_gpu_type(gpu_type: str) -> bool:
@@ -61,6 +83,8 @@ class BridgeProfile:
     has_internet: bool = True  # Whether this bridge has internet access
     # Optional notebook binding for saved notebook SSH profiles.
     notebook_id: Optional[str] = None
+    # Optional rtunnel server port in the notebook.
+    rtunnel_port: Optional[int] = None
 
     def to_dict(self) -> dict:
         payload = {
@@ -72,17 +96,26 @@ class BridgeProfile:
         }
         if self.notebook_id:
             payload["notebook_id"] = self.notebook_id
+        if self.rtunnel_port is not None:
+            payload["rtunnel_port"] = self.rtunnel_port
         return payload
 
     @classmethod
     def from_dict(cls, data: dict) -> "BridgeProfile":
+        proxy_url = data["proxy_url"]
+        rtunnel_port = (
+            _coerce_rtunnel_port(data.get("rtunnel_port"))
+            or _proxy_port_from_url(proxy_url)
+            or DEFAULT_RTUNNEL_PORT
+        )
         return cls(
             name=data["name"],
-            proxy_url=data["proxy_url"],
+            proxy_url=proxy_url,
             ssh_user=data.get("ssh_user", DEFAULT_SSH_USER),
             ssh_port=data.get("ssh_port", DEFAULT_SSH_PORT),
             has_internet=data.get("has_internet", True),  # Default True for backward compat
             notebook_id=data.get("notebook_id"),
+            rtunnel_port=rtunnel_port,
         )
 
 

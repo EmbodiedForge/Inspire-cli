@@ -1427,7 +1427,17 @@ def test_run_notebook_ssh_validates_dropbear_setup_script(
             self.default_bridge = None
 
         def add_bridge(self, profile: object) -> None:
-            self.bridges[str(getattr(profile, "name", "default"))] = profile
+            name = str(getattr(profile, "name", "default"))
+            self.bridges[name] = profile
+            if self.default_bridge is None:
+                self.default_bridge = name
+
+        def get_bridge(self, name: Optional[str] = None) -> object | None:
+            if name:
+                return self.bridges.get(name)
+            if self.default_bridge:
+                return self.bridges.get(self.default_bridge)
+            return None
 
     captured: dict[str, str] = {}
 
@@ -1596,7 +1606,17 @@ def test_run_notebook_ssh_passes_resolved_runtime_to_setup(
             self.default_bridge = None
 
         def add_bridge(self, profile: object) -> None:
-            self.bridges[str(getattr(profile, "name", "default"))] = profile
+            name = str(getattr(profile, "name", "default"))
+            self.bridges[name] = profile
+            if self.default_bridge is None:
+                self.default_bridge = name
+
+        def get_bridge(self, name: Optional[str] = None) -> object | None:
+            if name:
+                return self.bridges.get(name)
+            if self.default_bridge:
+                return self.bridges.get(self.default_bridge)
+            return None
 
     resolved_runtime = SshRuntimeConfig(
         rtunnel_bin="/project/rtunnel",
@@ -1604,7 +1624,6 @@ def test_run_notebook_ssh_passes_resolved_runtime_to_setup(
     )
     setup_kwargs: dict[str, object] = {}
     fake_tunnel_config = FakeTunnelConfig()
-    execvp_args: dict[str, object] = {}
 
     monkeypatch.setattr(notebook_cmd_module, "require_web_session", lambda ctx, hint: FakeSession())
     monkeypatch.setattr(notebook_cmd_module, "load_config", lambda ctx: make_test_config(tmp_path))
@@ -1661,31 +1680,23 @@ def test_run_notebook_ssh_passes_resolved_runtime_to_setup(
         lambda bridge_name, config, retries=0, retry_pause=0.0, progressive=True: True,
     )
 
-    def fake_execvp(file: str, args: list[str]) -> None:
-        execvp_args["file"] = file
-        execvp_args["args"] = args
-        raise SystemExit(0)
+    monkeypatch.setattr(notebook_cmd_module.subprocess, "call", lambda args: 0)
 
-    monkeypatch.setattr(notebook_cmd_module.os, "execvp", fake_execvp)
+    notebook_cmd_module.run_notebook_ssh(
+        Context(),
+        notebook_id="nb-name",
+        wait=True,
+        pubkey=None,
+        save_as=None,
+        port=31337,
+        ssh_port=22222,
+        command=None,
+        rtunnel_bin="/cli/rtunnel",
+        debug_playwright=False,
+        setup_timeout=60,
+    )
 
-    with pytest.raises(SystemExit) as exc:
-        notebook_cmd_module.run_notebook_ssh(
-            Context(),
-            notebook_id="nb-name",
-            wait=True,
-            pubkey=None,
-            save_as=None,
-            port=31337,
-            ssh_port=22222,
-            command=None,
-            rtunnel_bin="/cli/rtunnel",
-            debug_playwright=False,
-            setup_timeout=60,
-        )
-
-    assert exc.value.code == 0
     assert setup_kwargs["ssh_runtime"] is resolved_runtime
-    assert execvp_args["file"] == "ssh"
 
 
 def test_run_notebook_ssh_refreshes_saved_profile_on_notebook_mismatch(
@@ -1701,7 +1712,17 @@ def test_run_notebook_ssh_refreshes_saved_profile_on_notebook_mismatch(
             self.default_bridge = None
 
         def add_bridge(self, profile: object) -> None:
-            self.bridges[str(getattr(profile, "name", "default"))] = profile
+            name = str(getattr(profile, "name", "default"))
+            self.bridges[name] = profile
+            if self.default_bridge is None:
+                self.default_bridge = name
+
+        def get_bridge(self, name: Optional[str] = None) -> object | None:
+            if name:
+                return self.bridges.get(name)
+            if self.default_bridge:
+                return self.bridges.get(self.default_bridge)
+            return None
 
     setup_called = {"value": False}
     fake_tunnel_config = FakeTunnelConfig()
@@ -1767,30 +1788,137 @@ def test_run_notebook_ssh_refreshes_saved_profile_on_notebook_mismatch(
         lambda bridge_name, config, remote_command=None: ["ssh", "root@localhost"],
     )
 
-    def fake_execvp(file: str, args: list[str]) -> None:  # noqa: ARG001
-        raise SystemExit(0)
+    monkeypatch.setattr(notebook_cmd_module.subprocess, "call", lambda args: 0)
 
-    monkeypatch.setattr(notebook_cmd_module.os, "execvp", fake_execvp)
+    notebook_cmd_module.run_notebook_ssh(
+        Context(),
+        notebook_id="nb-name",
+        wait=True,
+        pubkey=None,
+        save_as="shared-profile",
+        port=31337,
+        ssh_port=22222,
+        command=None,
+        rtunnel_bin="/cli/rtunnel",
+        debug_playwright=False,
+        setup_timeout=60,
+    )
 
-    with pytest.raises(SystemExit) as exc:
-        notebook_cmd_module.run_notebook_ssh(
-            Context(),
-            notebook_id="nb-name",
-            wait=True,
-            pubkey=None,
-            save_as="shared-profile",
-            port=31337,
-            ssh_port=22222,
-            command=None,
-            rtunnel_bin="/cli/rtunnel",
-            debug_playwright=False,
-            setup_timeout=60,
-        )
-
-    assert exc.value.code == 0
     assert setup_called["value"] is True
     saved_profile = fake_tunnel_config.bridges["shared-profile"]
     assert getattr(saved_profile, "notebook_id", None) == "notebook-12345678"
+
+
+def test_run_notebook_ssh_interactive_reconnects_after_drop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class FakeSession:
+        workspace_id = "ws-test"
+        storage_state = {}
+
+    class FakeTunnelConfig:
+        def __init__(self) -> None:
+            self.bridges: dict[str, object] = {}
+            self.default_bridge = None
+
+        def add_bridge(self, profile: object) -> None:
+            name = str(getattr(profile, "name", "default"))
+            self.bridges[name] = profile
+            if self.default_bridge is None:
+                self.default_bridge = name
+
+        def get_bridge(self, name: Optional[str] = None) -> object | None:
+            if name:
+                return self.bridges.get(name)
+            if self.default_bridge:
+                return self.bridges.get(self.default_bridge)
+            return None
+
+    cfg = make_test_config(tmp_path)
+    cfg.tunnel_retries = 2
+    cfg.tunnel_retry_pause = 0.0
+
+    reconnect_calls = {"rebuild": 0}
+    fake_tunnel_config = FakeTunnelConfig()
+
+    monkeypatch.setattr(notebook_cmd_module, "require_web_session", lambda ctx, hint: FakeSession())
+    monkeypatch.setattr(notebook_cmd_module, "load_config", lambda ctx: cfg)
+    monkeypatch.setattr(
+        notebook_cmd_module,
+        "_resolve_notebook_id",
+        lambda *args, **kwargs: ("notebook-12345678", None),
+    )
+    monkeypatch.setattr(
+        browser_api_module,
+        "wait_for_notebook_running",
+        lambda notebook_id, session=None: {
+            "resource_spec_price": {"gpu_info": {"gpu_product_simple": "CPU"}}
+        },
+    )
+    monkeypatch.setattr(
+        notebook_cmd_module,
+        "_get_current_user_detail",
+        lambda session, base_url: {"id": "user-1", "username": "user"},
+    )
+    monkeypatch.setattr(
+        notebook_cmd_module,
+        "_validate_notebook_account_access",
+        lambda current_user, notebook_detail: (True, ""),
+    )
+    monkeypatch.setattr(
+        notebook_cmd_module, "load_ssh_public_key", lambda pubkey: "ssh-ed25519 AAA"
+    )
+    monkeypatch.setattr(
+        notebook_cmd_module,
+        "resolve_ssh_runtime_config",
+        lambda cli_overrides=None: SshRuntimeConfig(),
+    )
+    monkeypatch.setattr(
+        browser_api_module,
+        "setup_notebook_rtunnel",
+        lambda **kwargs: "wss://proxy.example/notebook/",
+    )
+    monkeypatch.setattr(
+        tunnel_module, "load_tunnel_config", lambda account=None: fake_tunnel_config
+    )
+    monkeypatch.setattr(tunnel_module, "save_tunnel_config", lambda config: None)
+    monkeypatch.setattr(tunnel_module, "has_internet_for_gpu_type", lambda gpu_type: True)
+    monkeypatch.setattr(
+        tunnel_module,
+        "is_tunnel_available",
+        lambda bridge_name, config, retries=0, retry_pause=0.0, progressive=True: True,
+    )
+    monkeypatch.setattr(
+        tunnel_module,
+        "get_ssh_command_args",
+        lambda bridge_name, config, remote_command=None: ["ssh", "root@localhost"],
+    )
+
+    ssh_rc = iter([255, 0])
+    monkeypatch.setattr(notebook_cmd_module.subprocess, "call", lambda args: next(ssh_rc))
+
+    def fake_rebuild(*args: Any, **kwargs: Any) -> object:
+        reconnect_calls["rebuild"] += 1
+        profile_name = str(kwargs.get("bridge_name", "notebook-12345678"))
+        return fake_tunnel_config.bridges[profile_name]
+
+    monkeypatch.setattr(notebook_cmd_module, "rebuild_notebook_bridge_profile", fake_rebuild)
+
+    notebook_cmd_module.run_notebook_ssh(
+        Context(),
+        notebook_id="nb-name",
+        wait=True,
+        pubkey=None,
+        save_as=None,
+        port=31337,
+        ssh_port=22222,
+        command=None,
+        rtunnel_bin="/cli/rtunnel",
+        debug_playwright=False,
+        setup_timeout=60,
+    )
+
+    assert reconnect_calls["rebuild"] == 1
 
 
 def test_run_notebook_ssh_reports_when_tunnel_not_ready(
