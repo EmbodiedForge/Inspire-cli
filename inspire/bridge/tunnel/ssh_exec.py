@@ -195,24 +195,21 @@ def run_ssh_command_streaming(
                     process.wait()
                     raise subprocess.TimeoutExpired(ssh_cmd, timeout)
 
-            # Check if process has ended
+            # Read from a single path (readline only) so lines cannot be emitted twice.
             if process.poll() is not None:
-                # Drain any remaining output
-                for line in process.stdout:
-                    output_callback(line)
-                break
-
-            # Use select to wait for output with 1-second timeout
-            ready, _, _ = select.select([process.stdout], [], [], 1.0)
-
-            if ready:
                 line = process.stdout.readline()
-                if line:
-                    output_callback(line)
-                elif process.poll() is not None:
-                    # EOF reached (process exited)
-                    break
-                # else: temporary no data, continue waiting
+            else:
+                ready, _, _ = select.select([process.stdout], [], [], 1.0)
+                if not ready:
+                    continue
+                line = process.stdout.readline()
+
+            if line:
+                output_callback(line)
+                continue
+
+            if process.poll() is not None:
+                break
 
         return process.returncode
 

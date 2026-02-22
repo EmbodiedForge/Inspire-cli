@@ -36,6 +36,14 @@ from inspire.bridge.tunnel import (
     load_tunnel_config,
 )
 from inspire.cli.formatters import json_formatter
+from inspire.cli.utils.notebook_cli import require_web_session
+from inspire.cli.utils.tunnel_reconnect import (
+    load_ssh_public_key_material,
+    rebuild_notebook_bridge_profile,
+    retry_pause_seconds,
+    should_attempt_ssh_reconnect,
+)
+from inspire.config.ssh_runtime import resolve_ssh_runtime_config
 
 
 def split_denylist(items: tuple[str, ...]) -> list[str]:
@@ -57,6 +65,43 @@ def _verbose_output(ctx: Context) -> bool:
     return not ctx.json_output and ctx.debug
 
 
+def _emit_cli_error(
+    ctx: Context,
+    *,
+    error_type: str,
+    message: str,
+    exit_code: int = EXIT_GENERAL_ERROR,
+    hint: Optional[str] = None,
+) -> int:
+    if ctx.json_output:
+        click.echo(
+            json_formatter.format_json_error(
+                error_type,
+                message,
+                exit_code,
+                hint=hint,
+            ),
+            err=True,
+        )
+    else:
+        click.echo(f"Error: {message}", err=True)
+        if hint:
+            click.echo(f"Hint: {hint}", err=True)
+    return exit_code
+
+
+def _emit_command_failed(ctx: Context, *, returncode: int) -> int:
+    message = f"Command failed with exit code {returncode}"
+    if ctx.json_output:
+        return _emit_cli_error(
+            ctx,
+            error_type="CommandFailed",
+            message=message,
+        )
+    click.echo(message, err=True)
+    return EXIT_GENERAL_ERROR
+
+
 def try_exec_via_ssh_tunnel(
     ctx: Context,
     *,
@@ -74,156 +119,298 @@ def try_exec_via_ssh_tunnel(
         Exit code if the SSH path handled the request (success/failure/timeout),
         otherwise None to fall back to workflow execution.
     """
-    try:
-        if not is_tunnel_available_fn(
-            bridge_name=bridge_name,
-            retries=config.tunnel_retries,
-            retry_pause=config.tunnel_retry_pause,
-        ):
-            tunnel_config = load_tunnel_config()
-            bridge = tunnel_config.get_bridge(bridge_name)
-            if bridge_name and bridge is None:
-                message = f"Bridge '{bridge_name}' not found."
-                hint = "Run 'inspire tunnel list' to see available bridge profiles."
-                if ctx.json_output:
-                    click.echo(
-                        json_formatter.format_json_error(
-                            "ConfigError",
-                            message,
-                            EXIT_GENERAL_ERROR,
-                            hint=hint,
-                        ),
-                        err=True,
-                    )
-                else:
-                    click.echo(f"Error: {message}", err=True)
-                    click.echo(f"Hint: {hint}", err=True)
-                return EXIT_GENERAL_ERROR
+    reconnect_limit = max(0, int(getattr(config, "tunnel_retries", 0)))
+    reconnect_pause = float(getattr(config, "tunnel_retry_pause", 0.0) or 0.0)
+    reconnect_attempt = 0
+    resolved_bridge_name = bridge_name
+    force_rebuild = False
+    opened_once = False
+    ssh_execution_started = False
+    web_session = None
+    ssh_public_key = ""
+    ssh_runtime = None
+    full_command = _build_remote_command(
+        command=command,
+        target_dir=str(config.target_dir),
+        remote_env=config.remote_env,
+    )
 
-            if bridge:
-                hint = (
-                    "Run 'inspire tunnel status' to troubleshoot. "
-                    "If you intended to run via Git Actions instead, pass '--no-tunnel'."
-                )
-                if ctx.json_output:
-                    click.echo(
-                        json_formatter.format_json_error(
-                            "TunnelError",
-                            (
-                                "SSH tunnel not available. "
-                                f"Bridge '{bridge.name}' is not responding (notebook may be stopped)."
-                            ),
-                            EXIT_GENERAL_ERROR,
-                            hint=hint,
-                        ),
-                        err=True,
-                    )
-                else:
-                    click.echo(
-                        (
-                            "Error: SSH tunnel not available. "
-                            f"Bridge '{bridge.name}' is not responding (notebook may be stopped)."
-                        ),
-                        err=True,
-                    )
-                    click.echo(f"Hint: {hint}", err=True)
-                return EXIT_GENERAL_ERROR
-
-            return None
-
-        full_command = _build_remote_command(
-            command=command,
-            target_dir=str(config.target_dir),
-            remote_env=config.remote_env,
+    def _pause_before_retry() -> None:
+        pause_s = retry_pause_seconds(
+            reconnect_attempt,
+            base_pause=reconnect_pause,
+            progressive=True,
         )
+        if pause_s > 0:
+            time.sleep(pause_s)
 
-        if ctx.json_output:
-            result = run_ssh_command_fn(
-                command=full_command,
-                bridge_name=bridge_name,
-                timeout=timeout_s,
-                capture_output=True,
+    def _require_rebuild(
+        bridge: object,
+        tunnel_config: object,
+        *,
+        reason: str,
+    ) -> Optional[int]:
+        nonlocal reconnect_attempt, web_session, ssh_public_key, ssh_runtime, force_rebuild
+
+        notebook_id = str(getattr(bridge, "notebook_id", "") or "").strip()
+        if not notebook_id:
+            hint = (
+                "Run 'inspire tunnel status' to troubleshoot. "
+                "If needed, re-create the bridge via "
+                "'inspire notebook ssh <notebook-id> --save-as <name>'. "
+                "If you intended to run via Git Actions instead, pass '--no-tunnel'."
+            )
+            return _emit_cli_error(
+                ctx,
+                error_type="TunnelError",
+                message=(
+                    "SSH tunnel not available. "
+                    f"Bridge '{getattr(bridge, 'name', 'unknown')}' is not responding "
+                    "(notebook may be stopped)."
+                ),
+                hint=hint,
             )
 
-            returncode = getattr(result, "returncode", 1)
-            if returncode != 0:
+        if reconnect_attempt >= reconnect_limit:
+            return _emit_cli_error(
+                ctx,
+                error_type="TunnelError",
+                message="SSH tunnel not available",
+                hint=(
+                    "Auto-rebuild retries exhausted. Run 'inspire tunnel status' and "
+                    "retry 'inspire notebook ssh <notebook-id> --save-as <name>'."
+                ),
+            )
+
+        reconnect_attempt += 1
+        if not ctx.json_output:
+            click.echo(
+                f"{reason} (attempt {reconnect_attempt}/{reconnect_limit})...",
+                err=True,
+            )
+
+        try:
+            if web_session is None:
+                web_session = require_web_session(
+                    ctx,
+                    hint=(
+                        "Automatic tunnel rebuild needs web authentication. "
+                        "Set [auth].username and configure password via INSPIRE_PASSWORD "
+                        'or [accounts."<username>"].password.'
+                    ),
+                )
+            if not ssh_public_key:
+                ssh_public_key = load_ssh_public_key_material()
+            if ssh_runtime is None:
+                ssh_runtime = resolve_ssh_runtime_config()
+            rebuild_notebook_bridge_profile(
+                bridge_name=str(getattr(bridge, "name")),
+                bridge=bridge,
+                tunnel_config=tunnel_config,
+                session=web_session,
+                ssh_public_key=ssh_public_key,
+                ssh_runtime=ssh_runtime,
+            )
+            force_rebuild = False
+            return None
+        except (ValueError, ConfigError) as e:
+            if reconnect_attempt >= reconnect_limit:
+                return _emit_cli_error(
+                    ctx,
+                    error_type="TunnelError",
+                    message=f"Automatic tunnel rebuild failed: {e}",
+                    hint="Check credentials, SSH key, and notebook status, then retry.",
+                )
+            _pause_before_retry()
+            return None
+        except Exception as e:
+            if reconnect_attempt >= reconnect_limit:
+                return _emit_cli_error(
+                    ctx,
+                    error_type="TunnelError",
+                    message=f"Automatic tunnel rebuild failed: {e}",
+                    hint="Verify the notebook is RUNNING and retry.",
+                )
+            _pause_before_retry()
+            return None
+
+    def _should_retry_after_disconnect_code(
+        *,
+        returncode: int,
+        tunnel_config: object,
+        bridge_name_to_check: str,
+    ) -> bool:
+        """Retry non-interactive SSH only when 255 also coincides with tunnel loss.
+
+        SSH uses exit code 255 both for transport failures and some command failures.
+        To avoid re-running non-idempotent commands incorrectly, require a quick
+        tunnel health probe to fail before attempting rebuild/retry.
+        """
+        if not should_attempt_ssh_reconnect(
+            returncode,
+            interactive=False,
+            allow_non_interactive=True,
+        ):
+            return False
+
+        try:
+            tunnel_still_ready = is_tunnel_available_fn(
+                bridge_name=bridge_name_to_check,
+                config=tunnel_config,
+                retries=0,
+                retry_pause=0.0,
+                progressive=False,
+            )
+        except Exception:
+            # Conservatively treat probe errors as connectivity issues.
+            return True
+
+        return not tunnel_still_ready
+
+    while True:
+        try:
+            tunnel_config = load_tunnel_config()
+            bridge = tunnel_config.get_bridge(resolved_bridge_name)
+            if bridge_name and bridge is None:
+                return _emit_cli_error(
+                    ctx,
+                    error_type="ConfigError",
+                    message=f"Bridge '{bridge_name}' not found.",
+                    hint="Run 'inspire tunnel list' to see available bridge profiles.",
+                )
+            if bridge is None:
+                return None
+
+            resolved_bridge_name = str(getattr(bridge, "name"))
+            availability_retries = 0 if force_rebuild else int(config.tunnel_retries)
+            availability_pause = 0.0 if force_rebuild else float(config.tunnel_retry_pause)
+            tunnel_ready = is_tunnel_available_fn(
+                bridge_name=resolved_bridge_name,
+                config=tunnel_config,
+                retries=availability_retries,
+                retry_pause=availability_pause,
+                progressive=not force_rebuild,
+            )
+
+            if force_rebuild or not tunnel_ready:
+                reconnect_error = _require_rebuild(
+                    bridge,
+                    tunnel_config,
+                    reason=(
+                        "SSH connection dropped; rebuilding tunnel automatically"
+                        if force_rebuild
+                        else "Tunnel unavailable; rebuilding automatically"
+                    ),
+                )
+                if reconnect_error is not None:
+                    return reconnect_error
+                continue
+
+            if ctx.json_output:
+                ssh_execution_started = True
+                result = run_ssh_command_fn(
+                    command=full_command,
+                    bridge_name=resolved_bridge_name,
+                    timeout=timeout_s,
+                    capture_output=True,
+                )
+                returncode = getattr(result, "returncode", 1)
+                if returncode == 0:
+                    stdout = getattr(result, "stdout", "") or ""
+                    stderr = getattr(result, "stderr", "") or ""
+                    click.echo(
+                        json_formatter.format_json(
+                            {
+                                "status": "success",
+                                "method": "ssh_tunnel",
+                                "returncode": returncode,
+                                "output": stdout + stderr,
+                            }
+                        )
+                    )
+                    return EXIT_SUCCESS
+
+                if _should_retry_after_disconnect_code(
+                    returncode=returncode,
+                    tunnel_config=tunnel_config,
+                    bridge_name_to_check=resolved_bridge_name,
+                ):
+                    force_rebuild = True
+                    continue
+
+                return _emit_command_failed(ctx, returncode=returncode)
+
+            if _verbose_output(ctx) and not opened_once:
+                click.echo("Using SSH tunnel (fast path)")
+                click.echo(f"Bridge: {resolved_bridge_name}")
+                click.echo(f"Command: {command}")
+                click.echo(f"Working dir: {config.target_dir}")
+                click.echo("--- Command Output ---")
+                opened_once = True
+
+            ssh_execution_started = True
+            exit_code = run_ssh_command_streaming_fn(
+                command=full_command,
+                bridge_name=resolved_bridge_name,
+                timeout=timeout_s,
+            )
+            if _verbose_output(ctx):
+                click.echo("--- End Output ---")
+
+            if exit_code == 0:
+                click.echo("OK")
+                return EXIT_SUCCESS
+
+            if _should_retry_after_disconnect_code(
+                returncode=exit_code,
+                tunnel_config=tunnel_config,
+                bridge_name_to_check=resolved_bridge_name,
+            ):
+                force_rebuild = True
+                continue
+
+            return _emit_command_failed(ctx, returncode=exit_code)
+
+        except TunnelNotAvailableError as e:
+            if ssh_execution_started:
+                return _emit_cli_error(
+                    ctx,
+                    error_type="TunnelError",
+                    message=f"SSH execution failed: {e}",
+                )
+            force_rebuild = True
+            continue
+        except subprocess.TimeoutExpired:
+            if ctx.json_output:
                 click.echo(
                     json_formatter.format_json_error(
-                        "CommandFailed",
-                        f"Command failed with exit code {returncode}",
-                        EXIT_GENERAL_ERROR,
+                        "Timeout",
+                        f"Command timed out after {timeout_s}s",
+                        EXIT_TIMEOUT,
                     ),
                     err=True,
                 )
-                return EXIT_GENERAL_ERROR
-
-            stdout = getattr(result, "stdout", "") or ""
-            stderr = getattr(result, "stderr", "") or ""
-            click.echo(
-                json_formatter.format_json(
-                    {
-                        "status": "success",
-                        "method": "ssh_tunnel",
-                        "returncode": returncode,
-                        "output": stdout + stderr,
-                    }
+            else:
+                click.echo(f"Command timed out after {timeout_s}s", err=True)
+            return EXIT_TIMEOUT
+        except Exception as e:
+            if ssh_execution_started:
+                return _emit_cli_error(
+                    ctx,
+                    error_type="SSHExecutionError",
+                    message=f"SSH execution failed: {e}",
                 )
-            )
-            return EXIT_SUCCESS
-
-        if _verbose_output(ctx):
-            click.echo("Using SSH tunnel (fast path)")
-            if bridge_name:
-                click.echo(f"Bridge: {bridge_name}")
-            click.echo(f"Command: {command}")
-            click.echo(f"Working dir: {config.target_dir}")
-            click.echo("--- Command Output ---")
-
-        exit_code = run_ssh_command_streaming_fn(
-            command=full_command,
-            bridge_name=bridge_name,
-            timeout=timeout_s,
-        )
-
-        if _verbose_output(ctx):
-            click.echo("--- End Output ---")
-
-        if exit_code != 0:
-            click.echo(f"Command failed with exit code {exit_code}", err=True)
-            return EXIT_GENERAL_ERROR
-
-        click.echo("OK")
-        return EXIT_SUCCESS
-
-    except TunnelNotAvailableError:
-        if _verbose_output(ctx):
-            click.echo("Tunnel not available, using Gitea workflow...", err=True)
-        return None
-    except subprocess.TimeoutExpired:
-        if ctx.json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "Timeout",
-                    f"Command timed out after {timeout_s}s",
-                    EXIT_TIMEOUT,
-                ),
-                err=True,
-            )
-        else:
-            click.echo(f"Command timed out after {timeout_s}s", err=True)
-        return EXIT_TIMEOUT
-    except Exception as e:
-        if _verbose_output(ctx):
-            click.echo(f"SSH execution failed: {e}", err=True)
-            click.echo("Falling back to Gitea workflow...", err=True)
-            click.echo(
-                "Warning: Git Actions fallback is deprecated and will be removed "
-                "in a future release. Use SSH tunnel instead.",
-                err=True,
-            )
-        elif not ctx.json_output:
-            click.echo("SSH execution failed, using workflow fallback", err=True)
-        return None
+            if _verbose_output(ctx):
+                click.echo(f"SSH execution failed: {e}", err=True)
+                click.echo("Falling back to Gitea workflow...", err=True)
+                click.echo(
+                    "Warning: Git Actions fallback is deprecated and will be removed "
+                    "in a future release. Use SSH tunnel instead.",
+                    err=True,
+                )
+            elif not ctx.json_output:
+                click.echo("SSH execution failed, using workflow fallback", err=True)
+            return None
 
 
 def exec_via_workflow(
