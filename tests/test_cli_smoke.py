@@ -28,6 +28,7 @@ def test_notebook_help_includes_key_subcommands() -> None:
     assert result.exit_code == 0
     assert "list" in result.output
     assert "status" in result.output
+    assert "top" in result.output
 
 
 def test_resources_help_includes_key_subcommands() -> None:

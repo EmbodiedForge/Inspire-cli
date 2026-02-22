@@ -3,6 +3,7 @@
 Usage:
     inspire notebook list
     inspire notebook status <instance-id>
+    inspire notebook top
     inspire notebook create --resource 1xH200
     inspire notebook stop <instance-id>
 """
@@ -19,6 +20,7 @@ from .notebook_commands import (
     start_notebook_cmd,
     stop_notebook_cmd,
 )
+from .top import notebook_top
 
 
 @click.group()
@@ -39,3 +41,4 @@ notebook.add_command(create_notebook_cmd)
 notebook.add_command(stop_notebook_cmd)
 notebook.add_command(start_notebook_cmd)
 notebook.add_command(ssh_notebook_cmd)
+notebook.add_command(notebook_top)

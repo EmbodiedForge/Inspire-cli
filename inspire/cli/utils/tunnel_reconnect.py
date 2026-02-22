@@ -29,9 +29,16 @@ def extract_rtunnel_port(proxy_url: str, *, default_port: int = DEFAULT_RTUNNEL_
     return default_port
 
 
-def should_attempt_ssh_reconnect(returncode: int, *, interactive: bool) -> bool:
+def should_attempt_ssh_reconnect(
+    returncode: int,
+    *,
+    interactive: bool,
+    allow_non_interactive: bool = False,
+) -> bool:
     """Return True if this SSH exit code indicates connection loss."""
-    return interactive and returncode in SSH_DISCONNECT_RETURN_CODES
+    if returncode not in SSH_DISCONNECT_RETURN_CODES:
+        return False
+    return interactive or allow_non_interactive
 
 
 def retry_pause_seconds(attempt: int, *, base_pause: float, progressive: bool = True) -> float:
