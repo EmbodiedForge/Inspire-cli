@@ -8,7 +8,6 @@ from typing import Optional
 from inspire.platform.openapi.models import ComputeGroup, GPUType, ResourceSpec
 from inspire.compute_groups import load_compute_groups_from_config
 
-
 # ---------------------------------------------------------------------------
 # Specs
 # ---------------------------------------------------------------------------
@@ -102,6 +101,18 @@ def parse_resource_request(resource_str: str) -> tuple[GPUType, int]:
         raise ValueError(f"GPU count must be positive: {gpu_count}")
 
     return gpu_type, gpu_count
+
+
+def normalize_gpu_type(gpu_type_raw: str) -> str:
+    """Normalize raw GPU labels to OpenAPI enum values."""
+    normalized = (gpu_type_raw or "").strip().upper()
+    if not normalized:
+        return ""
+    if "H200" in normalized:
+        return GPUType.H200.value
+    if "H100" in normalized:
+        return GPUType.H100.value
+    return normalized
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +234,7 @@ class ResourceManager:
             if not group.compute_group_id:
                 continue
 
-            gpu_type_raw = (group.gpu_type or "").strip().upper()
+            gpu_type_raw = normalize_gpu_type(group.gpu_type or "")
             if not gpu_type_raw:
                 continue
 

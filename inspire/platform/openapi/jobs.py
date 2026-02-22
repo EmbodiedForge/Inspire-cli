@@ -62,32 +62,26 @@ def create_training_job_smart(
 
     # Image configuration
     final_image = image or api._get_default_image()
-    # Determine registry
-    if api.config.docker_registry:
-        docker_registry = api.config.docker_registry
-    else:
-        # Extract registry from image
-        docker_registry = (
-            final_image.split("/")[0] if "/" in final_image else api.DEFAULT_DOCKER_REGISTRY
-        )
+
+    framework_item = {
+        "image_type": api.DEFAULT_IMAGE_TYPE,
+        "image": final_image,
+        "instance_count": instance_count,
+        "spec_id": spec_id,
+    }
+    if shm_gi is not None:
+        framework_item["shm_gi"] = shm_gi
 
     payload = {
         "name": name,
-        "start_cmd": command,
+        "command": command,
         "framework": framework,
-        "spec_id": spec_id,
         "logic_compute_group_id": compute_group_id,
         "project_id": project_id,
         "workspace_id": workspace_id,
         "task_priority": task_priority,
-        "instance_count": instance_count,
         "max_running_time_ms": max_running_time_ms,
-        "shm_gi": shm_gi,
-        "image": {
-            "image_type": api.DEFAULT_IMAGE_TYPE,
-            "image_url": final_image,
-            "docker_registry": docker_registry,
-        },
+        "framework_config": [framework_item],
     }
 
     try:

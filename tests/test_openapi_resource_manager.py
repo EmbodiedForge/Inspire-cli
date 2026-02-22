@@ -20,3 +20,17 @@ def test_resource_manager_ignores_compute_group_without_id() -> None:
     manager = ResourceManager([{"name": "H200 missing id", "gpu_type": "H200"}])
 
     assert manager.compute_groups == []
+
+
+def test_resource_manager_accepts_discovered_gpu_type_labels() -> None:
+    manager = ResourceManager(
+        [
+            {"name": "H200-1", "id": "lcg-h200-1", "gpu_type": "NVIDIA H200 (141GB)"},
+            {"name": "H100-1", "id": "lcg-h100-1", "gpu_type": "NVIDIA H100 (80GB)"},
+        ]
+    )
+
+    ids_to_types = {group.compute_group_id: group.gpu_type for group in manager.compute_groups}
+
+    assert ids_to_types["lcg-h200-1"] == GPUType.H200
+    assert ids_to_types["lcg-h100-1"] == GPUType.H100
