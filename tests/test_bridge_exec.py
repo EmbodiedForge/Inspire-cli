@@ -32,6 +32,17 @@ def make_sync_config(tmp_path: Path) -> Config:
     )
 
 
+def make_tunnel_config(name: str = "gpu-main") -> TunnelConfig:
+    tunnel_config = TunnelConfig()
+    tunnel_config.add_bridge(
+        BridgeProfile(
+            name=name,
+            proxy_url="https://proxy.example.com/proxy/31337/",
+        )
+    )
+    return tunnel_config
+
+
 def test_bridge_exec_triggers_and_no_wait(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config = make_sync_config(tmp_path)
 
@@ -226,6 +237,7 @@ def test_bridge_exec_ssh_streaming_success(monkeypatch: pytest.MonkeyPatch, tmp_
     monkeypatch.setattr(
         exec_cmd_module, "run_ssh_command_streaming", fake_run_ssh_command_streaming
     )
+    monkeypatch.setattr(exec_cmd_module, "load_tunnel_config", make_tunnel_config)
 
     runner = CliRunner()
     result = runner.invoke(cli_main, ["bridge", "exec", "echo test"])
@@ -271,6 +283,7 @@ def test_bridge_exec_ssh_json_uses_buffered(
         exec_cmd_module, "run_ssh_command_streaming", fake_run_ssh_command_streaming
     )
     monkeypatch.setattr(exec_cmd_module, "run_ssh_command", fake_run_ssh_command)
+    monkeypatch.setattr(exec_cmd_module, "load_tunnel_config", make_tunnel_config)
 
     runner = CliRunner()
     result = runner.invoke(cli_main, ["--json", "bridge", "exec", "echo test"])
@@ -306,6 +319,7 @@ def test_bridge_exec_ssh_streaming_timeout(monkeypatch: pytest.MonkeyPatch, tmp_
     monkeypatch.setattr(
         exec_cmd_module, "run_ssh_command_streaming", fake_run_ssh_command_streaming
     )
+    monkeypatch.setattr(exec_cmd_module, "load_tunnel_config", make_tunnel_config)
 
     runner = CliRunner()
     result = runner.invoke(cli_main, ["bridge", "exec", "sleep 100", "--timeout", "5"])
@@ -334,6 +348,7 @@ def test_bridge_exec_ssh_streaming_failure(monkeypatch: pytest.MonkeyPatch, tmp_
     monkeypatch.setattr(
         exec_cmd_module, "run_ssh_command_streaming", fake_run_ssh_command_streaming
     )
+    monkeypatch.setattr(exec_cmd_module, "load_tunnel_config", make_tunnel_config)
 
     runner = CliRunner()
     result = runner.invoke(cli_main, ["bridge", "exec", "false"])
@@ -355,13 +370,7 @@ def test_bridge_exec_does_not_fallback_after_ssh_execution_starts(
         classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
     )
 
-    tunnel_config = TunnelConfig()
-    tunnel_config.add_bridge(
-        BridgeProfile(
-            name="gpu-main",
-            proxy_url="https://proxy.example.com/proxy/31337/",
-        )
-    )
+    tunnel_config = make_tunnel_config()
     monkeypatch.setattr(exec_cmd_module, "load_tunnel_config", lambda: tunnel_config)
     monkeypatch.setattr(exec_cmd_module, "is_tunnel_available", lambda *args, **kwargs: True)
 
@@ -398,8 +407,7 @@ def test_bridge_exec_errors_when_bridge_configured_but_not_responding(
     def fake_is_tunnel_available(*args: Any, **kwargs: Any) -> bool:
         return False
 
-    tunnel_config = TunnelConfig()
-    tunnel_config.add_bridge(BridgeProfile(name="ring8h100", proxy_url="https://proxy.example.com"))
+    tunnel_config = make_tunnel_config(name="ring8h100")
 
     monkeypatch.setattr(exec_cmd_module, "is_tunnel_available", fake_is_tunnel_available)
     monkeypatch.setattr(exec_cmd_module, "load_tunnel_config", lambda: tunnel_config)
@@ -426,8 +434,7 @@ def test_bridge_exec_json_errors_when_bridge_configured_but_not_responding(
     def fake_is_tunnel_available(*args: Any, **kwargs: Any) -> bool:
         return False
 
-    tunnel_config = TunnelConfig()
-    tunnel_config.add_bridge(BridgeProfile(name="ring8h100", proxy_url="https://proxy.example.com"))
+    tunnel_config = make_tunnel_config(name="ring8h100")
 
     monkeypatch.setattr(exec_cmd_module, "is_tunnel_available", fake_is_tunnel_available)
     monkeypatch.setattr(exec_cmd_module, "load_tunnel_config", lambda: tunnel_config)
@@ -500,10 +507,7 @@ def test_bridge_exec_passes_requested_bridge_to_ssh(
         captured["stream_bridge"] = kwargs.get("bridge_name")
         return 0
 
-    tunnel_config = TunnelConfig()
-    tunnel_config.add_bridge(
-        BridgeProfile(name="gpu-main", proxy_url="https://proxy.example.com/proxy/31337/")
-    )
+    tunnel_config = make_tunnel_config()
 
     monkeypatch.setattr(exec_cmd_module, "load_tunnel_config", lambda: tunnel_config)
     monkeypatch.setattr(exec_cmd_module, "is_tunnel_available", fake_is_tunnel_available)
