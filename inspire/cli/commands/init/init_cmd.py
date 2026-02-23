@@ -116,6 +116,17 @@ def _get_config_paths() -> tuple[Path, Path]:
     is_flag=True,
     help="Create template with placeholders (skip env var detection)",
 )
+@click.option(
+    "--username",
+    "-u",
+    default=None,
+    help="Platform username (prompted if not configured). Only used with --discover.",
+)
+@click.option(
+    "--base-url",
+    default=None,
+    help="Platform base URL (prompted if not configured). Only used with --discover.",
+)
 @pass_context
 def init(
     ctx: Context,
@@ -130,6 +141,8 @@ def init(
     probe_pubkey: str | None,
     probe_timeout: int,
     template_flag: bool,
+    username: str | None,
+    base_url: str | None,
 ) -> None:
     """Initialize Inspire CLI configuration.
 
@@ -174,12 +187,20 @@ def init(
     before = snapshot_paths(global_path, project_path)
     warnings: list[str] = []
 
+    def _warn(msg: str) -> None:
+        warnings.append(msg)
+        if not effective_json:
+            click.echo(click.style(f"Warning: {msg}", fg="yellow"))
+
     if not discover and (
         probe_limit or probe_keep_notebooks or probe_pubkey or probe_timeout != 900
     ):
-        warnings.append(
+        _warn(
             "Probe options are only effective with --discover --probe-shared-path and were ignored."
         )
+
+    if not discover and (username or base_url):
+        _warn("--username and --base-url are only effective with --discover and were ignored.")
 
     try:
         if global_flag and project_flag:
@@ -190,6 +211,11 @@ def init(
                 raise ValueError("Cannot combine --discover with --template")
             if global_flag or project_flag:
                 raise ValueError("--discover always writes both global and project config")
+
+            if not probe_shared_path and (
+                probe_limit or probe_keep_notebooks or probe_pubkey or probe_timeout != 900
+            ):
+                _warn("Probe options require --probe-shared-path and were ignored.")
 
             if effective_json and not force and (global_path.exists() or project_path.exists()):
                 raise ValueError(
@@ -206,6 +232,8 @@ def init(
                 probe_keep_notebooks=probe_keep_notebooks,
                 probe_pubkey=probe_pubkey,
                 probe_timeout=probe_timeout,
+                cli_username=username,
+                cli_base_url=base_url,
             )
 
             emit_init_json(

@@ -23,6 +23,17 @@ from .toml_helpers import _toml_dumps
 
 from inspire.platform.web.browser_api.notebooks import NotebookFailedError
 
+_CATALOG_DROP_FIELDS = frozenset(
+    {
+        "id",
+        "alias",
+        "workspace_id",
+        "probed_at",
+        "probe_notebook_id",
+        "probe_error",
+    }
+)
+
 
 def _slugify_alias(value: str) -> str:
     text = (value or "").strip().lower()
@@ -513,6 +524,110 @@ def _discover_workspace_aliases() -> dict[str, str]:
     return overrides
 
 
+def _ensure_playwright_browser() -> None:
+    """Check that the Playwright Chromium browser is installed; offer to install it."""
+    import subprocess
+    import sys
+
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            browser.close()
+        return  # already installed
+    except Exception:
+        pass
+
+    click.echo()
+    click.echo(
+        "Playwright Chromium browser is required for SSO authentication "
+        "(one-time ~150 MB download)."
+    )
+    if not click.confirm("Install Chromium now?", default=True):
+        click.echo("Cannot proceed without a browser for SSO login.")
+        raise SystemExit(1)
+
+    result = subprocess.run(
+        [sys.executable, "-m", "playwright", "install", "chromium"],
+        capture_output=False,
+    )
+    if result.returncode != 0:
+        click.echo(click.style("Chromium installation failed.", fg="red"))
+        raise SystemExit(1)
+
+
+def _resolve_credentials_interactive(
+    config: object,
+    *,
+    cli_username: str | None,
+    cli_base_url: str | None,
+) -> tuple[str, str, str]:
+    """Resolve base_url, username, and password, prompting when missing."""
+    placeholder = "https://api.example.com"
+
+    # --- base_url ---
+    base_url = (cli_base_url or "").strip()
+    if not base_url:
+        cfg_base_url = str(getattr(config, "base_url", "") or "").strip()
+        if cfg_base_url and cfg_base_url != placeholder:
+            base_url = cfg_base_url
+    if not base_url:
+        base_url = click.prompt("Platform URL", type=str).strip()
+    if not base_url:
+        click.echo(click.style("Platform URL is required.", fg="red"))
+        raise SystemExit(1)
+
+    # --- username ---
+    username = (cli_username or "").strip()
+    if not username:
+        cfg_username = str(getattr(config, "username", "") or "").strip()
+        if cfg_username:
+            username = cfg_username
+    if not username:
+        username = click.prompt("Username", type=str).strip()
+    if not username:
+        click.echo(click.style("Username is required.", fg="red"))
+        raise SystemExit(1)
+
+    # --- password ---
+    # Always prompt: we are in the interactive fallback because existing
+    # credentials/session did not work, so reusing config.password would
+    # repeat the same failure.
+    password = click.prompt("Password", type=str, hide_input=True)
+    if not password:
+        click.echo(click.style("Password is required.", fg="red"))
+        raise SystemExit(1)
+
+    return username, password, base_url
+
+
+def _ensure_ssh_key() -> None:
+    """Check for an SSH key; offer to generate one if missing."""
+    import subprocess
+
+    ssh_dir = Path.home() / ".ssh"
+    candidates = [ssh_dir / "id_ed25519.pub", ssh_dir / "id_rsa.pub"]
+    if any(p.exists() for p in candidates):
+        return
+
+    click.echo()
+    click.echo("No SSH key found. SSH keys are needed for bridge/tunnel/notebook SSH features.")
+    if not click.confirm("Generate a new ed25519 SSH key?", default=True):
+        return
+
+    ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    key_path = ssh_dir / "id_ed25519"
+    result = subprocess.run(
+        ["ssh-keygen", "-t", "ed25519", "-f", str(key_path), "-N", "", "-C", "inspire-cli"],
+        capture_output=True,
+    )
+    if result.returncode == 0:
+        click.echo(f"SSH key generated: {key_path}")
+    else:
+        click.echo(click.style("SSH key generation failed.", fg="yellow"))
+
+
 def _merge_alias_map(
     *,
     existing: dict[str, str],
@@ -604,6 +719,9 @@ def _merge_compute_groups(
         by_id[group_id] = merged
 
     merged_list = list(by_id.values())
+    for entry in merged_list:
+        for k in [k for k, v in entry.items() if v == ""]:
+            del entry[k]
     merged_list.sort(
         key=lambda entry: (str(entry.get("gpu_type") or ""), str(entry.get("name") or "").lower())
     )
@@ -618,6 +736,8 @@ def _init_discover_mode(
     probe_keep_notebooks: bool,
     probe_pubkey: str | None,
     probe_timeout: int,
+    cli_username: str | None = None,
+    cli_base_url: str | None = None,
 ) -> None:
     """Initialize per-account catalogs by discovering projects and compute groups."""
     from inspire.platform.web import browser_api as browser_api_module
@@ -626,13 +746,55 @@ def _init_discover_mode(
 
     config, _ = Config.from_files_and_env(require_credentials=False, require_target_dir=False)
 
-    try:
-        session = web_session_module.get_web_session(require_workspace=True)
-    except ValueError as e:
-        click.echo(click.style(str(e), fg="red"))
-        raise SystemExit(1) from e
+    # When the caller explicitly provides credentials via CLI flags, skip the
+    # cached-session fast path so we honour the override instead of silently
+    # using a session that belongs to a different user / base-url.
+    session = None
+    prompted_credentials: tuple[str, str, str] | None = None
+    if cli_username or cli_base_url:
+        # Explicit CLI override — go straight to interactive login
+        _ensure_playwright_browser()
+        username, password, base_url = _resolve_credentials_interactive(
+            config,
+            cli_username=cli_username,
+            cli_base_url=cli_base_url,
+        )
+        prompted_credentials = (username, password, base_url)
+        click.echo("Logging in...")
+        session = web_session_module.login_with_playwright(
+            username,
+            password,
+            base_url=base_url,
+        )
+        click.echo("Logged in.")
+    else:
+        # Try existing session first (fast path for returning users)
+        try:
+            session = web_session_module.get_web_session(require_workspace=True)
+        except (ValueError, RuntimeError):
+            # No credentials or no Playwright browser — prompt interactively
+            _ensure_playwright_browser()
+            username, password, base_url = _resolve_credentials_interactive(
+                config,
+                cli_username=cli_username,
+                cli_base_url=cli_base_url,
+            )
+            prompted_credentials = (username, password, base_url)
+            click.echo("Logging in...")
+            session = web_session_module.login_with_playwright(
+                username,
+                password,
+                base_url=base_url,
+            )
+            click.echo("Logged in.")
 
-    account_key = (config.username or session.login_username or "").strip()
+    # Prefer the username from the interactive flow (which reflects CLI
+    # overrides) over config.username, which may be stale or belong to a
+    # different account.
+    if prompted_credentials:
+        account_key = prompted_credentials[0]
+    else:
+        account_key = (config.username or session.login_username or "").strip()
     if not account_key:
         click.echo(click.style("Could not resolve account key (username)", fg="red"))
         raise SystemExit(1)
@@ -747,18 +909,11 @@ def _init_discover_mode(
             entry = {}
             project_catalog[project_id] = entry
 
-        entry.setdefault("id", project_id)
-
-        alias = str(alias_for_id.get(project_id) or "").strip()
-        if alias:
-            entry["alias"] = alias
-
         name = str(getattr(project, "name", "") or "").strip()
         if name:
             entry["name"] = name
 
         project_workspace_id = str(getattr(project, "workspace_id", "") or workspace_id).strip()
-        entry["workspace_id"] = project_workspace_id
 
         workdir = str(entry.get("workdir") or "").strip()
         if not workdir or force:
@@ -829,9 +984,11 @@ def _init_discover_mode(
                 "  Hint: run with --probe-shared-path to populate unknown shared-path groups."
             )
 
-    existing_workspaces = account_section.get("workspaces")
+    existing_workspaces = global_data.get("workspaces")
     if not isinstance(existing_workspaces, dict):
-        existing_workspaces = {}
+        existing_workspaces = account_section.get("workspaces")
+        if not isinstance(existing_workspaces, dict):
+            existing_workspaces = {}
     merged_workspaces: dict[str, str] = dict(existing_workspaces)
 
     config_workspaces = getattr(config, "workspaces", None)
@@ -865,15 +1022,17 @@ def _init_discover_mode(
     merged_workspaces.setdefault("cpu", workspace_id)
     merged_workspaces.setdefault("gpu", workspace_id)
     merged_workspaces.setdefault("internet", workspace_id)
-    account_section["workspaces"] = merged_workspaces
+    global_data["workspaces"] = merged_workspaces
+    account_section.pop("workspaces", None)
 
     base_url = (config.base_url or "").strip()
     if base_url and base_url != "https://api.example.com":
-        api_section = account_section.get("api")
+        api_section = global_data.get("api")
         if not isinstance(api_section, dict):
             api_section = {}
-            account_section["api"] = api_section
+            global_data["api"] = api_section
         api_section.setdefault("base_url", base_url)
+    account_section.pop("api", None)
 
     compute_groups: list[dict[str, Any]] = []
     try:
@@ -910,24 +1069,27 @@ def _init_discover_mode(
             if not location and "(" in name and name.endswith(")"):
                 location = name.rsplit("(", 1)[-1].rstrip(")").strip()
 
-            compute_groups.append(
-                {
-                    "name": name,
-                    "id": group_id,
-                    "gpu_type": str(gpu_types.get(group_id, "") or "").strip(),
-                    "location": location,
-                }
-            )
+            cg_entry: dict[str, Any] = {"name": name, "id": group_id}
+            gpu_type = str(gpu_types.get(group_id, "") or "").strip()
+            if gpu_type:
+                cg_entry["gpu_type"] = gpu_type
+            if location:
+                cg_entry["location"] = location
+
+            compute_groups.append(cg_entry)
     except Exception:
         compute_groups = []
 
-    existing_compute_groups = account_section.get("compute_groups")
+    existing_compute_groups = global_data.get("compute_groups")
     if not isinstance(existing_compute_groups, list):
-        existing_compute_groups = []
+        existing_compute_groups = account_section.get("compute_groups")
+        if not isinstance(existing_compute_groups, list):
+            existing_compute_groups = []
     if compute_groups:
-        account_section["compute_groups"] = _merge_compute_groups(
+        global_data["compute_groups"] = _merge_compute_groups(
             existing_compute_groups, compute_groups
         )
+    account_section.pop("compute_groups", None)
 
     if probe_shared_path:
         click.echo()
@@ -1059,8 +1221,33 @@ def _init_discover_mode(
 
                 global_path.write_text(_toml_dumps(global_data))
 
+    # Strip operational/redundant fields from catalog entries before writing.
+    for entry in project_catalog.values():
+        if not isinstance(entry, dict):
+            continue
+        for field in _CATALOG_DROP_FIELDS:
+            entry.pop(field, None)
+
     global_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Persist prompted credentials in global config (overwrite stale values)
+    if prompted_credentials:
+        _, prompted_password, prompted_base_url = prompted_credentials
+        account_section["password"] = prompted_password
+        api = global_data.get("api")
+        if not isinstance(api, dict):
+            api = {}
+            global_data["api"] = api
+        api["base_url"] = prompted_base_url
+
     global_path.write_text(_toml_dumps(global_data))
+
+    # Restrict permissions when config contains a password
+    if prompted_credentials:
+        try:
+            global_path.chmod(0o600)
+        except OSError:
+            pass
 
     selected_alias = alias_for_id.get(selected_project.project_id)
     if not selected_alias:
@@ -1119,14 +1306,18 @@ def _init_discover_mode(
         click.echo(click.style("Wrote config, but could not resolve a project_id", fg="red"))
         raise SystemExit(1)
 
+    _ensure_ssh_key()
+
     click.echo()
     click.echo(click.style("Wrote configuration:", bold=True))
     click.echo(f"  - {global_path}")
     click.echo(f"  - {project_path}")
     click.echo()
-    click.echo("Next steps:")
-    click.echo(
-        "  1. Ensure a password is available via INSPIRE_PASSWORD or global "
-        '[accounts."<username>"].password'
-    )
-    click.echo("  2. Run: inspire config show")
+    if prompted_credentials:
+        click.echo("Ready to use:")
+        click.echo("  inspire config show     # Verify configuration")
+        click.echo("  inspire resources list  # View available GPUs")
+        click.echo("  inspire notebook list   # List notebooks")
+    else:
+        click.echo("Next steps:")
+        click.echo("  Run: inspire config show")

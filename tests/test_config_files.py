@@ -913,14 +913,17 @@ class TestInitCommand:
 
         global_data = Config._load_toml(global_config)
         account = global_data["accounts"]["testuser"]
-        assert account["api"]["base_url"] == "https://example.invalid"
-        assert account["workspaces"]["cpu"] == workspace_id
-        assert account["workspaces"]["gpu"] == workspace_id
-        assert account["workspaces"]["internet"] == workspace_id
+        assert global_data["api"]["base_url"] == "https://example.invalid"
+        assert global_data["workspaces"]["cpu"] == workspace_id
+        assert global_data["workspaces"]["gpu"] == workspace_id
+        assert global_data["workspaces"]["internet"] == workspace_id
+        assert "api" not in account
+        assert "workspaces" not in account
+        assert "compute_groups" not in account
         assert account["projects"]["over-quota"] == "project-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
         assert account["projects"]["good-project"] == "project-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-        assert account["compute_groups"][0]["id"] == "lcg-cccccccc-cccc-cccc-cccc-cccccccccccc"
-        assert account["compute_groups"][0]["gpu_type"] == "H100"
+        assert global_data["compute_groups"][0]["id"] == "lcg-cccccccc-cccc-cccc-cccc-cccccccccccc"
+        assert global_data["compute_groups"][0]["gpu_type"] == "H100"
 
         project_data = Config._load_toml(project_config)
         assert project_data["context"]["account"] == "testuser"
@@ -929,6 +932,222 @@ class TestInitCommand:
         assert project_data["context"]["workspace_cpu"] == "cpu"
         assert project_data["context"]["workspace_gpu"] == "gpu"
         assert project_data["context"]["workspace_internet"] == "internet"
+
+    # ------------------------------------------------------------------
+    # Helper to set up discover mocks shared across credential tests
+    # ------------------------------------------------------------------
+    def _setup_discover_mocks(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        *,
+        get_web_session_side_effect=None,
+        login_session=None,
+    ):
+        """Wire up standard discover mocks and return (global_config, workspace_id)."""
+        from inspire.platform.web.session.models import WebSession
+        from inspire.platform.web.browser_api.availability.models import GPUAvailability
+        from inspire.platform.web.browser_api.projects import ProjectInfo
+        import inspire.platform.web.session as web_session_module
+        import inspire.platform.web.browser_api as browser_api_module
+
+        global_config = tmp_path / ".config" / "inspire" / "config.toml"
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
+        monkeypatch.chdir(tmp_path)
+
+        workspace_id = "ws-11111111-1111-1111-1111-111111111111"
+
+        # Default session used by the fast path
+        default_session = WebSession(
+            storage_state={"cookies": [], "origins": []},
+            created_at=0.0,
+            workspace_id=workspace_id,
+            login_username="cached-user",
+        )
+
+        if get_web_session_side_effect is not None:
+            monkeypatch.setattr(
+                web_session_module,
+                "get_web_session",
+                lambda **_: (_ for _ in ()).throw(get_web_session_side_effect),
+            )
+        else:
+            monkeypatch.setattr(web_session_module, "get_web_session", lambda **_: default_session)
+
+        if login_session is None:
+            login_session = default_session
+        monkeypatch.setattr(
+            web_session_module,
+            "login_with_playwright",
+            lambda *a, **kw: login_session,
+        )
+
+        projects = [
+            ProjectInfo(
+                project_id="project-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                name="My Project",
+                workspace_id=workspace_id,
+            ),
+        ]
+        monkeypatch.setattr(browser_api_module, "list_projects", lambda **_: projects)
+        monkeypatch.setattr(
+            browser_api_module,
+            "list_compute_groups",
+            lambda **_: [
+                {
+                    "logic_compute_group_id": "lcg-1",
+                    "name": "H100 (CUDA 12.8)",
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            browser_api_module,
+            "get_accurate_gpu_availability",
+            lambda **_: [
+                GPUAvailability(
+                    group_id="lcg-1",
+                    group_name="H100",
+                    gpu_type="H100",
+                    total_gpus=8,
+                    used_gpus=0,
+                    available_gpus=8,
+                    low_priority_gpus=0,
+                )
+            ],
+        )
+        monkeypatch.setattr(
+            browser_api_module,
+            "get_train_job_workdir",
+            lambda **_: "/inspire/hdd/project/p1",
+        )
+
+        # Stub out _ensure_playwright_browser and _ensure_ssh_key so they never
+        # touch the real filesystem or try to launch a browser.
+        from inspire.cli.commands.init import discover as discover_module
+
+        monkeypatch.setattr(discover_module, "_ensure_playwright_browser", lambda: None)
+        monkeypatch.setattr(discover_module, "_ensure_ssh_key", lambda: None)
+
+        return global_config, workspace_id
+
+    def test_discover_cli_username_overrides_cached_session(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Finding 1: --username must override cached session's login_username."""
+        from inspire.platform.web.session.models import WebSession
+
+        workspace_id = "ws-11111111-1111-1111-1111-111111111111"
+        cli_session = WebSession(
+            storage_state={"cookies": [], "origins": []},
+            created_at=0.0,
+            workspace_id=workspace_id,
+            login_username="cli-user",
+        )
+
+        monkeypatch.setenv("INSPIRE_BASE_URL", "https://example.invalid")
+
+        global_config, _ = self._setup_discover_mocks(
+            monkeypatch,
+            tmp_path,
+            # Fast path returns a session for "cached-user", but cli_username
+            # should force the interactive path and ignore it.
+            login_session=cli_session,
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            init,
+            ["--discover", "--force", "--username", "cli-user"],
+            input="secret-password\n",
+        )
+
+        assert result.exit_code == 0
+        assert "Account: cli-user" in result.output
+
+        global_data = Config._load_toml(global_config)
+        assert "cli-user" in global_data.get("accounts", {})
+
+    def test_discover_fallback_always_prompts_password(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Finding 2: password must always be prompted in the fallback path."""
+        from inspire.platform.web.session.models import WebSession
+
+        workspace_id = "ws-11111111-1111-1111-1111-111111111111"
+        login_session = WebSession(
+            storage_state={"cookies": [], "origins": []},
+            created_at=0.0,
+            workspace_id=workspace_id,
+            login_username="newuser",
+        )
+
+        # Even with INSPIRE_PASSWORD set, the interactive fallback should
+        # prompt again because the existing session failed.
+        monkeypatch.setenv("INSPIRE_PASSWORD", "old-stale-pw")
+        monkeypatch.setenv("INSPIRE_BASE_URL", "https://example.invalid")
+
+        global_config, _ = self._setup_discover_mocks(
+            monkeypatch,
+            tmp_path,
+            get_web_session_side_effect=ValueError("Missing credentials"),
+            login_session=login_session,
+        )
+
+        runner = CliRunner()
+        # Input provides: username, then password
+        result = runner.invoke(
+            init,
+            ["--discover", "--force"],
+            input="newuser\nfresh-password\n",
+        )
+
+        assert result.exit_code == 0
+        # Verify the freshly prompted password (not the stale one) was persisted
+        global_data = Config._load_toml(global_config)
+        account = global_data["accounts"]["newuser"]
+        assert account["password"] == "fresh-password"
+
+    def test_discover_prompted_credentials_overwrite_stale_values(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Finding 3: prompted credentials must overwrite existing config values."""
+        from inspire.platform.web.session.models import WebSession
+
+        workspace_id = "ws-11111111-1111-1111-1111-111111111111"
+        login_session = WebSession(
+            storage_state={"cookies": [], "origins": []},
+            created_at=0.0,
+            workspace_id=workspace_id,
+            login_username="testuser",
+        )
+
+        monkeypatch.setenv("INSPIRE_BASE_URL", "https://old-url.invalid")
+
+        global_config, _ = self._setup_discover_mocks(
+            monkeypatch,
+            tmp_path,
+            get_web_session_side_effect=ValueError("Missing credentials"),
+            login_session=login_session,
+        )
+
+        # Pre-populate global config with stale values
+        global_config.parent.mkdir(parents=True, exist_ok=True)
+        global_config.write_text(
+            '[api]\nbase_url = "https://old-url.invalid"\n\n'
+            '[accounts.testuser]\npassword = "old-password"\n'
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            init,
+            ["--discover", "--force", "--base-url", "https://new-url.invalid"],
+            input="testuser\nnew-password\n",
+        )
+
+        assert result.exit_code == 0
+        global_data = Config._load_toml(global_config)
+        assert global_data["api"]["base_url"] == "https://new-url.invalid"
+        assert global_data["accounts"]["testuser"]["password"] == "new-password"
 
 
 # ===========================================================================

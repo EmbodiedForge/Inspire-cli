@@ -74,7 +74,17 @@ def login_with_playwright(
 
     proxy = get_playwright_proxy()
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless, proxy=proxy)
+        try:
+            browser = p.chromium.launch(headless=headless, proxy=proxy)
+        except Exception as exc:
+            if "Executable doesn't exist" in str(exc):
+                raise RuntimeError(
+                    "Playwright browser not found. First login requires a browser to "
+                    "complete SSO authentication.\n\n"
+                    "  Install with:  playwright install chromium\n"
+                    "  Or if using uv tool:  uvx --from inspire-cli playwright install chromium"
+                ) from None
+            raise
         context = browser.new_context(proxy=proxy, ignore_https_errors=True)
         page = context.new_page()
 
