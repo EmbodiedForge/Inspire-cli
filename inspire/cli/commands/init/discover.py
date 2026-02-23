@@ -21,6 +21,7 @@ from inspire.config import (
 from .env_detect import _redact_token_like_text
 from .toml_helpers import _toml_dumps
 
+from inspire.platform.web.browser_api.core import _set_base_url
 from inspire.platform.web.browser_api.notebooks import NotebookFailedError
 
 _CATALOG_DROP_FIELDS = frozenset(
@@ -799,6 +800,19 @@ def _init_discover_mode(
         click.echo(click.style("Could not resolve account key (username)", fg="red"))
         raise SystemExit(1)
 
+    # Propagate the resolved base_url into the browser-API module-level cache
+    # so that all subsequent API calls (list_projects, list_compute_groups, etc.)
+    # resolve to the correct host instead of the placeholder default.
+    placeholder = "https://api.example.com"
+    if prompted_credentials:
+        _set_base_url(prompted_credentials[2])
+    else:
+        cfg_base_url = str(getattr(config, "base_url", "") or "").strip()
+        if cfg_base_url and cfg_base_url != placeholder:
+            _set_base_url(cfg_base_url)
+        elif session.base_url:
+            _set_base_url(session.base_url)
+
     workspace_id = str(session.workspace_id or "").strip()
     if not workspace_id or workspace_id == DEFAULT_WORKSPACE_ID:
         click.echo(
@@ -1019,9 +1033,68 @@ def _init_discover_mode(
         if value:
             merged_workspaces[alias] = value
 
-    merged_workspaces.setdefault("cpu", workspace_id)
-    merged_workspaces.setdefault("gpu", workspace_id)
-    merged_workspaces.setdefault("internet", workspace_id)
+    # Discover multiple workspaces from session and API fallback
+    discovered_workspace_ids: list[str] = []
+    discovered_workspace_names: dict[str, str] = {}
+    if session.all_workspace_ids:
+        discovered_workspace_ids = list(session.all_workspace_ids)
+    if session.all_workspace_names:
+        discovered_workspace_names = dict(session.all_workspace_names)
+
+    # API fallback: try_enumerate_workspaces if Playwright found <= 1
+    if len(discovered_workspace_ids) <= 1:
+        try:
+            from inspire.platform.web.browser_api.workspaces import try_enumerate_workspaces
+
+            api_workspaces = try_enumerate_workspaces(session, workspace_id=workspace_id)
+            for ws in api_workspaces:
+                ws_id = str(ws.get("id") or "").strip()
+                ws_name = str(ws.get("name") or "").strip()
+                if ws_id and ws_id not in discovered_workspace_ids:
+                    discovered_workspace_ids.append(ws_id)
+                if ws_id and ws_name:
+                    discovered_workspace_names.setdefault(ws_id, ws_name)
+        except Exception:
+            pass
+
+    # If multiple workspace IDs were found and not --force, let the user
+    # assign aliases (cpu/gpu/internet) interactively.
+    if len(discovered_workspace_ids) > 1 and not force:
+        click.echo()
+        click.echo(click.style("Multiple workspaces discovered:", bold=True))
+        for idx, ws_id in enumerate(discovered_workspace_ids, start=1):
+            ws_name = discovered_workspace_names.get(ws_id, "")
+            if ws_name:
+                click.echo(f"  {idx}. {ws_name} ({ws_id})")
+            else:
+                click.echo(f"  {idx}. {ws_id}")
+
+        for alias in ("cpu", "gpu", "internet"):
+            if alias in env_overrides:
+                # Env var takes precedence; skip interactive prompt
+                continue
+
+            default_idx = 1
+            # Try to pre-select the current workspace_id as default
+            for idx, ws_id in enumerate(discovered_workspace_ids, start=1):
+                if ws_id == workspace_id:
+                    default_idx = idx
+                    break
+
+            choice = click.prompt(
+                f"Workspace for '{alias}' alias",
+                type=int,
+                default=default_idx,
+                show_default=True,
+            )
+            if 1 <= choice <= len(discovered_workspace_ids):
+                merged_workspaces[alias] = discovered_workspace_ids[choice - 1]
+            else:
+                merged_workspaces.setdefault(alias, workspace_id)
+    else:
+        merged_workspaces.setdefault("cpu", workspace_id)
+        merged_workspaces.setdefault("gpu", workspace_id)
+        merged_workspaces.setdefault("internet", workspace_id)
     global_data["workspaces"] = merged_workspaces
     account_section.pop("workspaces", None)
 

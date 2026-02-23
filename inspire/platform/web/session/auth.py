@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from typing import Optional
 
@@ -200,6 +201,49 @@ def login_with_playwright(
         if not workspace_id:
             workspace_id = DEFAULT_WORKSPACE_ID
 
+        # Discover all workspace IDs via /api/v1/user/routes/{spaceId}
+        # The response contains a "userWorkspaceList" route with all workspaces
+        # the user can access, each with name (display name) and path (ws-... ID).
+        all_workspace_ids: list[str] = []
+        all_workspace_names: dict[str, str] = {}
+        if workspace_id and workspace_id != DEFAULT_WORKSPACE_ID:
+            try:
+                routes_resp = context.request.get(
+                    f"{base_url}/api/v1/user/routes/{workspace_id}",
+                    headers={
+                        "Accept": "application/json",
+                        "Referer": f"{base_url}/jobs/distributedTraining",
+                    },
+                    timeout=15000,
+                )
+                if routes_resp.status == 200:
+                    routes_data = routes_resp.json()
+                    ws_pattern = re.compile(
+                        r"^ws-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                    )
+                    # Find the "userWorkspaceList" route group
+                    for route_group in (routes_data.get("data") or {}).get("routes") or []:
+                        if not isinstance(route_group, dict):
+                            continue
+                        if route_group.get("name") != "userWorkspaceList":
+                            continue
+                        for entry in route_group.get("routes") or []:
+                            if not isinstance(entry, dict):
+                                continue
+                            ws_id = str(entry.get("path") or "").strip()
+                            ws_name = str(entry.get("name") or "").strip()
+                            if ws_id and ws_pattern.match(ws_id) and ws_id != DEFAULT_WORKSPACE_ID:
+                                if ws_id not in all_workspace_names:
+                                    all_workspace_ids.append(ws_id)
+                                    all_workspace_names[ws_id] = ws_name
+            except Exception:
+                pass
+
+        # Ensure the primary workspace_id is included
+        if workspace_id and workspace_id != DEFAULT_WORKSPACE_ID:
+            if workspace_id not in all_workspace_ids:
+                all_workspace_ids.insert(0, workspace_id)
+
         # Capture storage state (cookies + localStorage)
         storage_state = context.storage_state()
 
@@ -214,6 +258,9 @@ def login_with_playwright(
             cookies=cookie_dict,
             workspace_id=workspace_id,
             login_username=username,
+            base_url=base_url,
+            all_workspace_ids=all_workspace_ids or None,
+            all_workspace_names=all_workspace_names or None,
             created_at=time.time(),
         )
         session.save(account=username)

@@ -63,6 +63,9 @@ def _refresh_session_in_place(current: "WebSession", refreshed: "WebSession") ->
     current.cookies = refreshed.cookies
     current.workspace_id = refreshed.workspace_id
     current.login_username = refreshed.login_username
+    current.base_url = refreshed.base_url
+    current.all_workspace_ids = refreshed.all_workspace_ids
+    current.all_workspace_names = refreshed.all_workspace_names
     current.created_at = refreshed.created_at
 
 

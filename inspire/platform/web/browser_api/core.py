@@ -48,6 +48,19 @@ def _get_base_url() -> str:
     return _cached_base_url
 
 
+def _set_base_url(url: str) -> None:
+    """Override the cached base URL for the current process.
+
+    This is used by ``init --discover`` to propagate a CLI-provided
+    ``--base-url`` into the module-level cache so that all subsequent
+    browser-API calls resolve to the correct host.
+    """
+    global _cached_base_url, BASE_URL
+
+    _cached_base_url = url.rstrip("/")
+    BASE_URL = _cached_base_url
+
+
 def _get_browser_api_prefix() -> str:
     """Get the browser API prefix from config or environment.
 
