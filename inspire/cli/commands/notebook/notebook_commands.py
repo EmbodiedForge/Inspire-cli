@@ -263,16 +263,18 @@ def _list_notebooks_for_workspace(
     workspace_id: str,
     user_ids: list[str],
     keyword: str = "",
+    page_size: int = 20,
+    status: list[str] | None = None,
 ) -> list[dict]:
     body = {
         "workspace_id": workspace_id,
         "page": 1,
-        "page_size": 100,
+        "page_size": page_size,
         "filter_by": {
             "keyword": keyword,
             "user_id": user_ids,
             "logic_compute_group_id": [],
-            "status": [],
+            "status": status or [],
             "mirror_url": [],
         },
         "order_by": [{"field": "created_at", "order": "desc"}],
@@ -989,6 +991,26 @@ def _print_notebook_detail(notebook: dict) -> None:
     help="List notebooks across all configured workspaces (cpu/gpu/internet)",
 )
 @click.option(
+    "--limit",
+    "-n",
+    type=int,
+    default=20,
+    show_default=True,
+    help="Max number of notebooks to show",
+)
+@click.option(
+    "--status",
+    "-s",
+    multiple=True,
+    help="Filter by status (e.g. RUNNING, STOPPED). Repeatable.",
+)
+@click.option(
+    "--name",
+    "keyword",
+    default="",
+    help="Filter by notebook name (keyword search)",
+)
+@click.option(
     "--json",
     "json_output",
     is_flag=True,
@@ -1001,6 +1023,9 @@ def list_notebooks(
     workspace_id: Optional[str],
     show_all: bool,
     all_workspaces: bool,
+    limit: int,
+    status: tuple[str, ...],
+    keyword: str,
     json_output: bool,
 ) -> None:
     """List notebook/interactive instances.
@@ -1009,8 +1034,11 @@ def list_notebooks(
     Examples:
         inspire notebook list
         inspire notebook list --all
-        inspire notebook list --workspace-id ws-xxx
-        inspire notebook list --workspace gpu
+        inspire notebook list -n 10
+        inspire notebook list -s RUNNING
+        inspire notebook list -s RUNNING -s STOPPED
+        inspire notebook list --name my-notebook
+        inspire notebook list --workspace gpu -s RUNNING -n 5
         inspire notebook list --all-workspaces
         inspire notebook list --json
     """
@@ -1102,15 +1130,16 @@ def list_notebooks(
 
     all_items: list[dict] = []
     for ws_id in workspace_ids:
+        status_filter = [s.upper() for s in status] if status else []
         body = {
             "workspace_id": ws_id,
             "page": 1,
-            "page_size": 100,
+            "page_size": limit,
             "filter_by": {
-                "keyword": "",
+                "keyword": keyword,
                 "user_id": user_ids,
                 "logic_compute_group_id": [],
-                "status": [],
+                "status": status_filter,
                 "mirror_url": [],
             },
             "order_by": [{"field": "created_at", "order": "desc"}],
@@ -1202,6 +1231,7 @@ def _print_notebook_list(items: list, json_output: bool) -> None:
 
         lines.append(f"{name:<25} {status:<12} {resource_info:<12} {notebook_id:<38}")
 
+    lines.append(f"\nShowing {len(items)} notebook(s)")
     click.echo("\n".join(lines))
 
 
