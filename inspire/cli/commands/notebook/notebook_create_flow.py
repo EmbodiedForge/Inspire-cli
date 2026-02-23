@@ -767,7 +767,7 @@ def run_notebook_create(
 
     if not resource:
         resource = config.notebook_resource
-    if not project:
+    if not project and not config.project_order:
         project = config.job_project_id
     if not image:
         image = config.notebook_image or config.job_image

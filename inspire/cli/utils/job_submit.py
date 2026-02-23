@@ -70,7 +70,9 @@ def select_project_for_workspace(
     if not projects:
         raise ConfigError("No projects available")
 
-    requested_value = requested or config.job_project_id
+    requested_value = requested
+    if not requested_value and not config.project_order:
+        requested_value = config.job_project_id
     if requested_value and not requested_value.startswith("project-"):
         alias_map = config.projects or {}
         for alias, project_id in alias_map.items():
