@@ -156,11 +156,16 @@ def select_compute_group(
         return selected_group
 
     matched = False
+    prefer_location = prefer_location.strip()
+    prefer_location_lower = prefer_location.lower()
 
     for group in matching_groups:
-        if prefer_location.lower() in group.location.lower():
-            selected_group = group
-            matched = True
+        for candidate in _group_match_candidates(group):
+            if prefer_location_lower in candidate.lower():
+                selected_group = group
+                matched = True
+                break
+        if matched:
             break
 
     if not matched:
@@ -168,21 +173,49 @@ def select_compute_group(
         if numbers:
             for num in numbers:
                 for group in matching_groups:
-                    if num in group.location:
-                        selected_group = group
-                        matched = True
+                    for candidate in _group_match_candidates(group):
+                        if num in candidate:
+                            selected_group = group
+                            matched = True
+                            break
+                    if matched:
                         break
                 if matched:
                     break
 
     if not matched:
-        available_locations = [g.location for g in matching_groups]
+        available_locations = []
+        seen = set()
+        for group in matching_groups:
+            label = _group_display_label(group)
+            key = label.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            available_locations.append(label)
         raise ValueError(
             f"Location '{prefer_location}' not found for {selected_group.gpu_type.value}. "
             f"Available locations: {', '.join(available_locations)}"
         )
 
     return selected_group
+
+
+def _group_match_candidates(group: ComputeGroup) -> list[str]:
+    candidates = []
+    for value in (group.location, group.name):
+        text = (value or "").strip()
+        if text:
+            candidates.append(text)
+    return candidates
+
+
+def _group_display_label(group: ComputeGroup) -> str:
+    for value in (group.location, group.name, group.compute_group_id):
+        text = (value or "").strip()
+        if text:
+            return text
+    return "unknown"
 
 
 # ---------------------------------------------------------------------------
