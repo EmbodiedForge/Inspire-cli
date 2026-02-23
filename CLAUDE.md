@@ -178,7 +178,8 @@ git push origin main
 # STEP 4: When ready to publish, copy files to github-public
 git fetch github-public
 git checkout -b public-sync github-public/main
-git checkout main -- .        # Copy ALL files from main (overwrites everything)
+git rm -r --quiet .          # Wipe ALL tracked files (removes stale leftovers)
+git checkout main -- .        # Copy ALL files from main
 # Remove private-only files (not in .gitignore but should stay private)
 git rm -r --cached .claude/skills/check-ci .claude/skills/playwright-cli .claude/plans 2>/dev/null
 rm -rf .claude/skills/check-ci .claude/skills/playwright-cli .claude/plans
@@ -201,10 +202,15 @@ The orphan commit on github-public means histories are **forever unrelated**.
 `git merge --squash` causes conflicts every time. File copy avoids this:
 
 ```bash
+git rm -r --quiet .      # Wipe all tracked files (catches stale leftovers from refactors)
 git checkout main -- .   # Replaces ALL tracked files with main's version
-git add -A               # Stage everything (including deletions)
+git add -A               # Stage everything
 git commit               # Clean commit, no merge conflicts
 ```
+
+**Important:** The `git rm -r .` step is critical. Without it, files that were
+deleted/renamed in main (e.g. a module refactored from `foo/` package to `foo.py`)
+survive on github-public and shadow the correct files at install time.
 
 ### Security Rules
 
