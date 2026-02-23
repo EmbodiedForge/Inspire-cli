@@ -75,7 +75,20 @@ def list_projects_cmd(
     )
 
     try:
-        projects = browser_api_module.list_projects(session=session)
+        workspace_ids = session.all_workspace_ids or (
+            [session.workspace_id] if session.workspace_id else []
+        )
+        if not workspace_ids:
+            # No discovered workspaces — fall back to default query
+            projects = browser_api_module.list_projects(session=session)
+        else:
+            seen: set[str] = set()
+            projects = []
+            for ws_id in workspace_ids:
+                for p in browser_api_module.list_projects(workspace_id=ws_id, session=session):
+                    if p.project_id not in seen:
+                        seen.add(p.project_id)
+                        projects.append(p)
     except Exception as e:
         _handle_error(ctx, "APIError", f"Failed to list projects: {e}", EXIT_API_ERROR)
         return
