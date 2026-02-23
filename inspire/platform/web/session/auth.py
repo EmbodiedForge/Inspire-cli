@@ -319,14 +319,16 @@ def get_web_session(force_refresh: bool = False, require_workspace: bool = False
 
     # Use cached session if available and has cookies, even if beyond TTL.
     # The session cookies may still be valid server-side; let API calls determine validity.
-    cached = WebSession.load(allow_expired=True, account=username or None)
-    if cached and cached.storage_state.get("cookies"):
-        _maybe_apply_workspace_override(cached, env_workspace_id)
-        if (not require_workspace or _has_real_workspace_id(cached)) and _session_matches_username(
-            cached, username
-        ):
-            # Use cached session; server will reject if truly invalid.
-            return cached
+    # Skip this when force_refresh is set — the caller explicitly wants a fresh login.
+    if not force_refresh:
+        cached = WebSession.load(allow_expired=True, account=username or None)
+        if cached and cached.storage_state.get("cookies"):
+            _maybe_apply_workspace_override(cached, env_workspace_id)
+            if (
+                not require_workspace or _has_real_workspace_id(cached)
+            ) and _session_matches_username(cached, username):
+                # Use cached session; server will reject if truly invalid.
+                return cached
 
     # Session is missing or has no cookies, perform fresh login
     base_url = _load_runtime_config().base_url

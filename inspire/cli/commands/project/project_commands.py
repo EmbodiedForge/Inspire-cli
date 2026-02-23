@@ -75,9 +75,32 @@ def list_projects_cmd(
     )
 
     try:
-        workspace_ids = session.all_workspace_ids or (
-            [session.workspace_id] if session.workspace_id else []
-        )
+        workspace_ids = session.all_workspace_ids
+        if workspace_ids is None:
+            # Workspace discovery never happened (stale session or login
+            # method that doesn't support it).  Try using workspace IDs
+            # from the config; if none are configured, fall back to the
+            # session's single workspace_id.
+            from inspire.config import Config as _Cfg
+
+            try:
+                _cfg, _ = _Cfg.from_files_and_env(
+                    require_credentials=False, require_target_dir=False
+                )
+                cfg_ws = list(
+                    dict.fromkeys(
+                        ws
+                        for ws in [
+                            getattr(_cfg, "workspace_cpu_id", None),
+                            getattr(_cfg, "workspace_gpu_id", None),
+                            getattr(_cfg, "workspace_internet_id", None),
+                        ]
+                        if ws
+                    )
+                )
+            except Exception:
+                cfg_ws = []
+            workspace_ids = cfg_ws or ([session.workspace_id] if session.workspace_id else [])
         if not workspace_ids:
             # No discovered workspaces — fall back to default query
             projects = browser_api_module.list_projects(session=session)
