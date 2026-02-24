@@ -833,6 +833,7 @@ class TestInitCommand:
         global_config = tmp_path / ".config" / "inspire" / "config.toml"
         monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
         monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
 
         workspace_id = "ws-11111111-1111-1111-1111-111111111111"
         monkeypatch.setenv("INSPIRE_USERNAME", "testuser")

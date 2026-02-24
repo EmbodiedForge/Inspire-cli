@@ -614,6 +614,13 @@ def _ensure_ssh_key() -> None:
 
     click.echo()
     click.echo("No SSH key found. SSH keys are needed for bridge/tunnel/notebook SSH features.")
+
+    # Non-interactive contexts (CI, tests) must not block on prompts or fail on EOF.
+    stdin = click.get_text_stream("stdin")
+    if not getattr(stdin, "isatty", lambda: False)():
+        click.echo("Skipping SSH key generation in non-interactive mode.")
+        return
+
     if not click.confirm("Generate a new ed25519 SSH key?", default=True):
         return
 
