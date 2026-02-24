@@ -15,6 +15,7 @@ from inspire.platform.web.browser_api.rtunnel import (
     _extract_jupyter_token,
     _focus_terminal_input,
     _jupyter_server_base,
+    _open_or_create_terminal,
     _send_terminal_command_via_websocket,
     _wait_for_terminal_surface,
     _wait_for_terminal_surface_progressive,
@@ -124,6 +125,16 @@ def test_create_terminal_via_api_exception() -> None:
     assert result is None
 
 
+def test_create_terminal_via_api_playwright_exception() -> None:
+    class _BrokenRequest:
+        def post(self, url: str, headers: dict | None = None, timeout: int = 0) -> None:
+            raise rtunnel_module.PlaywrightError("request failed")
+
+    ctx = _DummyContext(_BrokenRequest())  # type: ignore[arg-type]
+    result = _create_terminal_via_api(ctx, "https://nb.example.com/lab")
+    assert result is None
+
+
 def test_create_terminal_via_api_proxy_url() -> None:
     """API URL should be derived from the server base, not the lab path."""
     resp = _DummyResponse(200, {"name": "2"})
@@ -198,6 +209,20 @@ def test_send_terminal_command_via_websocket_exception() -> None:
     class _BrokenPage:
         def evaluate(self, script: str, payload: dict):  # noqa: ANN201
             raise RuntimeError("eval failed")
+
+    page = _BrokenPage()
+    result = _send_terminal_command_via_websocket(
+        page,
+        ws_url="wss://example.test/terminals/websocket/1",
+        command="echo hi",
+    )
+    assert result is False
+
+
+def test_send_terminal_command_via_websocket_playwright_exception() -> None:
+    class _BrokenPage:
+        def evaluate(self, script: str, payload: dict):  # noqa: ANN201
+            raise rtunnel_module.PlaywrightError("eval failed")
 
     page = _BrokenPage()
     result = _send_terminal_command_via_websocket(
@@ -369,6 +394,200 @@ def test_focus_terminal_input_returns_false_when_unavailable() -> None:
     page = _PageStub()
 
     assert _focus_terminal_input(frame, page) is False
+
+
+def test_open_or_create_terminal_returns_early_when_api_path_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, int] = {"recover": 0, "entry": 0, "fallback": 0}
+
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_open_terminal_via_rest_api",
+        lambda **_kwargs: (True, True),
+    )
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_recover_api_terminal_surface",
+        lambda **_kwargs: calls.__setitem__("recover", calls["recover"] + 1) or False,
+    )
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_wait_for_terminal_entry_point",
+        lambda **_kwargs: calls.__setitem__("entry", calls["entry"] + 1),
+    )
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_open_terminal_via_dom_fallback",
+        lambda **_kwargs: calls.__setitem__("fallback", calls["fallback"] + 1) or True,
+    )
+
+    assert _open_or_create_terminal(context=object(), page=object(), lab_frame=object()) is True
+    assert calls["recover"] == 0
+    assert calls["entry"] == 0
+    assert calls["fallback"] == 0
+
+
+def test_open_or_create_terminal_uses_dom_fallback_after_api_recovery_miss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_open_terminal_via_rest_api",
+        lambda **_kwargs: (False, True),
+    )
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_recover_api_terminal_surface",
+        lambda **_kwargs: False,
+    )
+
+    def fake_wait_entry(*, lab_frame, api_term_created: bool) -> None:  # noqa: ANN001
+        events.append(("entry", api_term_created))
+
+    monkeypatch.setattr(rtunnel_module, "_wait_for_terminal_entry_point", fake_wait_entry)
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_dismiss_terminal_dialog_once",
+        lambda **kwargs: events.append(("dismiss", kwargs["settle_ms"])) or False,
+    )
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_open_terminal_via_dom_fallback",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_click_terminal_tab",
+        lambda *_args, **kwargs: events.append(("tab_click", kwargs["settle_ms"])) or True,
+    )
+
+    assert _open_or_create_terminal(context=object(), page=object(), lab_frame=object()) is True
+    assert ("entry", True) in events
+    assert ("tab_click", 80) in events
+
+
+def test_open_or_create_terminal_handles_api_full_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        rtunnel_module, "_open_terminal_via_rest_api", lambda **_kwargs: (False, False)
+    )
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_wait_for_terminal_entry_point",
+        lambda **kwargs: events.append(("entry", kwargs["api_term_created"])),
+    )
+    monkeypatch.setattr(rtunnel_module, "_dismiss_terminal_dialog_once", lambda **_kwargs: False)
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_open_terminal_via_dom_fallback",
+        lambda **kwargs: events.append(("fallback", kwargs["api_term_created"])) or True,
+    )
+
+    assert _open_or_create_terminal(context=object(), page=object(), lab_frame=object()) is True
+    assert ("entry", False) in events
+    assert ("fallback", False) in events
+
+
+def test_open_or_create_terminal_returns_false_when_dom_fallback_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"tab_click": 0}
+
+    monkeypatch.setattr(
+        rtunnel_module, "_open_terminal_via_rest_api", lambda **_kwargs: (False, False)
+    )
+    monkeypatch.setattr(rtunnel_module, "_wait_for_terminal_entry_point", lambda **_kwargs: None)
+    monkeypatch.setattr(rtunnel_module, "_dismiss_terminal_dialog_once", lambda **_kwargs: False)
+    monkeypatch.setattr(rtunnel_module, "_open_terminal_via_dom_fallback", lambda **_kwargs: False)
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_click_terminal_tab",
+        lambda *_args, **_kwargs: calls.__setitem__("tab_click", calls["tab_click"] + 1) or True,
+    )
+
+    assert _open_or_create_terminal(context=object(), page=object(), lab_frame=object()) is False
+    assert calls["tab_click"] == 0
+
+
+def test_open_or_create_terminal_returns_true_when_api_recovery_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"entry": 0, "fallback": 0}
+
+    monkeypatch.setattr(
+        rtunnel_module, "_open_terminal_via_rest_api", lambda **_kwargs: (False, True)
+    )
+    monkeypatch.setattr(rtunnel_module, "_recover_api_terminal_surface", lambda **_kwargs: True)
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_wait_for_terminal_entry_point",
+        lambda **_kwargs: calls.__setitem__("entry", calls["entry"] + 1),
+    )
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_open_terminal_via_dom_fallback",
+        lambda **_kwargs: calls.__setitem__("fallback", calls["fallback"] + 1) or True,
+    )
+
+    assert _open_or_create_terminal(context=object(), page=object(), lab_frame=object()) is True
+    assert calls["entry"] == 0
+    assert calls["fallback"] == 0
+
+
+def test_open_terminal_via_rest_api_handles_playwright_navigation_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(rtunnel_module, "_create_terminal_via_api", lambda *_args, **_kwargs: "1")
+
+    class _Frame:
+        url = "https://nb.example.com/lab"
+
+        def goto(self, *_args, **_kwargs) -> None:
+            raise rtunnel_module.PlaywrightError("navigation failed")
+
+    terminal_ready, api_term_created = rtunnel_module._open_terminal_via_rest_api(  # noqa: SLF001
+        context=object(),
+        page=object(),
+        lab_frame=_Frame(),
+    )
+    assert terminal_ready is False
+    assert api_term_created is True
+
+
+def test_recover_api_terminal_surface_waits_for_menu_before_file_menu_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, int] = {"file_menu": 0}
+
+    monkeypatch.setattr(rtunnel_module, "_click_terminal_tab", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_wait_for_terminal_surface_progressive",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        rtunnel_module, "_wait_for_file_menu_ready", lambda *_args, **_kwargs: False
+    )
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_open_terminal_from_file_menu",
+        lambda *_args, **_kwargs: calls.__setitem__("file_menu", calls["file_menu"] + 1) or True,
+    )
+
+    assert (
+        rtunnel_module._recover_api_terminal_surface(  # noqa: SLF001
+            lab_frame=object(),
+            page=object(),
+        )
+        is False
+    )
+    assert calls["file_menu"] == 0
 
 
 # ---------------------------------------------------------------------------

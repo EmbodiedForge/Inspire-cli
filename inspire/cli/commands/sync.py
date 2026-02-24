@@ -9,7 +9,7 @@ This command:
 3. Returns the synced commit SHA
 
 If the git remote is unreachable, use 'inspire bridge scp' to transfer
-files directly. The --via-action flag is deprecated.
+files directly.
 """
 
 from __future__ import annotations
@@ -48,7 +48,10 @@ from inspire.bridge.tunnel import (
     sync_via_ssh,
     sync_via_ssh_bundle,
 )
-from inspire.cli.formatters import json_formatter
+from inspire.cli.utils.output import (
+    emit_error as emit_output_error,
+    emit_success as emit_output_success,
+)
 
 
 def get_current_branch() -> str:
@@ -307,39 +310,39 @@ def sync_via_tunnel(
         synced_sha = result.get("synced_sha") or commit_sha[:7]
         bundle_mode = result.get("bundle_mode") if offline_bundle else None
         bundle_base_sha = result.get("bundle_base_sha") if offline_bundle else None
-        if ctx.json_output:
-            payload = {
-                "status": "success",
-                "method": "ssh_bundle" if offline_bundle else "ssh_tunnel",
-                "branch": branch,
-                "remote": remote,
-                "commit": commit_sha[:7],
-                "commit_full": commit_sha,
-                "synced_sha": synced_sha,
-                "message": commit_msg,
-                "target_dir": config.target_dir,
-            }
-            if bundle_mode:
-                payload["bundle_mode"] = bundle_mode
-            if bundle_base_sha:
-                payload["bundle_base_sha"] = bundle_base_sha
-            click.echo(json_formatter.format_json(payload))
-        else:
-            if ctx.debug:
-                click.echo(
-                    click.style("OK", fg="green")
-                    + f" Synced branch '{branch}' ({synced_sha[:7]}) to {config.target_dir}"
-                )
-                click.echo(f"  Commit: {commit_msg}")
-                if offline_bundle:
-                    mode_suffix = f", {bundle_mode}" if bundle_mode else ""
-                    click.echo(f"  Method: SSH tunnel (offline bundle{mode_suffix})")
-                else:
-                    click.echo("  Method: SSH tunnel (fast)")
+        payload: dict[str, object] = {
+            "status": "success",
+            "method": "ssh_bundle" if offline_bundle else "ssh_tunnel",
+            "branch": branch,
+            "remote": remote,
+            "commit": commit_sha[:7],
+            "commit_full": commit_sha,
+            "synced_sha": synced_sha,
+            "message": commit_msg,
+            "target_dir": config.target_dir,
+        }
+        if bundle_mode:
+            payload["bundle_mode"] = bundle_mode
+        if bundle_base_sha:
+            payload["bundle_base_sha"] = bundle_base_sha
+
+        if ctx.debug and not ctx.json_output:
+            click.echo(
+                click.style("OK", fg="green")
+                + f" Synced branch '{branch}' ({synced_sha[:7]}) to {config.target_dir}"
+            )
+            click.echo(f"  Commit: {commit_msg}")
+            if offline_bundle:
+                mode_suffix = f", {bundle_mode}" if bundle_mode else ""
+                click.echo(f"  Method: SSH tunnel (offline bundle{mode_suffix})")
             else:
-                click.echo(
-                    f"synced {synced_sha[:7]} via {'ssh-bundle' if offline_bundle else 'ssh'}"
-                )
+                click.echo("  Method: SSH tunnel (fast)")
+        else:
+            emit_output_success(
+                ctx,
+                payload=payload,
+                text=f"synced {synced_sha[:7]} via {'ssh-bundle' if offline_bundle else 'ssh'}",
+            )
         return EXIT_SUCCESS
 
     message, hint, details = _summarize_sync_failure(
@@ -348,23 +351,20 @@ def sync_via_tunnel(
         remote=remote,
     )
 
-    if ctx.json_output:
-        click.echo(
-            json_formatter.format_json_error(
-                "SyncError",
-                message,
-                EXIT_GENERAL_ERROR,
-                hint=hint,
-            ),
-            err=True,
-        )
-    else:
-        click.echo(f"Sync failed: {message}", err=True)
-        if hint:
-            click.echo(f"Hint: {hint}", err=True)
-        if ctx.debug and details and details != message:
-            click.echo("Details:", err=True)
-            click.echo(details, err=True)
+    human_lines = [f"Sync failed: {message}"]
+    if hint:
+        human_lines.append(f"Hint: {hint}")
+    if ctx.debug and details and details != message:
+        human_lines.append("Details:")
+        human_lines.append(details)
+    emit_output_error(
+        ctx,
+        error_type="SyncError",
+        message=message,
+        exit_code=EXIT_GENERAL_ERROR,
+        hint=hint,
+        human_lines=human_lines,
+    )
     return EXIT_GENERAL_ERROR
 
 
@@ -386,13 +386,13 @@ def sync_via_workflow(
     try:
         run_id = trigger_sync_workflow(config, branch, commit_sha)
     except (ForgeError, ForgeAuthError, GiteaError, GiteaAuthError) as e:
-        if ctx.json_output:
-            click.echo(
-                json_formatter.format_json_error("GiteaError", str(e), EXIT_CONFIG_ERROR),
-                err=True,
-            )
-        else:
-            click.echo(f"Error: {e}", err=True)
+        emit_output_error(
+            ctx,
+            error_type="GiteaError",
+            message=str(e),
+            exit_code=EXIT_CONFIG_ERROR,
+            human_lines=[f"Error: {e}"],
+        )
         return EXIT_CONFIG_ERROR
 
     if wait and run_id:
@@ -402,92 +402,81 @@ def sync_via_workflow(
         try:
             result = wait_for_workflow_completion(config, run_id, timeout)
         except TimeoutError:
-            if ctx.json_output:
-                click.echo(
-                    json_formatter.format_json_error(
-                        "Timeout",
-                        f"Sync workflow did not complete within {timeout}s",
-                        EXIT_GENERAL_ERROR,
-                        hint="Check Gitea for sync workflow status.",
-                    ),
-                    err=True,
-                )
-            else:
-                click.echo(f"Sync workflow timed out after {timeout}s", err=True)
-                click.echo("The sync may still complete. Check Gitea for status.", err=True)
+            emit_output_error(
+                ctx,
+                error_type="Timeout",
+                message=f"Sync workflow did not complete within {timeout}s",
+                exit_code=EXIT_GENERAL_ERROR,
+                hint="Check Gitea for sync workflow status.",
+                human_lines=[
+                    f"Sync workflow timed out after {timeout}s",
+                    "The sync may still complete. Check Gitea for status.",
+                ],
+            )
             return EXIT_GENERAL_ERROR
 
         if result.get("conclusion") == "success":
-            if ctx.json_output:
+            if ctx.debug and not ctx.json_output:
                 click.echo(
-                    json_formatter.format_json(
-                        {
-                            "status": "success",
-                            "method": "gitea_actions",
-                            "branch": branch,
-                            "remote": remote,
-                            "commit": commit_sha[:7],
-                            "commit_full": commit_sha,
-                            "message": commit_msg,
-                            "target_dir": config.target_dir,
-                            "html_url": result.get("html_url", ""),
-                        }
-                    )
+                    click.style("OK", fg="green")
+                    + f" Synced branch '{branch}' ({commit_sha[:7]}) to {config.target_dir}"
                 )
+                click.echo(f"  Commit: {commit_msg}")
+                click.echo(f"  Remote: {remote}")
             else:
-                if ctx.debug:
-                    click.echo(
-                        click.style("OK", fg="green")
-                        + f" Synced branch '{branch}' ({commit_sha[:7]}) to {config.target_dir}"
-                    )
-                    click.echo(f"  Commit: {commit_msg}")
-                    click.echo(f"  Remote: {remote}")
-                else:
-                    click.echo(f"synced {commit_sha[:7]} via workflow")
+                emit_output_success(
+                    ctx,
+                    payload={
+                        "status": "success",
+                        "method": "gitea_actions",
+                        "branch": branch,
+                        "remote": remote,
+                        "commit": commit_sha[:7],
+                        "commit_full": commit_sha,
+                        "message": commit_msg,
+                        "target_dir": config.target_dir,
+                        "html_url": result.get("html_url", ""),
+                    },
+                    text=f"synced {commit_sha[:7]} via workflow",
+                )
             return EXIT_SUCCESS
 
-        if ctx.json_output:
-            hint = result.get("html_url") or None
-            click.echo(
-                json_formatter.format_json_error(
-                    "SyncError",
-                    f"Sync failed: {result.get('conclusion', 'unknown')}",
-                    EXIT_GENERAL_ERROR,
-                    hint=hint,
-                ),
-                err=True,
-            )
-        else:
-            click.echo(f"Sync failed: {result.get('conclusion', 'unknown')}", err=True)
-            if result.get("html_url"):
-                click.echo(f"  See: {result['html_url']}", err=True)
+        hint = result.get("html_url") or None
+        human_lines = [f"Sync failed: {result.get('conclusion', 'unknown')}"]
+        if result.get("html_url"):
+            human_lines.append(f"  See: {result['html_url']}")
+        emit_output_error(
+            ctx,
+            error_type="SyncError",
+            message=f"Sync failed: {result.get('conclusion', 'unknown')}",
+            exit_code=EXIT_GENERAL_ERROR,
+            hint=hint,
+            human_lines=human_lines,
+        )
         return EXIT_GENERAL_ERROR
 
-    if ctx.json_output:
+    if ctx.debug and not ctx.json_output:
+        click.echo(click.style("OK", fg="green") + f" Pushed {branch} to {remote}")
         click.echo(
-            json_formatter.format_json(
-                {
-                    "status": "triggered",
-                    "method": "gitea_actions",
-                    "branch": branch,
-                    "remote": remote,
-                    "commit": commit_sha[:7],
-                    "commit_full": commit_sha,
-                    "run_id": run_id,
-                }
-            )
+            click.style("OK", fg="green")
+            + " Triggered sync workflow"
+            + (f" (run {run_id})" if run_id else "")
         )
+        click.echo(f"  Commit: {commit_sha[:7]} - {commit_msg}")
     else:
-        if ctx.debug:
-            click.echo(click.style("OK", fg="green") + f" Pushed {branch} to {remote}")
-            click.echo(
-                click.style("OK", fg="green")
-                + " Triggered sync workflow"
-                + (f" (run {run_id})" if run_id else "")
-            )
-            click.echo(f"  Commit: {commit_sha[:7]} - {commit_msg}")
-        else:
-            click.echo("triggered sync workflow" + (f" (run {run_id})" if run_id else ""))
+        emit_output_success(
+            ctx,
+            payload={
+                "status": "triggered",
+                "method": "gitea_actions",
+                "branch": branch,
+                "remote": remote,
+                "commit": commit_sha[:7],
+                "commit_full": commit_sha,
+                "run_id": run_id,
+            },
+            text="triggered sync workflow" + (f" (run {run_id})" if run_id else ""),
+        )
 
     return EXIT_SUCCESS
 
@@ -545,11 +534,6 @@ def sync_via_workflow(
     default=None,
     help="Git push policy before sync (default: required for remote/workflow, best-effort for bundle)",
 )
-@click.option(
-    "--via-action",
-    is_flag=True,
-    help="Deprecated alias for '--transport workflow'",
-)
 @pass_context
 def sync(
     ctx: Context,
@@ -562,7 +546,6 @@ def sync(
     transport: str,
     source: str,
     push_mode: Optional[str],
-    via_action: bool,
 ) -> None:
     """Sync local code to the Bridge shared filesystem.
 
@@ -590,13 +573,13 @@ def sync(
     try:
         config, _ = Config.from_files_and_env(require_target_dir=True, require_credentials=False)
     except ConfigError as e:
-        if ctx.json_output:
-            click.echo(
-                json_formatter.format_json_error("ConfigError", str(e), EXIT_CONFIG_ERROR),
-                err=True,
-            )
-        else:
-            click.echo(f"Configuration error: {e}", err=True)
+        emit_output_error(
+            ctx,
+            error_type="ConfigError",
+            message=str(e),
+            exit_code=EXIT_CONFIG_ERROR,
+            human_lines=[f"Configuration error: {e}"],
+        )
         sys.exit(EXIT_CONFIG_ERROR)
 
     # Determine branch
@@ -610,43 +593,25 @@ def sync(
     transport = transport.lower().strip()
     source = source.lower().strip()
     push_mode = push_mode.lower().strip() if push_mode else None
-    if via_action:
-        transport = "workflow"
-        if not ctx.json_output:
-            click.echo(
-                "Warning: --via-action is deprecated. Use '--transport workflow' instead.",
-                err=True,
-            )
 
     if transport == "workflow" and source != "auto":
-        if ctx.json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "ValidationError",
-                    "--source is only supported with '--transport ssh'",
-                    EXIT_CONFIG_ERROR,
-                ),
-                err=True,
-            )
-        else:
-            click.echo("Error: --source is only supported with '--transport ssh'.", err=True)
+        emit_output_error(
+            ctx,
+            error_type="ValidationError",
+            message="--source is only supported with '--transport ssh'",
+            exit_code=EXIT_CONFIG_ERROR,
+            human_lines=["Error: --source is only supported with '--transport ssh'."],
+        )
         sys.exit(EXIT_CONFIG_ERROR)
 
     if no_push and push_mode and push_mode != "skip":
-        if ctx.json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "ValidationError",
-                    "--no-push conflicts with --push-mode values other than 'skip'",
-                    EXIT_CONFIG_ERROR,
-                ),
-                err=True,
-            )
-        else:
-            click.echo(
-                "Error: --no-push conflicts with --push-mode values other than 'skip'.",
-                err=True,
-            )
+        emit_output_error(
+            ctx,
+            error_type="ValidationError",
+            message="--no-push conflicts with --push-mode values other than 'skip'",
+            exit_code=EXIT_CONFIG_ERROR,
+            human_lines=["Error: --no-push conflicts with --push-mode values other than 'skip'."],
+        )
         sys.exit(EXIT_CONFIG_ERROR)
 
     tunnel_config = None
@@ -658,22 +623,15 @@ def sync(
         tunnel_config = load_tunnel_config()
         candidate_bridges = _ordered_bridges_for_sync(tunnel_config)
         if not candidate_bridges:
-            if ctx.json_output:
-                click.echo(
-                    json_formatter.format_json_error(
-                        "TunnelUnavailable",
-                        "No bridge configured for SSH sync",
-                        EXIT_CONFIG_ERROR,
-                        hint="Use 'inspire tunnel list' or 'inspire notebook ssh <id>' first.",
-                    ),
-                    err=True,
-                )
-            else:
-                click.echo("Error: No bridge configured for SSH sync.", err=True)
-                click.echo(
-                    "Hint: Use 'inspire tunnel list' or 'inspire notebook ssh <id>' first.",
-                    err=True,
-                )
+            hint = "Use 'inspire tunnel list' or 'inspire notebook ssh <id>' first."
+            emit_output_error(
+                ctx,
+                error_type="TunnelUnavailable",
+                message="No bridge configured for SSH sync",
+                exit_code=EXIT_CONFIG_ERROR,
+                hint=hint,
+                human_lines=["Error: No bridge configured for SSH sync.", f"Hint: {hint}"],
+            )
             sys.exit(EXIT_CONFIG_ERROR)
 
         tried_bridges: list[str] = []
@@ -690,46 +648,45 @@ def sync(
 
         if not selected_bridge:
             tried_csv = ", ".join(tried_bridges)
-            if ctx.json_output:
-                click.echo(
-                    json_formatter.format_json_error(
-                        "TunnelUnavailable",
-                        f"SSH tunnel is not available for any configured bridge (tried: {tried_csv})",
-                        EXIT_GENERAL_ERROR,
-                        hint="Run 'inspire tunnel status' or use '--transport workflow'.",
+            hint = "Run 'inspire tunnel status' or use '--transport workflow'."
+            emit_output_error(
+                ctx,
+                error_type="TunnelUnavailable",
+                message=(
+                    "SSH tunnel is not available for any configured bridge " f"(tried: {tried_csv})"
+                ),
+                exit_code=EXIT_GENERAL_ERROR,
+                hint=hint,
+                human_lines=[
+                    (
+                        "Error: SSH tunnel is not available for any configured bridge "
+                        f"(tried: {tried_csv})."
                     ),
-                    err=True,
-                )
-            else:
-                click.echo(
-                    f"Error: SSH tunnel is not available for any configured bridge (tried: {tried_csv}).",
-                    err=True,
-                )
-                click.echo(
-                    "Hint: Run 'inspire tunnel status' or use '--transport workflow'.",
-                    err=True,
-                )
+                    f"Hint: {hint}",
+                ],
+            )
             sys.exit(EXIT_GENERAL_ERROR)
 
         ssh_source = _effective_ssh_source(source, selected_bridge)
         if ssh_source == "remote" and not selected_bridge.has_internet:
             hint = "Use '--source bundle' (or '--source auto') for no-internet bridges."
-            if ctx.json_output:
-                click.echo(
-                    json_formatter.format_json_error(
-                        "ValidationError",
-                        f"Bridge '{selected_bridge.name}' has no internet; remote source is unavailable",
-                        EXIT_CONFIG_ERROR,
-                        hint=hint,
+            emit_output_error(
+                ctx,
+                error_type="ValidationError",
+                message=(
+                    f"Bridge '{selected_bridge.name}' has no internet; "
+                    "remote source is unavailable"
+                ),
+                exit_code=EXIT_CONFIG_ERROR,
+                hint=hint,
+                human_lines=[
+                    (
+                        f"Error: Bridge '{selected_bridge.name}' has no internet; "
+                        "remote source is unavailable."
                     ),
-                    err=True,
-                )
-            else:
-                click.echo(
-                    f"Error: Bridge '{selected_bridge.name}' has no internet; remote source is unavailable.",
-                    err=True,
-                )
-                click.echo(f"Hint: {hint}", err=True)
+                    f"Hint: {hint}",
+                ],
+            )
             sys.exit(EXIT_CONFIG_ERROR)
 
         use_offline_bundle = ssh_source == "bundle"
@@ -758,34 +715,27 @@ def sync(
         try:
             _preflight_workflow_transport(config)
         except (ForgeError, ForgeAuthError, ConfigError) as e:
-            if ctx.json_output:
-                click.echo(
-                    json_formatter.format_json_error("ConfigError", str(e), EXIT_CONFIG_ERROR),
-                    err=True,
-                )
-            else:
-                click.echo(f"Configuration error: {e}", err=True)
+            emit_output_error(
+                ctx,
+                error_type="ConfigError",
+                message=str(e),
+                exit_code=EXIT_CONFIG_ERROR,
+                human_lines=[f"Configuration error: {e}"],
+            )
             sys.exit(EXIT_CONFIG_ERROR)
 
     # Check for uncommitted changes
     if has_uncommitted_changes():
         if not allow_dirty:
-            if ctx.json_output:
-                click.echo(
-                    json_formatter.format_json_error(
-                        "ValidationError",
-                        "Uncommitted changes detected",
-                        EXIT_GENERAL_ERROR,
-                        hint="Commit/stash changes, or pass --allow-dirty to sync committed HEAD only.",
-                    ),
-                    err=True,
-                )
-            else:
-                click.echo("Error: Uncommitted changes detected.", err=True)
-                click.echo(
-                    "Hint: Commit/stash changes, or pass --allow-dirty to sync committed HEAD only.",
-                    err=True,
-                )
+            hint = "Commit/stash changes, or pass --allow-dirty to sync committed HEAD only."
+            emit_output_error(
+                ctx,
+                error_type="ValidationError",
+                message="Uncommitted changes detected",
+                exit_code=EXIT_GENERAL_ERROR,
+                hint=hint,
+                human_lines=["Error: Uncommitted changes detected.", f"Hint: {hint}"],
+            )
             sys.exit(EXIT_GENERAL_ERROR)
 
         if not ctx.json_output:
@@ -815,9 +765,11 @@ def sync(
                     )
             else:
                 if ctx.json_output:
-                    click.echo(
-                        json_formatter.format_json_error("GitError", str(e), EXIT_GENERAL_ERROR),
-                        err=True,
+                    emit_output_error(
+                        ctx,
+                        error_type="GitError",
+                        message=str(e),
+                        exit_code=EXIT_GENERAL_ERROR,
                     )
                     sys.exit(EXIT_GENERAL_ERROR)
                 raise

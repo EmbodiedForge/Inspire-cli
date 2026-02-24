@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +80,111 @@ _CONTEXT_WORKSPACE_FIELD_MAP = {
     "workspace_gpu": "workspace_gpu_id",
     "workspace_internet": "workspace_internet_id",
 }
+
+
+@dataclass
+class _ProjectLayerState:
+    project_config_path: Path | None
+    project_projects: dict[str, str]
+    project_defaults: dict[str, Any]
+    project_context: dict[str, Any]
+    project_account_catalogs: dict[str, dict[str, Any]]
+    project_accounts: dict[str, str]
+    prefer_source: str = "env"
+
+
+def _default_config_values() -> dict[str, Any]:
+    return {
+        "username": "",
+        "password": "",
+        "base_url": "https://api.example.com",
+        "target_dir": None,
+        "log_pattern": "training_master_*.log",
+        "job_cache_path": "~/.inspire/jobs.json",
+        "timeout": 30,
+        "max_retries": 3,
+        "retry_delay": 1.0,
+        "git_platform": None,
+        "gitea_repo": None,
+        "gitea_token": None,
+        "gitea_server": "https://codeberg.org",
+        "gitea_log_workflow": "retrieve_job_log.yml",
+        "gitea_sync_workflow": "sync_code.yml",
+        "gitea_bridge_workflow": "run_bridge_action.yml",
+        "github_repo": None,
+        "github_token": None,
+        "github_server": "https://github.com",
+        "github_log_workflow": "retrieve_job_log.yml",
+        "github_sync_workflow": "sync_code.yml",
+        "github_bridge_workflow": "run_bridge_action.yml",
+        "log_cache_dir": "~/.inspire/logs",
+        "remote_timeout": 90,
+        "default_remote": "origin",
+        "bridge_action_timeout": 600,
+        "bridge_action_denylist": [],
+        "skip_ssl_verify": False,
+        "force_proxy": False,
+        "openapi_prefix": None,
+        "browser_api_prefix": None,
+        "auth_endpoint": None,
+        "docker_registry": None,
+        "job_priority": 6,
+        "job_image": None,
+        "job_project_id": None,
+        "job_workspace_id": None,
+        "workspace_cpu_id": None,
+        "workspace_gpu_id": None,
+        "workspace_internet_id": None,
+        "workspaces": {},
+        "projects": {},
+        "project_catalog": {},
+        "project_shared_path_groups": {},
+        "project_workdirs": {},
+        "account_shared_path_group": None,
+        "account_train_job_workdir": None,
+        "context_account": None,
+        "notebook_resource": "1xH200",
+        "notebook_image": None,
+        "rtunnel_bin": None,
+        "sshd_deb_dir": None,
+        "dropbear_deb_dir": None,
+        "setup_script": None,
+        "rtunnel_download_url": (
+            "https://github.com/Sarfflow/rtunnel/releases/download/nightly/"
+            "rtunnel-linux-amd64.tar.gz"
+        ),
+        "tunnel_retries": 3,
+        "tunnel_retry_pause": 2.0,
+        "shm_size": None,
+        "compute_groups": [],
+        "remote_env": {},
+        "accounts": {},
+    }
+
+
+def _initialize_sources(config_dict: dict[str, Any]) -> dict[str, str]:
+    return {key: SOURCE_DEFAULT for key in config_dict}
+
+
+def _apply_defaults_overrides(
+    *,
+    defaults: dict[str, Any],
+    config_dict: dict[str, Any],
+    sources: dict[str, str],
+    source_name: str,
+) -> None:
+    for key, field_name in _DEFAULTS_FIELD_MAP.items():
+        if key not in defaults:
+            continue
+        raw_value = defaults.get(key)
+        if raw_value is None or raw_value == "":
+            continue
+        try:
+            coerced = _coerce_project_default(field_name, raw_value)
+        except (ValueError, TypeError):
+            continue
+        config_dict[field_name] = coerced
+        sources[field_name] = source_name
 
 
 def _parse_alias_map(raw_value: Any) -> dict[str, str]:
@@ -280,205 +386,153 @@ def _merge_account_catalogs(
     return merged_catalogs
 
 
-def config_from_files_and_env(
+def _apply_global_layer(
     *,
-    require_target_dir: bool = False,
-    require_credentials: bool = True,
-) -> tuple[Config, dict[str, str]]:
-    """Load config from files + env vars with layered precedence."""
-    sources: dict[str, str] = {}
-
-    config_dict: dict[str, Any] = {
-        "username": "",
-        "password": "",
-        "base_url": "https://api.example.com",
-        "target_dir": None,
-        "log_pattern": "training_master_*.log",
-        "job_cache_path": "~/.inspire/jobs.json",
-        "timeout": 30,
-        "max_retries": 3,
-        "retry_delay": 1.0,
-        "git_platform": None,
-        "gitea_repo": None,
-        "gitea_token": None,
-        "gitea_server": "https://codeberg.org",
-        "gitea_log_workflow": "retrieve_job_log.yml",
-        "gitea_sync_workflow": "sync_code.yml",
-        "gitea_bridge_workflow": "run_bridge_action.yml",
-        "github_repo": None,
-        "github_token": None,
-        "github_server": "https://github.com",
-        "github_log_workflow": "retrieve_job_log.yml",
-        "github_sync_workflow": "sync_code.yml",
-        "github_bridge_workflow": "run_bridge_action.yml",
-        "log_cache_dir": "~/.inspire/logs",
-        "remote_timeout": 90,
-        "default_remote": "origin",
-        "bridge_action_timeout": 600,
-        "bridge_action_denylist": [],
-        "skip_ssl_verify": False,
-        "force_proxy": False,
-        "openapi_prefix": None,
-        "browser_api_prefix": None,
-        "auth_endpoint": None,
-        "docker_registry": None,
-        "job_priority": 6,
-        "job_image": None,
-        "job_project_id": None,
-        "job_workspace_id": None,
-        "workspace_cpu_id": None,
-        "workspace_gpu_id": None,
-        "workspace_internet_id": None,
-        "workspaces": {},
-        "projects": {},
-        "project_catalog": {},
-        "project_shared_path_groups": {},
-        "project_workdirs": {},
-        "account_shared_path_group": None,
-        "account_train_job_workdir": None,
-        "context_account": None,
-        "notebook_resource": "1xH200",
-        "notebook_image": None,
-        "rtunnel_bin": None,
-        "sshd_deb_dir": None,
-        "dropbear_deb_dir": None,
-        "setup_script": None,
-        "rtunnel_download_url": (
-            "https://github.com/Sarfflow/rtunnel/releases/download/nightly/"
-            "rtunnel-linux-amd64.tar.gz"
-        ),
-        "tunnel_retries": 3,
-        "tunnel_retry_pause": 2.0,
-        "shm_size": None,
-        "compute_groups": [],
-        "remote_env": {},
-        "accounts": {},
-    }
-
-    for key in config_dict:
-        sources[key] = SOURCE_DEFAULT
-
+    config_dict: dict[str, Any],
+    sources: dict[str, str],
+) -> tuple[Path | None, dict[str, dict[str, Any]]]:
     global_config_path: Path | None = None
-    global_compute_groups: list[dict] = []
-    global_remote_env: dict[str, str] = {}
-    global_workspaces: dict[str, str] = {}
-    global_defaults: dict[str, Any] = {}
     global_account_catalogs: dict[str, dict[str, Any]] = {}
-    global_accounts: dict[str, str] = {}
-    if Config.GLOBAL_CONFIG_PATH.exists():
-        global_config_path = Config.GLOBAL_CONFIG_PATH
-        global_raw = _load_toml(Config.GLOBAL_CONFIG_PATH)
-        global_compute_groups = global_raw.pop("compute_groups", [])
-        global_remote_env = {str(k): str(v) for k, v in global_raw.pop("remote_env", {}).items()}
-        global_accounts, global_account_catalogs = _parse_global_accounts(
-            global_raw.pop("accounts", {})
-        )
-        raw_global_defaults = global_raw.pop("defaults", {})
-        if isinstance(raw_global_defaults, dict):
-            global_defaults = raw_global_defaults
+    if not Config.GLOBAL_CONFIG_PATH.exists():
+        return global_config_path, global_account_catalogs
 
-        raw_workspaces = global_raw.get("workspaces") or {}
-        if isinstance(raw_workspaces, dict):
-            global_workspaces = {str(k): str(v) for k, v in raw_workspaces.items()}
-        flat_global = _flatten_toml(global_raw)
-        for toml_key, value in flat_global.items():
-            field_name = _toml_key_to_field(toml_key)
-            if field_name and field_name in config_dict:
-                config_dict[field_name] = value
-                sources[field_name] = SOURCE_GLOBAL
-        if global_compute_groups:
-            config_dict["compute_groups"] = global_compute_groups
-            sources["compute_groups"] = SOURCE_GLOBAL
-        if global_remote_env:
-            config_dict["remote_env"] = global_remote_env
-            sources["remote_env"] = SOURCE_GLOBAL
-        if global_workspaces:
-            config_dict["workspaces"] = global_workspaces
-            sources["workspaces"] = SOURCE_GLOBAL
-        if global_accounts:
-            config_dict["accounts"] = global_accounts
-            sources["accounts"] = SOURCE_GLOBAL
-        for key, field_name in _DEFAULTS_FIELD_MAP.items():
-            if key not in global_defaults:
-                continue
-            raw_value = global_defaults.get(key)
-            if raw_value is None or raw_value == "":
-                continue
-            try:
-                coerced = _coerce_project_default(field_name, raw_value)
-            except (ValueError, TypeError):
-                continue
-            config_dict[field_name] = coerced
+    global_config_path = Config.GLOBAL_CONFIG_PATH
+    global_raw = _load_toml(Config.GLOBAL_CONFIG_PATH)
+    global_compute_groups = global_raw.pop("compute_groups", [])
+    global_remote_env = {str(k): str(v) for k, v in global_raw.pop("remote_env", {}).items()}
+    global_accounts, global_account_catalogs = _parse_global_accounts(
+        global_raw.pop("accounts", {})
+    )
+
+    global_defaults: dict[str, Any] = {}
+    raw_global_defaults = global_raw.pop("defaults", {})
+    if isinstance(raw_global_defaults, dict):
+        global_defaults = raw_global_defaults
+
+    global_workspaces: dict[str, str] = {}
+    raw_workspaces = global_raw.get("workspaces") or {}
+    if isinstance(raw_workspaces, dict):
+        global_workspaces = {str(k): str(v) for k, v in raw_workspaces.items()}
+
+    flat_global = _flatten_toml(global_raw)
+    for toml_key, value in flat_global.items():
+        field_name = _toml_key_to_field(toml_key)
+        if field_name and field_name in config_dict:
+            config_dict[field_name] = value
             sources[field_name] = SOURCE_GLOBAL
 
+    if global_compute_groups:
+        config_dict["compute_groups"] = global_compute_groups
+        sources["compute_groups"] = SOURCE_GLOBAL
+    if global_remote_env:
+        config_dict["remote_env"] = global_remote_env
+        sources["remote_env"] = SOURCE_GLOBAL
+    if global_workspaces:
+        config_dict["workspaces"] = global_workspaces
+        sources["workspaces"] = SOURCE_GLOBAL
+    if global_accounts:
+        config_dict["accounts"] = global_accounts
+        sources["accounts"] = SOURCE_GLOBAL
+
+    _apply_defaults_overrides(
+        defaults=global_defaults,
+        config_dict=config_dict,
+        sources=sources,
+        source_name=SOURCE_GLOBAL,
+    )
+    return global_config_path, global_account_catalogs
+
+
+def _apply_project_layer(
+    *,
+    config_dict: dict[str, Any],
+    sources: dict[str, str],
+) -> _ProjectLayerState:
     project_config_path = _find_project_config()
-    project_compute_groups: list[dict] = []
-    project_remote_env: dict[str, str] = {}
-    project_workspaces: dict[str, str] = {}
-    project_projects: dict[str, str] = {}
-    project_defaults: dict[str, Any] = {}
-    project_context: dict[str, Any] = {}
-    project_account_catalogs: dict[str, dict[str, Any]] = {}
-    project_accounts: dict[str, str] = {}
-    prefer_source = "env"
-    if project_config_path:
-        project_raw = _load_toml(project_config_path)
+    layer_state = _ProjectLayerState(
+        project_config_path=project_config_path,
+        project_projects={},
+        project_defaults={},
+        project_context={},
+        project_account_catalogs={},
+        project_accounts={},
+    )
+    if not project_config_path:
+        return layer_state
 
-        # Extract cli.prefer_source before flattening
-        cli_section = project_raw.pop("cli", {})
-        prefer_source = cli_section.get("prefer_source", "env")
-        if prefer_source not in ("env", "toml"):
-            raise ConfigError(
-                f"Invalid prefer_source value: '{prefer_source}'\n"
-                "Must be 'env' or 'toml' in [cli] section of project config."
-            )
-
-        project_compute_groups = project_raw.pop("compute_groups", [])
-        project_remote_env = {str(k): str(v) for k, v in project_raw.pop("remote_env", {}).items()}
-        project_projects = _parse_alias_map(project_raw.pop("projects", {}))
-        raw_defaults = project_raw.pop("defaults", {})
-        if isinstance(raw_defaults, dict):
-            project_defaults = raw_defaults
-        raw_context = project_raw.pop("context", {})
-        if isinstance(raw_context, dict):
-            project_context = raw_context
-        project_accounts, project_account_catalogs = _parse_global_accounts(
-            project_raw.pop("accounts", {})
+    project_raw = _load_toml(project_config_path)
+    cli_section = project_raw.pop("cli", {})
+    # prefer_source is intentionally project-scoped so each repo can choose
+    # whether project TOML should override environment values.
+    prefer_source = cli_section.get("prefer_source", "env")
+    if prefer_source not in ("env", "toml"):
+        raise ConfigError(
+            f"Invalid prefer_source value: '{prefer_source}'\n"
+            "Must be 'env' or 'toml' in [cli] section of project config."
         )
+    layer_state.prefer_source = prefer_source
 
-        raw_workspaces = project_raw.get("workspaces") or {}
-        if isinstance(raw_workspaces, dict):
-            project_workspaces = {str(k): str(v) for k, v in raw_workspaces.items()}
-        flat_project = _flatten_toml(project_raw)
-        for toml_key, value in flat_project.items():
-            field_name = _toml_key_to_field(toml_key)
-            if field_name and field_name in config_dict:
-                config_dict[field_name] = value
-                sources[field_name] = SOURCE_PROJECT
-        if project_compute_groups:
-            config_dict["compute_groups"] = project_compute_groups
-            sources["compute_groups"] = SOURCE_PROJECT
-        if project_remote_env:
-            merged_remote_env = dict(config_dict.get("remote_env", {}))
-            merged_remote_env.update(project_remote_env)
-            config_dict["remote_env"] = merged_remote_env
-            sources["remote_env"] = SOURCE_PROJECT
-        if project_workspaces:
-            merged_workspaces = dict(config_dict.get("workspaces", {}))
-            merged_workspaces.update(project_workspaces)
-            config_dict["workspaces"] = merged_workspaces
-            sources["workspaces"] = SOURCE_PROJECT
-        if project_accounts:
-            merged_accounts = dict(config_dict.get("accounts", {}))
-            merged_accounts.update(project_accounts)
-            config_dict["accounts"] = merged_accounts
-            sources["accounts"] = SOURCE_PROJECT
+    project_compute_groups = project_raw.pop("compute_groups", [])
+    project_remote_env = {str(k): str(v) for k, v in project_raw.pop("remote_env", {}).items()}
+    project_projects = _parse_alias_map(project_raw.pop("projects", {}))
+    layer_state.project_projects = project_projects
 
-    context_account = str(project_context.get("account") or "").strip()
-    if context_account:
-        config_dict["context_account"] = context_account
-        sources["context_account"] = SOURCE_PROJECT
+    raw_defaults = project_raw.pop("defaults", {})
+    if isinstance(raw_defaults, dict):
+        layer_state.project_defaults = raw_defaults
+    raw_context = project_raw.pop("context", {})
+    if isinstance(raw_context, dict):
+        layer_state.project_context = raw_context
 
+    project_accounts, project_account_catalogs = _parse_global_accounts(
+        project_raw.pop("accounts", {})
+    )
+    layer_state.project_accounts = project_accounts
+    layer_state.project_account_catalogs = project_account_catalogs
+
+    project_workspaces: dict[str, str] = {}
+    raw_workspaces = project_raw.get("workspaces") or {}
+    if isinstance(raw_workspaces, dict):
+        project_workspaces = {str(k): str(v) for k, v in raw_workspaces.items()}
+
+    flat_project = _flatten_toml(project_raw)
+    for toml_key, value in flat_project.items():
+        field_name = _toml_key_to_field(toml_key)
+        if field_name and field_name in config_dict:
+            config_dict[field_name] = value
+            sources[field_name] = SOURCE_PROJECT
+
+    if project_compute_groups:
+        config_dict["compute_groups"] = project_compute_groups
+        sources["compute_groups"] = SOURCE_PROJECT
+    if project_remote_env:
+        merged_remote_env = dict(config_dict.get("remote_env", {}))
+        merged_remote_env.update(project_remote_env)
+        config_dict["remote_env"] = merged_remote_env
+        sources["remote_env"] = SOURCE_PROJECT
+    if project_workspaces:
+        merged_workspaces = dict(config_dict.get("workspaces", {}))
+        merged_workspaces.update(project_workspaces)
+        config_dict["workspaces"] = merged_workspaces
+        sources["workspaces"] = SOURCE_PROJECT
+    if project_accounts:
+        merged_accounts = dict(config_dict.get("accounts", {}))
+        merged_accounts.update(project_accounts)
+        config_dict["accounts"] = merged_accounts
+        sources["accounts"] = SOURCE_PROJECT
+
+    return layer_state
+
+
+def _apply_account_catalog_layer(
+    *,
+    config_dict: dict[str, Any],
+    sources: dict[str, str],
+    context_account: str,
+    project_projects: dict[str, str],
+    global_account_catalogs: dict[str, dict[str, Any]],
+    project_account_catalogs: dict[str, dict[str, Any]],
+) -> None:
     selected_account = (
         context_account
         or str(config_dict.get("username") or "").strip()
@@ -574,6 +628,15 @@ def config_from_files_and_env(
         config_dict["compute_groups"] = account_compute_groups
         sources["compute_groups"] = account_catalog_source
 
+
+def _apply_project_context_and_defaults(
+    *,
+    config_dict: dict[str, Any],
+    sources: dict[str, str],
+    context_account: str,
+    project_context: dict[str, Any],
+    project_defaults: dict[str, Any],
+) -> None:
     if context_account and not config_dict.get("username"):
         config_dict["username"] = context_account
         sources["username"] = SOURCE_PROJECT
@@ -598,19 +661,20 @@ def config_from_files_and_env(
         config_dict[field_name] = workspace_ref
         sources[field_name] = SOURCE_PROJECT
 
-    for key, field_name in _DEFAULTS_FIELD_MAP.items():
-        if key not in project_defaults:
-            continue
-        raw_value = project_defaults.get(key)
-        if raw_value is None or raw_value == "":
-            continue
-        try:
-            coerced = _coerce_project_default(field_name, raw_value)
-        except (ValueError, TypeError):
-            continue
-        config_dict[field_name] = coerced
-        sources[field_name] = SOURCE_PROJECT
+    _apply_defaults_overrides(
+        defaults=project_defaults,
+        config_dict=config_dict,
+        sources=sources,
+        source_name=SOURCE_PROJECT,
+    )
 
+
+def _apply_env_layer(
+    *,
+    config_dict: dict[str, Any],
+    sources: dict[str, str],
+    prefer_source: str,
+) -> str | None:
     env_password = os.getenv("INSPIRE_PASSWORD")
 
     for option in CONFIG_OPTIONS:
@@ -636,26 +700,35 @@ def config_from_files_and_env(
         else:
             new_value = value
 
-        # If prefer_source is "toml", skip env override for project-sourced fields
+        # In TOML-first mode, do not let env vars clobber project-layer values.
         if prefer_source == "toml" and sources.get(field_name) == SOURCE_PROJECT:
             continue
 
         config_dict[field_name] = new_value
         sources[field_name] = SOURCE_ENV
 
-    # Password precedence:
-    # 1) explicit [auth].password from config layers
-    # 2) merged [accounts."<username>"].password (project overrides global)
-    # 3) INSPIRE_PASSWORD env var (fallback only if still unset)
+    return env_password
+
+
+def _apply_password_and_token_fallbacks(
+    *,
+    config_dict: dict[str, Any],
+    sources: dict[str, str],
+    project_accounts: dict[str, str],
+    env_password: str | None,
+) -> None:
+    # Password fallback is intentionally layered:
+    # 1) explicit config.password if already set
+    # 2) account-password lookup keyed by resolved username
+    # 3) INSPIRE_PASSWORD environment fallback
     if not config_dict.get("password"):
         resolved_username = str(config_dict.get("username") or "").strip()
         account_password = config_dict.get("accounts", {}).get(resolved_username)
         if account_password:
             config_dict["password"] = account_password
-            if resolved_username in project_accounts:
-                sources["password"] = SOURCE_PROJECT
-            else:
-                sources["password"] = SOURCE_GLOBAL
+            sources["password"] = (
+                SOURCE_PROJECT if resolved_username in project_accounts else SOURCE_GLOBAL
+            )
 
     if not config_dict.get("password") and env_password:
         config_dict["password"] = env_password
@@ -667,6 +740,13 @@ def config_from_files_and_env(
             config_dict["github_token"] = github_token_fallback
             sources["github_token"] = SOURCE_ENV
 
+
+def _validate_required_config(
+    *,
+    config_dict: dict[str, Any],
+    require_credentials: bool,
+    require_target_dir: bool,
+) -> None:
     if require_credentials:
         if not config_dict["username"]:
             raise ConfigError(
@@ -690,6 +770,65 @@ def config_from_files_and_env(
             "  [paths]\n"
             "  target_dir = '/path/to/shared/directory'"
         )
+
+
+def config_from_files_and_env(
+    *,
+    require_target_dir: bool = False,
+    require_credentials: bool = True,
+) -> tuple[Config, dict[str, str]]:
+    """Load config from files + env vars with layered precedence."""
+    config_dict = _default_config_values()
+    sources = _initialize_sources(config_dict)
+    global_config_path, global_account_catalogs = _apply_global_layer(
+        config_dict=config_dict,
+        sources=sources,
+    )
+    project_layer_state = _apply_project_layer(config_dict=config_dict, sources=sources)
+    project_config_path = project_layer_state.project_config_path
+    project_projects = project_layer_state.project_projects
+    project_defaults = project_layer_state.project_defaults
+    project_context = project_layer_state.project_context
+    project_account_catalogs = project_layer_state.project_account_catalogs
+    project_accounts = project_layer_state.project_accounts
+    prefer_source = project_layer_state.prefer_source
+
+    context_account = str(project_context.get("account") or "").strip()
+    if context_account:
+        config_dict["context_account"] = context_account
+        sources["context_account"] = SOURCE_PROJECT
+
+    _apply_account_catalog_layer(
+        config_dict=config_dict,
+        sources=sources,
+        context_account=context_account,
+        project_projects=project_projects,
+        global_account_catalogs=global_account_catalogs,
+        project_account_catalogs=project_account_catalogs,
+    )
+    _apply_project_context_and_defaults(
+        config_dict=config_dict,
+        sources=sources,
+        context_account=context_account,
+        project_context=project_context,
+        project_defaults=project_defaults,
+    )
+    env_password = _apply_env_layer(
+        config_dict=config_dict,
+        sources=sources,
+        prefer_source=prefer_source,
+    )
+    _apply_password_and_token_fallbacks(
+        config_dict=config_dict,
+        sources=sources,
+        project_accounts=project_accounts,
+        env_password=env_password,
+    )
+    _validate_required_config(
+        config_dict=config_dict,
+        require_credentials=require_credentials,
+        require_target_dir=require_target_dir,
+    )
 
     config_dict["_global_config_path"] = global_config_path
     config_dict["_project_config_path"] = project_config_path

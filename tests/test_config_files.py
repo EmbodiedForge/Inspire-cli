@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Generator
 
 import pytest
@@ -1149,6 +1150,212 @@ class TestInitCommand:
         global_data = Config._load_toml(global_config)
         assert global_data["api"]["base_url"] == "https://new-url.invalid"
         assert global_data["accounts"]["testuser"]["password"] == "new-password"
+
+    def test_discover_probe_respects_limit_and_forwards_probe_flags(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        from inspire.platform.web.browser_api.projects import ProjectInfo
+        import inspire.config.ssh_runtime as ssh_runtime_module
+        import inspire.platform.web.browser_api as browser_api_module
+        from inspire.cli.commands.init import discover as discover_module
+
+        global_config, workspace_id = self._setup_discover_mocks(monkeypatch, tmp_path)
+        monkeypatch.setenv("INSPIRE_USERNAME", "probe-user")
+        monkeypatch.setenv("INSPIRE_BASE_URL", "https://example.invalid")
+
+        projects = [
+            ProjectInfo(
+                project_id="project-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                name="Alpha",
+                workspace_id=workspace_id,
+            ),
+            ProjectInfo(
+                project_id="project-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                name="Beta",
+                workspace_id=workspace_id,
+            ),
+            ProjectInfo(
+                project_id="project-cccccccc-cccc-cccc-cccc-cccccccccccc",
+                name="Gamma",
+                workspace_id=workspace_id,
+            ),
+        ]
+        monkeypatch.setattr(browser_api_module, "list_projects", lambda **_: projects)
+        monkeypatch.setattr(browser_api_module, "get_train_job_workdir", lambda **_: "")
+
+        monkeypatch.setattr(
+            discover_module, "_load_ssh_public_key", lambda _path: "ssh-ed25519 AAA"
+        )
+        monkeypatch.setattr(
+            discover_module,
+            "_select_probe_cpu_compute_group_id",
+            lambda _compute_groups: "lcg-cpu",
+        )
+        monkeypatch.setattr(
+            discover_module,
+            "_select_probe_cpu_quota",
+            lambda _schedule: ("quota-cpu", 4, 32),
+        )
+        monkeypatch.setattr(
+            discover_module,
+            "_select_probe_image",
+            lambda _images: SimpleNamespace(image_id="img-1", url="docker://img-1"),
+        )
+        monkeypatch.setattr(browser_api_module, "list_notebook_compute_groups", lambda **_: [])
+        monkeypatch.setattr(browser_api_module, "get_notebook_schedule", lambda **_: {})
+        monkeypatch.setattr(browser_api_module, "list_images", lambda **_: [])
+        monkeypatch.setattr(
+            ssh_runtime_module,
+            "resolve_ssh_runtime_config",
+            lambda: SimpleNamespace(),
+        )
+
+        probe_calls: list[dict] = []
+
+        def fake_probe(**kwargs):
+            probe_calls.append(kwargs)
+            return {"shared_path_group": f"/inspire/hdd/global_user/{kwargs['project_alias']}"}
+
+        monkeypatch.setattr(discover_module, "_probe_project_shared_path_group", fake_probe)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            init,
+            [
+                "--discover",
+                "--force",
+                "--probe-shared-path",
+                "--probe-limit",
+                "2",
+                "--probe-keep-notebooks",
+                "--probe-timeout",
+                "111",
+                "--probe-pubkey",
+                "/tmp/key.pub",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert len(probe_calls) == 2
+        assert all(call["keep_notebook"] is True for call in probe_calls)
+        assert all(call["timeout"] == 111 for call in probe_calls)
+        assert all(call["account_key"] == "probe-user" for call in probe_calls)
+
+        global_data = Config._load_toml(global_config)
+        project_catalog = global_data["accounts"]["probe-user"]["project_catalog"]
+        assert (
+            project_catalog["project-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"]["shared_path_group"]
+            == "/inspire/hdd/global_user/alpha"
+        )
+        assert (
+            project_catalog["project-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"]["shared_path_group"]
+            == "/inspire/hdd/global_user/beta"
+        )
+        assert project_catalog["project-cccccccc-cccc-cccc-cccc-cccccccccccc"].get(
+            "shared_path_group"
+        ) in ("", None)
+
+    def test_discover_probe_keeps_successful_updates_on_partial_failures(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        from inspire.platform.web.browser_api.projects import ProjectInfo
+        import inspire.config.ssh_runtime as ssh_runtime_module
+        import inspire.platform.web.browser_api as browser_api_module
+        from inspire.cli.commands.init import discover as discover_module
+
+        global_config, workspace_id = self._setup_discover_mocks(monkeypatch, tmp_path)
+        monkeypatch.setenv("INSPIRE_USERNAME", "probe-user")
+        monkeypatch.setenv("INSPIRE_BASE_URL", "https://example.invalid")
+
+        projects = [
+            ProjectInfo(
+                project_id="project-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                name="Alpha",
+                workspace_id=workspace_id,
+            ),
+            ProjectInfo(
+                project_id="project-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                name="Beta",
+                workspace_id=workspace_id,
+            ),
+        ]
+        monkeypatch.setattr(browser_api_module, "list_projects", lambda **_: projects)
+        monkeypatch.setattr(browser_api_module, "get_train_job_workdir", lambda **_: "")
+
+        monkeypatch.setattr(
+            discover_module, "_load_ssh_public_key", lambda _path: "ssh-ed25519 AAA"
+        )
+        monkeypatch.setattr(
+            discover_module,
+            "_select_probe_cpu_compute_group_id",
+            lambda _compute_groups: "lcg-cpu",
+        )
+        monkeypatch.setattr(
+            discover_module,
+            "_select_probe_cpu_quota",
+            lambda _schedule: ("quota-cpu", 4, 32),
+        )
+        monkeypatch.setattr(
+            discover_module,
+            "_select_probe_image",
+            lambda _images: SimpleNamespace(image_id="img-1", url="docker://img-1"),
+        )
+        monkeypatch.setattr(browser_api_module, "list_notebook_compute_groups", lambda **_: [])
+        monkeypatch.setattr(browser_api_module, "get_notebook_schedule", lambda **_: {})
+        monkeypatch.setattr(browser_api_module, "list_images", lambda **_: [])
+        monkeypatch.setattr(
+            ssh_runtime_module,
+            "resolve_ssh_runtime_config",
+            lambda: SimpleNamespace(),
+        )
+
+        def fake_probe(**kwargs):
+            if kwargs["project_alias"] == "alpha":
+                return {"shared_path_group": "/inspire/hdd/global_user/alpha"}
+            return {"shared_path_group": "", "probe_error": "probe failed"}
+
+        monkeypatch.setattr(discover_module, "_probe_project_shared_path_group", fake_probe)
+
+        runner = CliRunner()
+        result = runner.invoke(init, ["--discover", "--force", "--probe-shared-path"])
+
+        assert result.exit_code == 0
+
+        global_data = Config._load_toml(global_config)
+        project_catalog = global_data["accounts"]["probe-user"]["project_catalog"]
+        assert (
+            project_catalog["project-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"]["shared_path_group"]
+            == "/inspire/hdd/global_user/alpha"
+        )
+        assert project_catalog["project-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"].get(
+            "shared_path_group"
+        ) in ("", None)
+
+    def test_discover_probe_fails_when_probe_defaults_cannot_be_resolved(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        import inspire.platform.web.browser_api as browser_api_module
+        from inspire.cli.commands.init import discover as discover_module
+
+        self._setup_discover_mocks(monkeypatch, tmp_path)
+        monkeypatch.setenv("INSPIRE_USERNAME", "probe-user")
+        monkeypatch.setenv("INSPIRE_BASE_URL", "https://example.invalid")
+
+        monkeypatch.setattr(
+            discover_module, "_load_ssh_public_key", lambda _path: "ssh-ed25519 AAA"
+        )
+        monkeypatch.setattr(browser_api_module, "list_notebook_compute_groups", lambda **_: [])
+        monkeypatch.setattr(
+            discover_module,
+            "_select_probe_cpu_compute_group_id",
+            lambda _compute_groups: None,
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(init, ["--discover", "--force", "--probe-shared-path"])
+
+        assert result.exit_code == 1
+        assert "Failed to resolve probe defaults" in result.output
 
 
 # ===========================================================================

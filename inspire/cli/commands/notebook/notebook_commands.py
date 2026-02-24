@@ -298,6 +298,80 @@ def _list_notebooks_for_workspace(
     return [item for item in items if isinstance(item, dict)]
 
 
+def _collect_workspace_ids_for_lookup(session: web_session_module.WebSession, config) -> list[str]:
+    candidates: list[str] = []
+    for ws_id in (
+        getattr(config, "workspace_cpu_id", None),
+        getattr(config, "workspace_gpu_id", None),
+        getattr(config, "workspace_internet_id", None),
+        getattr(config, "job_workspace_id", None),
+    ):
+        if ws_id:
+            candidates.append(str(ws_id))
+
+    workspaces_map = getattr(config, "workspaces", None)
+    if isinstance(workspaces_map, dict):
+        candidates.extend(str(value) for value in workspaces_map.values() if value)
+    if getattr(session, "workspace_id", None):
+        candidates.append(str(session.workspace_id))
+
+    workspace_ids = _unique_workspace_ids(candidates)
+    if workspace_ids:
+        return workspace_ids
+
+    resolved_ws = None
+    try:
+        resolved_ws = select_workspace_id(config)
+    except Exception:
+        resolved_ws = None
+
+    resolved_ws = resolved_ws or getattr(session, "workspace_id", None)
+    if resolved_ws and resolved_ws != _ZERO_WORKSPACE_ID:
+        return [str(resolved_ws)]
+    return []
+
+
+def _resolve_partial_notebook_id(
+    ctx: Context,
+    *,
+    session: web_session_module.WebSession,
+    config,
+    base_url: str,
+    partial: str,
+    json_output: bool,
+) -> str | None:
+    workspace_ids = _collect_workspace_ids_for_lookup(session, config)
+    if not workspace_ids:
+        return None
+
+    user_ids = _try_get_current_user_ids(session, base_url=base_url)
+    nb_matches: list[tuple[str, str]] = []
+    seen_ids: set[str] = set()
+    for ws_id in workspace_ids:
+        try:
+            items = _list_notebooks_for_workspace(
+                session,
+                base_url=base_url,
+                workspace_id=ws_id,
+                user_ids=user_ids,
+            )
+        except Exception:
+            continue
+        for item in items:
+            nid = _notebook_id_from_item(item)
+            if not nid or nid in seen_ids:
+                continue
+            seen_ids.add(nid)
+            uuid_part = nid[9:] if nid.lower().startswith("notebook-") else nid
+            if uuid_part.lower().startswith(partial):
+                label = item.get("name") or item.get("status") or ""
+                nb_matches.append((nid, label))
+
+    if not nb_matches:
+        return None
+    return resolve_partial_id(ctx, partial, "notebook", nb_matches, json_output)
+
+
 def _resolve_notebook_id(
     ctx: Context,
     *,
@@ -319,95 +393,20 @@ def _resolve_notebook_id(
     if _looks_like_notebook_id(identifier):
         return identifier, None
 
-    # Partial hex UUID (4+ hex chars that aren't a full UUID)
     if is_partial_id(identifier, prefix="notebook-"):
         partial = normalize_partial(identifier, prefix="notebook-")
-        # Gather workspace IDs for listing
-        candidates: list[str] = []
-        for ws_id in (
-            getattr(config, "workspace_cpu_id", None),
-            getattr(config, "workspace_gpu_id", None),
-            getattr(config, "workspace_internet_id", None),
-            getattr(config, "job_workspace_id", None),
-        ):
-            if ws_id:
-                candidates.append(str(ws_id))
-        workspaces_map = getattr(config, "workspaces", None)
-        if isinstance(workspaces_map, dict):
-            candidates.extend(str(v) for v in workspaces_map.values() if v)
-        if getattr(session, "workspace_id", None):
-            candidates.append(str(session.workspace_id))
+        resolved_partial = _resolve_partial_notebook_id(
+            ctx,
+            session=session,
+            config=config,
+            base_url=base_url,
+            partial=partial,
+            json_output=json_output,
+        )
+        if resolved_partial:
+            return resolved_partial, None
 
-        workspace_ids = _unique_workspace_ids(candidates)
-        if not workspace_ids:
-            resolved_ws = None
-            try:
-                resolved_ws = select_workspace_id(config)
-            except Exception:
-                pass
-            resolved_ws = resolved_ws or getattr(session, "workspace_id", None)
-            if resolved_ws and resolved_ws != _ZERO_WORKSPACE_ID:
-                workspace_ids = [str(resolved_ws)]
-
-        if workspace_ids:
-            user_ids = _try_get_current_user_ids(session, base_url=base_url)
-            nb_matches: list[tuple[str, str]] = []
-            seen_ids: set[str] = set()
-            for ws_id in workspace_ids:
-                try:
-                    items = _list_notebooks_for_workspace(
-                        session,
-                        base_url=base_url,
-                        workspace_id=ws_id,
-                        user_ids=user_ids,
-                    )
-                except Exception:
-                    continue
-                for item in items:
-                    nid = _notebook_id_from_item(item)
-                    if not nid or nid in seen_ids:
-                        continue
-                    seen_ids.add(nid)
-                    uuid_part = nid
-                    if nid.lower().startswith("notebook-"):
-                        uuid_part = nid[9:]
-                    if uuid_part.lower().startswith(partial):
-                        label = item.get("name") or item.get("status") or ""
-                        nb_matches.append((nid, label))
-
-            if nb_matches:
-                resolved_id = resolve_partial_id(ctx, partial, "notebook", nb_matches, json_output)
-                return resolved_id, None
-
-        # No matches found — fall through to name resolution below
-
-    candidates: list[str] = []
-    for ws_id in (
-        getattr(config, "workspace_cpu_id", None),
-        getattr(config, "workspace_gpu_id", None),
-        getattr(config, "workspace_internet_id", None),
-        getattr(config, "job_workspace_id", None),
-    ):
-        if ws_id:
-            candidates.append(str(ws_id))
-    workspaces_map = getattr(config, "workspaces", None)
-    if isinstance(workspaces_map, dict):
-        candidates.extend(str(v) for v in workspaces_map.values() if v)
-    if getattr(session, "workspace_id", None):
-        candidates.append(str(session.workspace_id))
-
-    workspace_ids = _unique_workspace_ids(candidates)
-    if not workspace_ids:
-        resolved = None
-        try:
-            resolved = select_workspace_id(config)
-        except Exception:
-            resolved = None
-
-        resolved = resolved or getattr(session, "workspace_id", None)
-        resolved = None if resolved == _ZERO_WORKSPACE_ID else resolved
-        if resolved:
-            workspace_ids = [str(resolved)]
+    workspace_ids = _collect_workspace_ids_for_lookup(session, config)
 
     if not workspace_ids:
         _handle_error(

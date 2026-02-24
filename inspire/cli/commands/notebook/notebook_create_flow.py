@@ -20,49 +20,51 @@ from inspire.platform.web.browser_api import NotebookFailedError
 from inspire.platform.web.session import WebSession
 
 
+_CPU_ALIASES = {"CPU", "CPUONLY", "CPU_ONLY", "CPU-ONLY"}
+
+
+def _parse_resource_with_pattern(
+    resource: str,
+    pattern: str,
+    *,
+    with_count_and_type: bool = False,
+) -> tuple[int, str, Optional[int]] | None:
+    match = re.match(pattern, resource)
+    if not match:
+        return None
+
+    if with_count_and_type:
+        count = int(match.group(1))
+        resource_type = match.group(2)
+        if resource_type in _CPU_ALIASES:
+            return 0, "CPU", count
+        return count, resource_type, None
+
+    count = int(match.group(1))
+    return count, "GPU", None
+
+
 def parse_resource_string(resource: str) -> tuple[int, str, Optional[int]]:
     resource = resource.strip().upper()
 
-    cpu_aliases = {"CPU", "CPUONLY", "CPU_ONLY", "CPU-ONLY"}
+    for pattern in (r"^(\d+)\s*[xX]$", r"^(\d+)$"):
+        parsed = _parse_resource_with_pattern(resource, pattern)
+        if parsed is not None:
+            return parsed
 
-    match = re.match(r"^(\d+)\s*[xX]$", resource)
-    if match:
-        count = int(match.group(1))
-        return count, "GPU", None
-
-    match = re.match(r"^(\d+)$", resource)
-    if match:
-        count = int(match.group(1))
-        return count, "GPU", None
-
-    match = re.match(r"^(\d+)\s*[xX]\s*(\w+)$", resource)
-    if match:
-        count = int(match.group(1))
-        pattern = match.group(2)
-        if pattern in cpu_aliases:
-            return 0, "CPU", count
-        return count, pattern, None
-
-    match = re.match(r"^(\d+)\s+(\w+)$", resource)
-    if match:
-        count = int(match.group(1))
-        pattern = match.group(2)
-        if pattern in cpu_aliases:
-            return 0, "CPU", count
-        return count, pattern, None
-
-    match = re.match(r"^(\d+)([A-Z0-9_-]+)$", resource)
-    if match:
-        count = int(match.group(1))
-        pattern = match.group(2)
-        if pattern in cpu_aliases:
-            return 0, "CPU", count
-        return count, pattern, None
+    for pattern in (r"^(\d+)\s*[xX]\s*(\w+)$", r"^(\d+)\s+(\w+)$", r"^(\d+)([A-Z0-9_-]+)$"):
+        parsed = _parse_resource_with_pattern(
+            resource,
+            pattern,
+            with_count_and_type=True,
+        )
+        if parsed is not None:
+            return parsed
 
     match = re.match(r"^(\w+)$", resource)
     if match:
         pattern = match.group(1)
-        if pattern in cpu_aliases:
+        if pattern in _CPU_ALIASES:
             return 0, "CPU", None
         return 1, pattern, None
 
@@ -128,6 +130,106 @@ def resolve_notebook_workspace_id(
     return auto_workspace_id
 
 
+def _auto_select_compute_group(
+    ctx: Context,
+    *,
+    gpu_count: int,
+    gpu_pattern: str,
+    auto: bool,
+    json_output: bool,
+) -> tuple[object | None, str, str] | None:
+    if not (auto and gpu_count > 0):
+        return None, "", gpu_pattern
+
+    filter_gpu_type = None if gpu_pattern == "GPU" else gpu_pattern
+    try:
+        best = browser_api_module.find_best_compute_group_accurate(
+            gpu_type=filter_gpu_type,
+            min_gpus=gpu_count,
+            include_preemptible=True,
+            prefer_full_nodes=True,
+        )
+    except Exception as e:
+        if not json_output:
+            click.echo(f"Warning: Auto-select failed ({e}), using manual selection", err=True)
+        return None, "", gpu_pattern
+
+    if not best:
+        if gpu_pattern == "GPU":
+            _handle_error(
+                ctx,
+                "AvailabilityError",
+                f"No compute group has {gpu_count} GPUs available",
+                EXIT_CONFIG_ERROR,
+            )
+            return None
+        return None, "", gpu_pattern
+
+    if gpu_pattern == "GPU":
+        gpu_pattern = best.gpu_type or "GPU"
+    auto_selected_gpu_type = best.gpu_type or ""
+
+    if not json_output:
+        if best.selection_source == "nodes" and best.free_nodes:
+            click.echo(
+                f"Auto-selected: {best.group_name}, "
+                f"{best.free_nodes} full node(s) free ({best.available_gpus} GPUs)"
+            )
+        else:
+            click.echo(f"Auto-selected: {best.group_name}, {best.available_gpus} GPUs available")
+
+    return best, auto_selected_gpu_type, gpu_pattern
+
+
+def _match_compute_group_by_id(
+    *,
+    compute_groups: list[dict],
+    group_id: str,
+    selected_gpu_type: str,
+) -> tuple[dict | None, str]:
+    for group in compute_groups:
+        if group.get("logic_compute_group_id") == group_id:
+            return group, selected_gpu_type
+    return None, ""
+
+
+def _match_compute_group_by_gpu_type(
+    *,
+    compute_groups: list[dict],
+    gpu_pattern: str,
+) -> tuple[dict | None, str]:
+    for group in compute_groups:
+        gpu_stats_list = group.get("gpu_type_stats", [])
+        for gpu_stats in gpu_stats_list:
+            gpu_info = gpu_stats.get("gpu_info", {})
+            gpu_type_display = gpu_info.get("gpu_type_display", "")
+            if match_gpu_type(gpu_pattern, gpu_type_display):
+                return group, gpu_info.get("gpu_type", "")
+    return None, ""
+
+
+def _match_cpu_only_compute_group(compute_groups: list[dict]) -> tuple[dict | None, str]:
+    for group in compute_groups:
+        if not group.get("gpu_type_stats"):
+            return group, ""
+    return None, ""
+
+
+def _build_compute_group_hint(*, compute_groups: list[dict], gpu_count: int) -> str | None:
+    available_types: set[str] = set()
+    for group in compute_groups:
+        for stats in group.get("gpu_type_stats", []):
+            gpu_type = stats.get("gpu_info", {}).get("gpu_type_display", "Unknown")
+            if gpu_type:
+                available_types.add(gpu_type)
+    if not available_types and gpu_count == 0:
+        available_types.add("CPU")
+    if not available_types:
+        return None
+    formatted = "\n".join(f"  - {gpu_type}" for gpu_type in sorted(available_types))
+    return f"Available resource types:\n{formatted}"
+
+
 def resolve_notebook_compute_group(
     ctx: Context,
     *,
@@ -139,48 +241,16 @@ def resolve_notebook_compute_group(
     auto: bool,
     json_output: bool,
 ) -> tuple[str, str, str, str] | None:
-    auto_selected_group = None
-    auto_selected_gpu_type = ""
-
-    if auto and gpu_count > 0:
-        filter_gpu_type = None if gpu_pattern == "GPU" else gpu_pattern
-
-        try:
-            best = browser_api_module.find_best_compute_group_accurate(
-                gpu_type=filter_gpu_type,
-                min_gpus=gpu_count,
-                include_preemptible=True,
-                prefer_full_nodes=True,
-            )
-
-            if best:
-                auto_selected_group = best
-                if gpu_pattern == "GPU":
-                    gpu_pattern = best.gpu_type or "GPU"
-                auto_selected_gpu_type = best.gpu_type or ""
-
-                if not json_output:
-                    if best.selection_source == "nodes" and best.free_nodes:
-                        click.echo(
-                            f"Auto-selected: {best.group_name}, "
-                            f"{best.free_nodes} full node(s) free ({best.available_gpus} GPUs)"
-                        )
-                    else:
-                        click.echo(
-                            f"Auto-selected: {best.group_name}, {best.available_gpus} GPUs available"
-                        )
-            elif gpu_pattern == "GPU":
-                _handle_error(
-                    ctx,
-                    "AvailabilityError",
-                    f"No compute group has {gpu_count} GPUs available",
-                    EXIT_CONFIG_ERROR,
-                )
-                return None
-        except Exception as e:
-            if not json_output:
-                click.echo(f"Warning: Auto-select failed ({e}), using manual selection", err=True)
-            auto_selected_group = None
+    auto_selected = _auto_select_compute_group(
+        ctx,
+        gpu_count=gpu_count,
+        gpu_pattern=gpu_pattern,
+        auto=auto,
+        json_output=json_output,
+    )
+    if auto_selected is None:
+        return None
+    auto_selected_group, auto_selected_gpu_type, gpu_pattern = auto_selected
 
     resource_display = format_resource_display(gpu_count, gpu_pattern, requested_cpu_count)
 
@@ -198,62 +268,28 @@ def resolve_notebook_compute_group(
 
     selected_group = None
     selected_gpu_type = ""
-
     if auto_selected_group:
-        for group in compute_groups:
-            if group.get("logic_compute_group_id") == auto_selected_group.group_id:
-                selected_group = group
-                selected_gpu_type = auto_selected_gpu_type
-                break
-
+        selected_group, selected_gpu_type = _match_compute_group_by_id(
+            compute_groups=compute_groups,
+            group_id=auto_selected_group.group_id,
+            selected_gpu_type=auto_selected_gpu_type,
+        )
         if not selected_group:
-            for group in compute_groups:
-                gpu_stats_list = group.get("gpu_type_stats", [])
-                for gpu_stats in gpu_stats_list:
-                    gpu_info = gpu_stats.get("gpu_info", {})
-                    gpu_type_display = gpu_info.get("gpu_type_display", "")
-                    if match_gpu_type(auto_selected_group.gpu_type, gpu_type_display):
-                        selected_group = group
-                        selected_gpu_type = gpu_info.get("gpu_type", "")
-                        break
-                if selected_group:
-                    break
+            selected_group, selected_gpu_type = _match_compute_group_by_gpu_type(
+                compute_groups=compute_groups,
+                gpu_pattern=auto_selected_group.gpu_type,
+            )
 
     if not selected_group:
-        for group in compute_groups:
-            gpu_stats_list = group.get("gpu_type_stats", [])
-            for gpu_stats in gpu_stats_list:
-                gpu_info = gpu_stats.get("gpu_info", {})
-                gpu_type_display = gpu_info.get("gpu_type_display", "")
-                if match_gpu_type(gpu_pattern, gpu_type_display):
-                    selected_group = group
-                    selected_gpu_type = gpu_info.get("gpu_type", "")
-                    break
-            if selected_group:
-                break
-
+        selected_group, selected_gpu_type = _match_compute_group_by_gpu_type(
+            compute_groups=compute_groups,
+            gpu_pattern=gpu_pattern,
+        )
     if not selected_group and gpu_count == 0:
-        for group in compute_groups:
-            if not group.get("gpu_type_stats"):
-                selected_group = group
-                selected_gpu_type = ""
-                break
+        selected_group, selected_gpu_type = _match_cpu_only_compute_group(compute_groups)
 
     if not selected_group:
-        available_types: set[str] = set()
-        for group in compute_groups:
-            for stats in group.get("gpu_type_stats", []):
-                gpu_type = stats.get("gpu_info", {}).get("gpu_type_display", "Unknown")
-                if gpu_type:
-                    available_types.add(gpu_type)
-        if not available_types and gpu_count == 0:
-            available_types.add("CPU")
-
-        hint = None
-        if available_types:
-            formatted = "\n".join(f"  - {gpu_type}" for gpu_type in sorted(available_types))
-            hint = f"Available resource types:\n{formatted}"
-
+        hint = _build_compute_group_hint(compute_groups=compute_groups, gpu_count=gpu_count)
         _handle_error(
             ctx,
             "ValidationError",
@@ -736,6 +772,154 @@ def maybe_start_keepalive(
             click.echo(f"Warning: Failed to start keepalive script: {e}", err=True)
 
 
+def _resolve_create_inputs(
+    *,
+    config: Config,
+    resource: str | None,
+    project: str | None,
+    image: str | None,
+    shm_size: int | None,
+) -> tuple[str, str | None, str | None, int]:
+    if not resource:
+        resource = config.notebook_resource
+    if not project and not config.project_order:
+        project = config.job_project_id
+    if not image:
+        image = config.notebook_image or config.job_image
+    if shm_size is None:
+        shm_size = config.shm_size if config.shm_size is not None else 32
+    if shm_size < 1:
+        raise ValueError("Shared memory size must be >= 1.")
+    return resource, project, image, shm_size
+
+
+def _fetch_notebook_schedule(
+    ctx: Context,
+    *,
+    workspace_id: str,
+    session: WebSession,
+) -> dict | None:
+    try:
+        return browser_api_module.get_notebook_schedule(workspace_id=workspace_id, session=session)
+    except Exception as e:
+        _handle_error(ctx, "APIError", f"Failed to fetch notebook schedule: {e}", EXIT_API_ERROR)
+        return None
+
+
+def _fetch_resource_prices(
+    *,
+    workspace_id: str,
+    logic_compute_group_id: str,
+    session: WebSession,
+    json_output: bool,
+) -> list[dict]:
+    if not logic_compute_group_id:
+        return []
+
+    try:
+        return browser_api_module.get_resource_prices(
+            workspace_id=workspace_id,
+            logic_compute_group_id=logic_compute_group_id,
+            session=session,
+        )
+    except Exception as e:
+        if not json_output:
+            click.echo(f"Warning: Failed to fetch resource prices: {e}", err=True)
+        return []
+
+
+def _resolve_task_priority(priority: Optional[int], config: Config) -> Optional[int]:
+    if priority is not None:
+        return priority
+    return config.job_priority if hasattr(config, "job_priority") else None
+
+
+def _fetch_workspace_projects(
+    ctx: Context,
+    *,
+    workspace_id: str,
+    session: WebSession,
+) -> list | None:
+    try:
+        projects = browser_api_module.list_projects(workspace_id=workspace_id, session=session)
+    except Exception as e:
+        _handle_error(ctx, "APIError", f"Failed to fetch projects: {e}", EXIT_API_ERROR)
+        return None
+
+    if projects:
+        return projects
+
+    _handle_error(ctx, "ConfigError", "No projects available in this workspace", EXIT_CONFIG_ERROR)
+    return None
+
+
+def _cap_task_priority(
+    *,
+    task_priority: Optional[int],
+    selected_project,
+    json_output: bool,
+) -> Optional[int]:
+    if not selected_project.priority_name:
+        return task_priority
+
+    try:
+        max_priority = int(selected_project.priority_name)
+    except ValueError:
+        return task_priority
+
+    if task_priority is None or task_priority <= max_priority:
+        return task_priority
+
+    if not json_output:
+        click.echo(
+            f"Capping priority {task_priority} → {max_priority} "
+            f"(max for project '{selected_project.name}')"
+        )
+    return max_priority
+
+
+def _fetch_notebook_images(
+    ctx: Context,
+    *,
+    workspace_id: str,
+    session: WebSession,
+    image: Optional[str],
+    json_output: bool,
+) -> list | None:
+    try:
+        images = browser_api_module.list_images(workspace_id=workspace_id, session=session)
+    except Exception as e:
+        _handle_error(ctx, "APIError", f"Failed to fetch images: {e}", EXIT_API_ERROR)
+        return None
+
+    if image and not _find_image_match(images, image):
+        try:
+            public_images = browser_api_module.list_images(
+                workspace_id=workspace_id, source="SOURCE_PUBLIC", session=session
+            )
+            if public_images:
+                if not json_output:
+                    click.echo("Searching public images...")
+                images = images + public_images
+        except Exception:
+            pass
+
+    if images:
+        return images
+
+    _handle_error(ctx, "ConfigError", "No images available", EXIT_CONFIG_ERROR)
+    return None
+
+
+def _resolve_notebook_name(name: Optional[str], *, json_output: bool) -> str:
+    if name:
+        return name
+    generated = f"notebook-{uuid.uuid4().hex[:8]}"
+    if not json_output:
+        click.echo(f"Generated name: {generated}")
+    return generated
+
+
 def run_notebook_create(
     ctx: Context,
     *,
@@ -754,6 +938,7 @@ def run_notebook_create(
     priority: Optional[int] = None,
     project_explicit: bool = False,
 ) -> None:
+    del project_explicit  # Reserved for future behavior; currently inferred from value presence.
     json_output = resolve_json_output(ctx, json_output)
 
     session = require_web_session(
@@ -765,16 +950,16 @@ def run_notebook_create(
     )
     config = load_config(ctx)
 
-    if not resource:
-        resource = config.notebook_resource
-    if not project and not config.project_order:
-        project = config.job_project_id
-    if not image:
-        image = config.notebook_image or config.job_image
-    if shm_size is None:
-        shm_size = config.shm_size if config.shm_size is not None else 32
-    if shm_size < 1:
-        _handle_error(ctx, "ValidationError", "Shared memory size must be >= 1.", EXIT_CONFIG_ERROR)
+    try:
+        resource, project, image, shm_size = _resolve_create_inputs(
+            config=config,
+            resource=resource,
+            project=project,
+            image=image,
+            shm_size=shm_size,
+        )
+    except ValueError as e:
+        _handle_error(ctx, "ValidationError", str(e), EXIT_CONFIG_ERROR)
         return
 
     try:
@@ -813,12 +998,8 @@ def run_notebook_create(
 
     logic_compute_group_id, selected_gpu_type, gpu_pattern, resource_display = compute_group
 
-    try:
-        schedule = browser_api_module.get_notebook_schedule(
-            workspace_id=workspace_id, session=session
-        )
-    except Exception as e:
-        _handle_error(ctx, "APIError", f"Failed to fetch notebook schedule: {e}", EXIT_API_ERROR)
+    schedule = _fetch_notebook_schedule(ctx, workspace_id=workspace_id, session=session)
+    if schedule is None:
         return
 
     quota_selection = resolve_notebook_quota(
@@ -831,25 +1012,14 @@ def run_notebook_create(
     )
     if not quota_selection:
         return
-
     quota_id, cpu_count, memory_size, selected_gpu_type, resource_display = quota_selection
 
-    # --- Fetch resource prices (needed for resource_spec_price in create body) ---
-    resource_prices: list[dict] = []
-    if logic_compute_group_id:
-        try:
-            resource_prices = browser_api_module.get_resource_prices(
-                workspace_id=workspace_id,
-                logic_compute_group_id=logic_compute_group_id,
-                session=session,
-            )
-        except Exception as e:
-            if not json_output:
-                click.echo(f"Warning: Failed to fetch resource prices: {e}", err=True)
-
-    # Build resource_spec_price matching create API expectations.
-    # For CPU, keep the selected quota/requested size as source of truth.
-    # For GPU, prefer resource_prices entries when available.
+    resource_prices = _fetch_resource_prices(
+        workspace_id=workspace_id,
+        logic_compute_group_id=logic_compute_group_id,
+        session=session,
+        json_output=json_output,
+    )
     resource_spec_price, quota_id, cpu_count, memory_size = resolve_notebook_resource_spec_price(
         resource_prices=resource_prices,
         gpu_count=gpu_count,
@@ -862,21 +1032,9 @@ def run_notebook_create(
         requested_cpu_count=requested_cpu_count,
     )
 
-    # --- Resolve task priority ---
-    task_priority = priority
-    if task_priority is None:
-        task_priority = config.job_priority if hasattr(config, "job_priority") else None
-
-    try:
-        projects = browser_api_module.list_projects(workspace_id=workspace_id, session=session)
-    except Exception as e:
-        _handle_error(ctx, "APIError", f"Failed to fetch projects: {e}", EXIT_API_ERROR)
-        return
-
-    if not projects:
-        _handle_error(
-            ctx, "ConfigError", "No projects available in this workspace", EXIT_CONFIG_ERROR
-        )
+    task_priority = _resolve_task_priority(priority, config)
+    projects = _fetch_workspace_projects(ctx, workspace_id=workspace_id, session=session)
+    if projects is None:
         return
 
     selected_project = resolve_notebook_project(
@@ -891,42 +1049,20 @@ def run_notebook_create(
     if not selected_project:
         return
 
-    # Cap task priority to the selected project's max priority
-    if selected_project.priority_name:
-        try:
-            max_priority = int(selected_project.priority_name)
-            if task_priority is not None and task_priority > max_priority:
-                if not json_output:
-                    click.echo(
-                        f"Capping priority {task_priority} → {max_priority} "
-                        f"(max for project '{selected_project.name}')"
-                    )
-                task_priority = max_priority
-        except ValueError:
-            pass
+    task_priority = _cap_task_priority(
+        task_priority=task_priority,
+        selected_project=selected_project,
+        json_output=json_output,
+    )
 
-    try:
-        images = browser_api_module.list_images(workspace_id=workspace_id, session=session)
-    except Exception as e:
-        _handle_error(ctx, "APIError", f"Failed to fetch images: {e}", EXIT_API_ERROR)
-        return
-
-    # When a specific image is requested and not found in official images,
-    # also search public images before giving up.
-    if image and not _find_image_match(images, image):
-        try:
-            public_images = browser_api_module.list_images(
-                workspace_id=workspace_id, source="SOURCE_PUBLIC", session=session
-            )
-            if public_images:
-                if not json_output:
-                    click.echo("Searching public images...")
-                images = images + public_images
-        except Exception:
-            pass
-
-    if not images:
-        _handle_error(ctx, "ConfigError", "No images available", EXIT_CONFIG_ERROR)
+    images = _fetch_notebook_images(
+        ctx,
+        workspace_id=workspace_id,
+        session=session,
+        image=image,
+        json_output=json_output,
+    )
+    if images is None:
         return
 
     selected_image = resolve_notebook_image(
@@ -941,10 +1077,7 @@ def run_notebook_create(
     if not json_output:
         click.echo(f"Using image: {selected_image.name}")
 
-    if not name:
-        name = f"notebook-{uuid.uuid4().hex[:8]}"
-        if not json_output:
-            click.echo(f"Generated name: {name}")
+    name = _resolve_notebook_name(name, json_output=json_output)
 
     notebook_id = create_notebook_and_report(
         ctx,

@@ -35,9 +35,12 @@ from inspire.bridge.tunnel import (
     run_ssh_command_streaming,
     load_tunnel_config,
 )
-from inspire.cli.formatters import json_formatter
 from inspire.cli.utils.errors import emit_error as _emit_error
 from inspire.cli.utils.notebook_cli import require_web_session
+from inspire.cli.utils.output import (
+    emit_error as emit_output_error,
+    emit_success as emit_output_success,
+)
 from inspire.cli.utils.tunnel_reconnect import (
     load_ssh_public_key_material,
     rebuild_notebook_bridge_profile,
@@ -125,8 +128,7 @@ def try_exec_via_ssh_tunnel(
             hint = (
                 "Run 'inspire tunnel status' to troubleshoot. "
                 "If needed, re-create the bridge via "
-                "'inspire notebook ssh <notebook-id> --save-as <name>'. "
-                "If you intended to run via Git Actions instead, pass '--no-tunnel'."
+                "'inspire notebook ssh <notebook-id> --save-as <name>'."
             )
             return _emit_error(
                 ctx,
@@ -245,7 +247,12 @@ def try_exec_via_ssh_tunnel(
                     hint="Run 'inspire tunnel list' to see available bridge profiles.",
                 )
             if bridge is None:
-                return None
+                return _emit_error(
+                    ctx,
+                    "TunnelError",
+                    "No bridge configured for SSH execution.",
+                    hint="Use 'inspire notebook ssh <notebook-id>' or 'inspire tunnel add' first.",
+                )
 
             resolved_bridge_name = str(getattr(bridge, "name"))
             availability_retries = 0 if force_rebuild else int(config.tunnel_retries)
@@ -284,15 +291,14 @@ def try_exec_via_ssh_tunnel(
                 if returncode == 0:
                     stdout = getattr(result, "stdout", "") or ""
                     stderr = getattr(result, "stderr", "") or ""
-                    click.echo(
-                        json_formatter.format_json(
-                            {
-                                "status": "success",
-                                "method": "ssh_tunnel",
-                                "returncode": returncode,
-                                "output": stdout + stderr,
-                            }
-                        )
+                    emit_output_success(
+                        ctx,
+                        payload={
+                            "status": "success",
+                            "method": "ssh_tunnel",
+                            "returncode": returncode,
+                            "output": stdout + stderr,
+                        },
                     )
                     return EXIT_SUCCESS
 
@@ -347,17 +353,13 @@ def try_exec_via_ssh_tunnel(
             force_rebuild = True
             continue
         except subprocess.TimeoutExpired:
-            if ctx.json_output:
-                click.echo(
-                    json_formatter.format_json_error(
-                        "Timeout",
-                        f"Command timed out after {timeout_s}s",
-                        EXIT_TIMEOUT,
-                    ),
-                    err=True,
-                )
-            else:
-                click.echo(f"Command timed out after {timeout_s}s", err=True)
+            emit_output_error(
+                ctx,
+                error_type="Timeout",
+                message=f"Command timed out after {timeout_s}s",
+                exit_code=EXIT_TIMEOUT,
+                human_lines=[f"Command timed out after {timeout_s}s"],
+            )
             return EXIT_TIMEOUT
         except Exception as e:
             if ssh_execution_started:
@@ -366,17 +368,11 @@ def try_exec_via_ssh_tunnel(
                     "SSHExecutionError",
                     f"SSH execution failed: {e}",
                 )
-            if _verbose_output(ctx):
-                click.echo(f"SSH execution failed: {e}", err=True)
-                click.echo("Falling back to Gitea workflow...", err=True)
-                click.echo(
-                    "Warning: Git Actions fallback is deprecated and will be removed "
-                    "in a future release. Use SSH tunnel instead.",
-                    err=True,
-                )
-            elif not ctx.json_output:
-                click.echo("SSH execution failed, using workflow fallback", err=True)
-            return None
+            return _emit_error(
+                ctx,
+                "SSHExecutionError",
+                f"SSH execution failed before command start: {e}",
+            )
 
 
 def exec_via_workflow(
@@ -426,28 +422,25 @@ def exec_via_workflow(
             denylist=merged_denylist,
         )
     except (GiteaError, GiteaAuthError) as e:
-        if ctx.json_output:
-            click.echo(
-                json_formatter.format_json_error("GiteaError", str(e), EXIT_GENERAL_ERROR),
-                err=True,
-            )
-        else:
-            click.echo(f"Error: {e}", err=True)
+        emit_output_error(
+            ctx,
+            error_type="GiteaError",
+            message=str(e),
+            exit_code=EXIT_GENERAL_ERROR,
+            human_lines=[f"Error: {e}"],
+        )
         return EXIT_GENERAL_ERROR
 
     if not wait:
-        if ctx.json_output:
-            click.echo(
-                json_formatter.format_json(
-                    {
-                        "status": "triggered",
-                        "request_id": request_id,
-                        "command": command,
-                    }
-                )
-            )
-        else:
-            click.echo(f"Triggered bridge exec request {request_id}")
+        emit_output_success(
+            ctx,
+            payload={
+                "status": "triggered",
+                "request_id": request_id,
+                "command": command,
+            },
+            text=f"Triggered bridge exec request {request_id}",
+        )
         return EXIT_SUCCESS
 
     if _verbose_output(ctx):
@@ -460,19 +453,22 @@ def exec_via_workflow(
             timeout=timeout_s,
         )
     except TimeoutError as e:
-        if ctx.json_output:
-            click.echo(json_formatter.format_json_error("Timeout", str(e), EXIT_TIMEOUT), err=True)
-        else:
-            click.echo(f"Timeout: {e}", err=True)
+        emit_output_error(
+            ctx,
+            error_type="Timeout",
+            message=str(e),
+            exit_code=EXIT_TIMEOUT,
+            human_lines=[f"Timeout: {e}"],
+        )
         return EXIT_TIMEOUT
     except GiteaError as e:
-        if ctx.json_output:
-            click.echo(
-                json_formatter.format_json_error("GiteaError", str(e), EXIT_GENERAL_ERROR),
-                err=True,
-            )
-        else:
-            click.echo(f"Error: {e}", err=True)
+        emit_output_error(
+            ctx,
+            error_type="GiteaError",
+            message=str(e),
+            exit_code=EXIT_GENERAL_ERROR,
+            human_lines=[f"Error: {e}"],
+        )
         return EXIT_GENERAL_ERROR
 
     output_log: Optional[str] = None
@@ -492,22 +488,17 @@ def exec_via_workflow(
             click.echo(output_log)
 
     if result.get("conclusion") != "success":
-        if ctx.json_output:
-            hint = result.get("html_url") or None
-            click.echo(
-                json_formatter.format_json_error(
-                    "BridgeActionFailed",
-                    f"Action failed: {result.get('conclusion')}",
-                    EXIT_GENERAL_ERROR,
-                    hint=hint,
-                ),
-                err=True,
-            )
-        else:
-            click.echo(
-                f"Action failed: {result.get('conclusion')} (see {result.get('html_url', '')})",
-                err=True,
-            )
+        hint = result.get("html_url") or None
+        emit_output_error(
+            ctx,
+            error_type="BridgeActionFailed",
+            message=f"Action failed: {result.get('conclusion')}",
+            exit_code=EXIT_GENERAL_ERROR,
+            hint=hint,
+            human_lines=[
+                f"Action failed: {result.get('conclusion')} (see {result.get('html_url', '')})"
+            ],
+        )
         return EXIT_GENERAL_ERROR
 
     if download:
@@ -516,41 +507,32 @@ def exec_via_workflow(
         try:
             download_bridge_artifact_fn(config, request_id, Path(download))
         except GiteaError as e:
-            if ctx.json_output:
-                click.echo(
-                    json_formatter.format_json_error(
-                        "ArtifactError",
-                        f"Artifact download failed: {e}",
-                        EXIT_GENERAL_ERROR,
-                    ),
-                    err=True,
-                )
-            else:
-                click.echo(f"Warning: artifact download failed: {e}", err=True)
+            emit_output_error(
+                ctx,
+                error_type="ArtifactError",
+                message=f"Artifact download failed: {e}",
+                exit_code=EXIT_GENERAL_ERROR,
+                human_lines=[f"Warning: artifact download failed: {e}"],
+            )
             return EXIT_GENERAL_ERROR
 
-    if ctx.json_output:
-        click.echo(
-            json_formatter.format_json(
-                {
-                    "status": "success",
-                    "request_id": request_id,
-                    "artifact_downloaded": bool(download),
-                    "output": output_log,
-                }
-            )
-        )
+    if _verbose_output(ctx):
+        click.echo("OK Action completed successfully")
+        if result.get("html_url"):
+            click.echo(f"Workflow: {result.get('html_url')}")
+        if download:
+            click.echo("Artifacts downloaded")
     else:
-        if _verbose_output(ctx):
-            click.echo("OK Action completed successfully")
-            if result.get("html_url"):
-                click.echo(f"Workflow: {result.get('html_url')}")
-            if download:
-                click.echo("Artifacts downloaded")
-        elif download:
-            click.echo("OK (artifacts downloaded)")
-        else:
-            click.echo("OK")
+        emit_output_success(
+            ctx,
+            payload={
+                "status": "success",
+                "request_id": request_id,
+                "artifact_downloaded": bool(download),
+                "output": output_log,
+            },
+            text="OK (artifacts downloaded)" if download else "OK",
+        )
 
     return EXIT_SUCCESS
 
@@ -589,7 +571,6 @@ def exec_via_workflow(
     "-b",
     help="Bridge profile to use for SSH tunnel execution",
 )
-@click.option("--no-tunnel", is_flag=True, help="Force use of Gitea workflow (deprecated)")
 @pass_context
 def exec_command(
     ctx: Context,
@@ -600,12 +581,11 @@ def exec_command(
     wait: bool,
     timeout: Optional[int],
     bridge: Optional[str],
-    no_tunnel: bool,
 ) -> None:
     """Execute a command on the Bridge runner.
 
-    Uses SSH tunnel if available (instant). If a bridge is configured but not responding,
-    exits with an error (the notebook may be stopped). Use --no-tunnel to force Git Actions.
+    Uses SSH tunnel for command execution. Workflow transport is only used when
+    artifact options are requested.
 
     COMMAND is the shell command to run on Bridge (in INSPIRE_TARGET_DIR).
     Command output (stdout/stderr) is automatically displayed after completion.
@@ -618,25 +598,24 @@ def exec_command(
             --artifact-path .venv --download ./local
         inspire bridge exec "python train.py" --no-wait
         inspire bridge exec "hostname" --bridge qz-bridge
-        inspire bridge exec "ls" --no-tunnel  # Force Gitea workflow
     """
 
     try:
         config, _ = Config.from_files_and_env(require_target_dir=True, require_credentials=False)
     except ConfigError as e:
-        if ctx.json_output:
-            click.echo(
-                json_formatter.format_json_error("ConfigError", str(e), EXIT_CONFIG_ERROR),
-                err=True,
-            )
-        else:
-            click.echo(f"Configuration error: {e}", err=True)
+        emit_output_error(
+            ctx,
+            error_type="ConfigError",
+            message=str(e),
+            exit_code=EXIT_CONFIG_ERROR,
+            human_lines=[f"Configuration error: {e}"],
+        )
         sys.exit(EXIT_CONFIG_ERROR)
 
     action_timeout = int(timeout) if timeout is not None else int(config.bridge_action_timeout)
 
-    # Try SSH tunnel first (unless --no-tunnel or artifacts requested)
-    if not no_tunnel and not artifact_path and not download:
+    # SSH tunnel is the default command transport when artifacts are not requested.
+    if not artifact_path and not download:
         ssh_exit_code = try_exec_via_ssh_tunnel(
             ctx,
             command=command,
@@ -647,8 +626,7 @@ def exec_command(
             run_ssh_command_fn=run_ssh_command,
             run_ssh_command_streaming_fn=run_ssh_command_streaming,
         )
-        if ssh_exit_code is not None:
-            sys.exit(ssh_exit_code)
+        sys.exit(ssh_exit_code if ssh_exit_code is not None else EXIT_GENERAL_ERROR)
 
     workflow_exit_code = exec_via_workflow(
         ctx,

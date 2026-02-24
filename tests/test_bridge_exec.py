@@ -71,7 +71,10 @@ def test_bridge_exec_triggers_and_no_wait(monkeypatch: pytest.MonkeyPatch, tmp_p
     monkeypatch.setattr(exec_cmd_module, "trigger_bridge_action_workflow", fake_trigger)
 
     runner = CliRunner()
-    result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--no-wait", "--no-tunnel"])
+    result = runner.invoke(
+        cli_main,
+        ["bridge", "exec", "echo hi", "--no-wait", "--artifact-path", ".cache"],
+    )
 
     assert result.exit_code == EXIT_SUCCESS
     assert "trigger" in called
@@ -102,7 +105,10 @@ def test_bridge_exec_uses_env_denylist(monkeypatch: pytest.MonkeyPatch, tmp_path
     monkeypatch.setattr(exec_cmd_module, "trigger_bridge_action_workflow", fake_trigger)
 
     runner = CliRunner()
-    result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--no-wait", "--no-tunnel"])
+    result = runner.invoke(
+        cli_main,
+        ["bridge", "exec", "echo hi", "--no-wait", "--artifact-path", ".cache"],
+    )
 
     assert result.exit_code == EXIT_SUCCESS
     assert captured["denylist"] == ["rm -rf /"]
@@ -131,7 +137,7 @@ def test_bridge_exec_reports_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     monkeypatch.setattr(exec_cmd_module, "fetch_bridge_output_log", fake_fetch_log)
 
     runner = CliRunner()
-    result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--no-tunnel"])
+    result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--artifact-path", ".cache"])
 
     assert result.exit_code == EXIT_GENERAL_ERROR
 
@@ -160,7 +166,7 @@ def test_bridge_exec_displays_output_log(monkeypatch: pytest.MonkeyPatch, tmp_pa
     monkeypatch.setattr(exec_cmd_module, "fetch_bridge_output_log", fake_fetch_log)
 
     runner = CliRunner()
-    result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--no-tunnel"])
+    result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--artifact-path", ".cache"])
 
     assert result.exit_code == EXIT_SUCCESS
     assert "Hello from Bridge!" in result.output
@@ -192,7 +198,10 @@ def test_bridge_exec_json_includes_output(monkeypatch: pytest.MonkeyPatch, tmp_p
     monkeypatch.setattr(exec_cmd_module, "fetch_bridge_output_log", fake_fetch_log)
 
     runner = CliRunner()
-    result = runner.invoke(cli_main, ["--json", "bridge", "exec", "echo hi", "--no-tunnel"])
+    result = runner.invoke(
+        cli_main,
+        ["--json", "bridge", "exec", "echo hi", "--artifact-path", ".cache"],
+    )
 
     assert result.exit_code == EXIT_SUCCESS
     payload = json.loads(result.output)
@@ -448,7 +457,7 @@ def test_bridge_exec_json_errors_when_bridge_configured_but_not_responding(
     assert payload["error"]["type"] == "TunnelError"
 
 
-def test_bridge_exec_falls_back_to_workflow_when_no_bridge_configured(
+def test_bridge_exec_errors_when_no_bridge_configured(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     config = make_sync_config(tmp_path)
@@ -459,32 +468,16 @@ def test_bridge_exec_falls_back_to_workflow_when_no_bridge_configured(
         classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
     )
 
-    called: Dict[str, Any] = {}
-
-    def fake_is_tunnel_available(*args: Any, **kwargs: Any) -> bool:
-        return False
-
     def fake_load_tunnel_config() -> TunnelConfig:
         return TunnelConfig()
 
-    def fake_trigger(
-        config: Config,
-        raw_command: str,
-        artifact_paths: List[str],
-        request_id: str,
-        denylist: Optional[List[str]] = None,
-    ) -> None:
-        called["trigger"] = True
-
-    monkeypatch.setattr(exec_cmd_module, "is_tunnel_available", fake_is_tunnel_available)
     monkeypatch.setattr(exec_cmd_module, "load_tunnel_config", fake_load_tunnel_config)
-    monkeypatch.setattr(exec_cmd_module, "trigger_bridge_action_workflow", fake_trigger)
 
     runner = CliRunner()
     result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--no-wait"])
 
-    assert result.exit_code == EXIT_SUCCESS
-    assert called["trigger"] is True
+    assert result.exit_code == EXIT_GENERAL_ERROR
+    assert "No bridge configured for SSH execution" in result.output
 
 
 def test_bridge_exec_passes_requested_bridge_to_ssh(
