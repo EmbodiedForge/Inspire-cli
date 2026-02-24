@@ -339,6 +339,53 @@ def test_get_web_session_uses_account_scoped_cache(monkeypatch: pytest.MonkeyPat
     assert load_calls[0] == "project-user"
 
 
+def test_get_web_session_force_refresh_bypasses_cache(monkeypatch: pytest.MonkeyPatch):
+    cached = WebSession(
+        storage_state={"cookies": [{"name": "session", "value": "old"}]},
+        cookies={"session": "old"},
+        workspace_id="ws-old",
+        login_username="refresh-user",
+        created_at=0,
+    )
+    refreshed = WebSession(
+        storage_state={"cookies": [{"name": "session", "value": "new"}]},
+        cookies={"session": "new"},
+        workspace_id="ws-new",
+        login_username="refresh-user",
+        created_at=1,
+    )
+    load_calls: list[tuple[bool, str | None]] = []
+    login_calls: dict[str, str] = {}
+
+    def fake_load(cls, allow_expired=False, account=None):  # type: ignore[no-untyped-def]
+        load_calls.append((allow_expired, account))
+        return cached
+
+    def fake_login(username: str, password: str, base_url: str = "", headless: bool = True):
+        login_calls["username"] = username
+        login_calls["password"] = password
+        login_calls["base_url"] = base_url
+        login_calls["headless"] = str(headless)
+        return refreshed
+
+    monkeypatch.setattr(ws_auth.WebSession, "load", classmethod(fake_load))
+    monkeypatch.setattr(ws_auth, "get_credentials", lambda: ("refresh-user", "refresh-pass"))
+    monkeypatch.setattr(
+        ws_auth,
+        "_load_runtime_config",
+        lambda: type("Cfg", (), {"base_url": "https://example.invalid"})(),
+    )
+    monkeypatch.setattr(ws_auth, "login_with_playwright", fake_login)
+
+    session = ws_auth.get_web_session(force_refresh=True, require_workspace=False)
+
+    assert session is refreshed
+    assert load_calls == []
+    assert login_calls["username"] == "refresh-user"
+    assert login_calls["password"] == "refresh-pass"
+    assert login_calls["base_url"] == "https://example.invalid"
+
+
 def test_clear_session_cache_removes_scoped_and_legacy_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

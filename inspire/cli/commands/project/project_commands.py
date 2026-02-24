@@ -17,6 +17,8 @@ from inspire.cli.utils.notebook_cli import (
 )
 from inspire.platform.web import browser_api as browser_api_module
 
+_ZERO_WORKSPACE_ID = "ws-00000000-0000-0000-0000-000000000000"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -37,6 +39,20 @@ def _project_to_dict(proj: browser_api_module.ProjectInfo) -> dict:
         "priority_level": proj.priority_level,
         "priority_name": proj.priority_name,
     }
+
+
+def _unique_workspace_ids(values: list[str | None]) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        ws_id = str(value or "").strip()
+        if not ws_id or ws_id == _ZERO_WORKSPACE_ID:
+            continue
+        if ws_id in seen:
+            continue
+        seen.add(ws_id)
+        unique.append(ws_id)
+    return unique
 
 
 # ---------------------------------------------------------------------------
@@ -87,31 +103,55 @@ def list_projects_cmd(
                 _cfg, _ = _Cfg.from_files_and_env(
                     require_credentials=False, require_target_dir=False
                 )
-                cfg_ws = list(
-                    dict.fromkeys(
-                        ws
-                        for ws in [
-                            getattr(_cfg, "workspace_cpu_id", None),
-                            getattr(_cfg, "workspace_gpu_id", None),
-                            getattr(_cfg, "workspace_internet_id", None),
-                        ]
-                        if ws
-                    )
-                )
+                cfg_candidates = [
+                    getattr(_cfg, "workspace_cpu_id", None),
+                    getattr(_cfg, "workspace_gpu_id", None),
+                    getattr(_cfg, "workspace_internet_id", None),
+                ]
+                cfg_workspaces = getattr(_cfg, "workspaces", None)
+                if isinstance(cfg_workspaces, dict):
+                    cfg_candidates.extend(cfg_workspaces.values())
+                cfg_ws = _unique_workspace_ids(cfg_candidates)
             except Exception:
                 cfg_ws = []
-            workspace_ids = cfg_ws or ([session.workspace_id] if session.workspace_id else [])
+            workspace_ids = cfg_ws or _unique_workspace_ids(
+                [getattr(session, "workspace_id", None)]
+            )
+        else:
+            workspace_ids = _unique_workspace_ids(list(workspace_ids))
         if not workspace_ids:
             # No discovered workspaces — fall back to default query
             projects = browser_api_module.list_projects(session=session)
         else:
             seen: set[str] = set()
             projects = []
+            workspace_errors: list[tuple[str, str]] = []
             for ws_id in workspace_ids:
-                for p in browser_api_module.list_projects(workspace_id=ws_id, session=session):
+                try:
+                    ws_projects = browser_api_module.list_projects(
+                        workspace_id=ws_id, session=session
+                    )
+                except Exception as e:
+                    workspace_errors.append((ws_id, str(e)))
+                    continue
+                for p in ws_projects:
                     if p.project_id not in seen:
                         seen.add(p.project_id)
                         projects.append(p)
+            if not projects and workspace_errors:
+                try:
+                    projects = browser_api_module.list_projects(session=session)
+                except Exception as e:
+                    error_samples = ", ".join(
+                        f"{ws_id}: {message}" for ws_id, message in workspace_errors[:3]
+                    )
+                    if len(workspace_errors) > 3:
+                        error_samples += ", ..."
+                    raise ValueError(
+                        f"Failed to list projects across configured workspaces "
+                        f"({len(workspace_errors)} failed: {error_samples}); "
+                        f"default query failed: {e}"
+                    ) from e
     except Exception as e:
         _handle_error(ctx, "APIError", f"Failed to list projects: {e}", EXIT_API_ERROR)
         return
