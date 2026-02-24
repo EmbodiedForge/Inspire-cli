@@ -141,10 +141,15 @@ def select_project(
     """Select a project, with auto-fallback if over quota.
 
     Sorting priority (when auto-selecting):
-      1. ``gpu_unlimited`` — prefer uncapped projects (``gpu_limit=False``)
-      2. ``project_order`` — user-defined preference ranking
-      3. ``priority_name`` — higher numeric priority first
-      4. alphabetical name
+      - GPU workloads (``needs_gpu_quota=True``):
+        1. ``gpu_unlimited`` — prefer uncapped projects (``gpu_limit=False``)
+        2. ``project_order`` — user-defined preference ranking
+        3. ``priority_name`` — higher numeric priority first
+        4. alphabetical name
+      - CPU workloads (``needs_gpu_quota=False``):
+        1. ``project_order`` — user-defined preference ranking
+        2. ``priority_name`` — higher numeric priority first
+        3. alphabetical name
     """
 
     def _priority_value(project: ProjectInfo) -> int:
@@ -166,9 +171,15 @@ def select_project(
                 return i
         return len(project_order)  # unlisted → after all listed
 
+    def _gpu_cap_rank(project: ProjectInfo) -> int:
+        # Only prefer uncapped projects for GPU workloads.
+        if not needs_gpu_quota:
+            return 0
+        return 0 if project.gpu_unlimited else 1
+
     def _sort_key(project: ProjectInfo) -> tuple:
         return (
-            0 if project.gpu_unlimited else 1,  # uncapped first
+            _gpu_cap_rank(project),
             _order_rank(project),
             -_priority_value(project),
             project.name.lower(),

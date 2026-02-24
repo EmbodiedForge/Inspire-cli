@@ -278,6 +278,19 @@ def test_project_order_overrides_priority() -> None:
     assert selected.project_id == "p-low"
 
 
+def test_project_order_cpu_mode_ignores_gpu_limit_preference() -> None:
+    """In CPU mode, project_order should not be overridden by gpu_limit preference."""
+    capped = _project("p-capped", "Capped", gpu_limit=True, priority_name="1")
+    unlimited = _project("p-unlimited", "Unlimited", gpu_limit=False, priority_name="10")
+
+    selected, _ = select_project(
+        [capped, unlimited],
+        needs_gpu_quota=False,
+        project_order=["Capped", "Unlimited"],
+    )
+    assert selected.project_id == "p-capped"
+
+
 def test_project_order_by_project_id() -> None:
     """project_order can match by project_id."""
     a = _project("p-aaa", "Alpha", priority_name="10")
