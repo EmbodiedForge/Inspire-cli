@@ -9,29 +9,37 @@ import sys
 
 import click
 
-from inspire.cli.context import Context
+from inspire.cli.context import EXIT_GENERAL_ERROR, Context
 from inspire.cli.formatters import human_formatter, json_formatter
+
+
+def emit_error(
+    ctx: Context,
+    error_type: str,
+    message: str,
+    exit_code: int = EXIT_GENERAL_ERROR,
+    *,
+    hint: str | None = None,
+) -> int:
+    """Emit a formatted error without exiting. Returns exit_code."""
+    if ctx.json_output:
+        click.echo(
+            json_formatter.format_json_error(error_type, message, exit_code, hint=hint),
+            err=True,
+        )
+    else:
+        click.echo(human_formatter.format_error(message, hint=hint), err=True)
+    return exit_code
 
 
 def exit_with_error(
     ctx: Context,
     error_type: str,
     message: str,
-    exit_code: int,
+    exit_code: int = EXIT_GENERAL_ERROR,
     *,
     hint: str | None = None,
 ) -> None:
     """Print a formatted error and exit with the given code."""
-    if ctx.json_output:
-        click.echo(
-            json_formatter.format_json_error(
-                error_type,
-                message,
-                exit_code,
-                hint=hint,
-            ),
-            err=True,
-        )
-    else:
-        click.echo(human_formatter.format_error(message, hint=hint), err=True)
+    emit_error(ctx, error_type, message, exit_code, hint=hint)
     sys.exit(exit_code)

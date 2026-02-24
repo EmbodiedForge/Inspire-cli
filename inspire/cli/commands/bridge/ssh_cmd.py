@@ -15,7 +15,7 @@ from inspire.bridge.tunnel import (
     load_tunnel_config,
 )
 from inspire.cli.context import Context, EXIT_CONFIG_ERROR, EXIT_GENERAL_ERROR, pass_context
-from inspire.cli.formatters import json_formatter
+from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.notebook_cli import require_web_session
 from inspire.cli.utils.tunnel_reconnect import (
     load_ssh_public_key_material,
@@ -25,26 +25,6 @@ from inspire.cli.utils.tunnel_reconnect import (
 )
 from inspire.config import Config, ConfigError, build_env_exports
 from inspire.config.ssh_runtime import resolve_ssh_runtime_config
-
-
-def _exit_with_error(
-    ctx: Context,
-    *,
-    error_type: str,
-    message: str,
-    exit_code: int = EXIT_GENERAL_ERROR,
-    hint: Optional[str] = None,
-) -> None:
-    if ctx.json_output:
-        click.echo(
-            json_formatter.format_json_error(error_type, message, exit_code, hint=hint),
-            err=True,
-        )
-    else:
-        click.echo(f"Error: {message}", err=True)
-        if hint:
-            click.echo(f"Hint: {hint}", err=True)
-    sys.exit(exit_code)
 
 
 @click.command("ssh")
@@ -63,27 +43,22 @@ def bridge_ssh(ctx: Context, bridge: Optional[str]) -> None:
     try:
         config, _ = Config.from_files_and_env(require_target_dir=True, require_credentials=False)
     except ConfigError as e:
-        _exit_with_error(
-            ctx,
-            error_type="ConfigError",
-            message=str(e),
-            exit_code=EXIT_CONFIG_ERROR,
-        )
+        _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
 
     tunnel_config = load_tunnel_config()
     selected_bridge = tunnel_config.get_bridge(bridge)
     if bridge and selected_bridge is None:
-        _exit_with_error(
+        _handle_error(
             ctx,
-            error_type="BridgeNotFound",
-            message=f"Bridge '{bridge}' not found.",
+            "BridgeNotFound",
+            f"Bridge '{bridge}' not found.",
             hint="Run 'inspire tunnel list' to see available bridge profiles.",
         )
     if selected_bridge is None:
-        _exit_with_error(
+        _handle_error(
             ctx,
-            error_type="TunnelError",
-            message="No bridge configured.",
+            "TunnelError",
+            "No bridge configured.",
             hint="Run 'inspire notebook ssh <notebook-id> --save-as <name>' first.",
         )
 
@@ -105,10 +80,10 @@ def bridge_ssh(ctx: Context, bridge: Optional[str]) -> None:
         tunnel_config = load_tunnel_config()
         bridge_profile = tunnel_config.get_bridge(bridge_name)
         if bridge_profile is None:
-            _exit_with_error(
+            _handle_error(
                 ctx,
-                error_type="BridgeNotFound",
-                message=f"Bridge '{bridge_name}' not found.",
+                "BridgeNotFound",
+                f"Bridge '{bridge_name}' not found.",
                 hint="Run 'inspire tunnel list' to see available bridge profiles.",
             )
 
@@ -121,10 +96,10 @@ def bridge_ssh(ctx: Context, bridge: Optional[str]) -> None:
         )
         if should_rebuild or not tunnel_ready:
             if reconnect_attempt >= reconnect_limit:
-                _exit_with_error(
+                _handle_error(
                     ctx,
-                    error_type="TunnelError",
-                    message="SSH tunnel not available",
+                    "TunnelError",
+                    "SSH tunnel not available",
                     hint=(
                         "Auto-rebuild retries exhausted. Run 'inspire tunnel status' and "
                         "retry 'inspire notebook ssh <notebook-id> --save-as <name>'."
@@ -133,10 +108,10 @@ def bridge_ssh(ctx: Context, bridge: Optional[str]) -> None:
 
             notebook_id = str(getattr(bridge_profile, "notebook_id", "") or "").strip()
             if not notebook_id:
-                _exit_with_error(
+                _handle_error(
                     ctx,
-                    error_type="TunnelError",
-                    message="SSH tunnel not available",
+                    "TunnelError",
+                    "SSH tunnel not available",
                     hint=(
                         "This bridge has no notebook_id metadata, so it cannot be rebuilt "
                         "automatically. Re-create it via "
@@ -176,10 +151,10 @@ def bridge_ssh(ctx: Context, bridge: Optional[str]) -> None:
                 should_rebuild = False
             except (ValueError, ConfigError) as e:
                 if reconnect_attempt >= reconnect_limit:
-                    _exit_with_error(
+                    _handle_error(
                         ctx,
-                        error_type="TunnelError",
-                        message=f"Automatic tunnel rebuild failed: {e}",
+                        "TunnelError",
+                        f"Automatic tunnel rebuild failed: {e}",
                         hint="Check credentials, SSH key, and notebook status, then retry.",
                     )
                 pause_s = retry_pause_seconds(
@@ -191,10 +166,10 @@ def bridge_ssh(ctx: Context, bridge: Optional[str]) -> None:
                     time.sleep(pause_s)
             except Exception as e:
                 if reconnect_attempt >= reconnect_limit:
-                    _exit_with_error(
+                    _handle_error(
                         ctx,
-                        error_type="TunnelError",
-                        message=f"Automatic tunnel rebuild failed: {e}",
+                        "TunnelError",
+                        f"Automatic tunnel rebuild failed: {e}",
                         hint="Verify the notebook is RUNNING and retry.",
                     )
                 pause_s = retry_pause_seconds(

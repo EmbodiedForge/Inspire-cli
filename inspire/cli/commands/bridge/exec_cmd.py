@@ -36,6 +36,7 @@ from inspire.bridge.tunnel import (
     load_tunnel_config,
 )
 from inspire.cli.formatters import json_formatter
+from inspire.cli.utils.errors import emit_error as _emit_error
 from inspire.cli.utils.notebook_cli import require_web_session
 from inspire.cli.utils.tunnel_reconnect import (
     load_ssh_public_key_material,
@@ -65,41 +66,8 @@ def _verbose_output(ctx: Context) -> bool:
     return not ctx.json_output and ctx.debug
 
 
-def _emit_cli_error(
-    ctx: Context,
-    *,
-    error_type: str,
-    message: str,
-    exit_code: int = EXIT_GENERAL_ERROR,
-    hint: Optional[str] = None,
-) -> int:
-    if ctx.json_output:
-        click.echo(
-            json_formatter.format_json_error(
-                error_type,
-                message,
-                exit_code,
-                hint=hint,
-            ),
-            err=True,
-        )
-    else:
-        click.echo(f"Error: {message}", err=True)
-        if hint:
-            click.echo(f"Hint: {hint}", err=True)
-    return exit_code
-
-
 def _emit_command_failed(ctx: Context, *, returncode: int) -> int:
-    message = f"Command failed with exit code {returncode}"
-    if ctx.json_output:
-        return _emit_cli_error(
-            ctx,
-            error_type="CommandFailed",
-            message=message,
-        )
-    click.echo(message, err=True)
-    return EXIT_GENERAL_ERROR
+    return _emit_error(ctx, "CommandFailed", f"Command failed with exit code {returncode}")
 
 
 def try_exec_via_ssh_tunnel(
@@ -160,22 +128,20 @@ def try_exec_via_ssh_tunnel(
                 "'inspire notebook ssh <notebook-id> --save-as <name>'. "
                 "If you intended to run via Git Actions instead, pass '--no-tunnel'."
             )
-            return _emit_cli_error(
+            return _emit_error(
                 ctx,
-                error_type="TunnelError",
-                message=(
-                    "SSH tunnel not available. "
-                    f"Bridge '{getattr(bridge, 'name', 'unknown')}' is not responding "
-                    "(notebook may be stopped)."
-                ),
+                "TunnelError",
+                "SSH tunnel not available. "
+                f"Bridge '{getattr(bridge, 'name', 'unknown')}' is not responding "
+                "(notebook may be stopped).",
                 hint=hint,
             )
 
         if reconnect_attempt >= reconnect_limit:
-            return _emit_cli_error(
+            return _emit_error(
                 ctx,
-                error_type="TunnelError",
-                message="SSH tunnel not available",
+                "TunnelError",
+                "SSH tunnel not available",
                 hint=(
                     "Auto-rebuild retries exhausted. Run 'inspire tunnel status' and "
                     "retry 'inspire notebook ssh <notebook-id> --save-as <name>'."
@@ -215,20 +181,20 @@ def try_exec_via_ssh_tunnel(
             return None
         except (ValueError, ConfigError) as e:
             if reconnect_attempt >= reconnect_limit:
-                return _emit_cli_error(
+                return _emit_error(
                     ctx,
-                    error_type="TunnelError",
-                    message=f"Automatic tunnel rebuild failed: {e}",
+                    "TunnelError",
+                    f"Automatic tunnel rebuild failed: {e}",
                     hint="Check credentials, SSH key, and notebook status, then retry.",
                 )
             _pause_before_retry()
             return None
         except Exception as e:
             if reconnect_attempt >= reconnect_limit:
-                return _emit_cli_error(
+                return _emit_error(
                     ctx,
-                    error_type="TunnelError",
-                    message=f"Automatic tunnel rebuild failed: {e}",
+                    "TunnelError",
+                    f"Automatic tunnel rebuild failed: {e}",
                     hint="Verify the notebook is RUNNING and retry.",
                 )
             _pause_before_retry()
@@ -272,10 +238,10 @@ def try_exec_via_ssh_tunnel(
             tunnel_config = load_tunnel_config()
             bridge = tunnel_config.get_bridge(resolved_bridge_name)
             if bridge_name and bridge is None:
-                return _emit_cli_error(
+                return _emit_error(
                     ctx,
-                    error_type="ConfigError",
-                    message=f"Bridge '{bridge_name}' not found.",
+                    "ConfigError",
+                    f"Bridge '{bridge_name}' not found.",
                     hint="Run 'inspire tunnel list' to see available bridge profiles.",
                 )
             if bridge is None:
@@ -373,10 +339,10 @@ def try_exec_via_ssh_tunnel(
 
         except TunnelNotAvailableError as e:
             if ssh_execution_started:
-                return _emit_cli_error(
+                return _emit_error(
                     ctx,
-                    error_type="TunnelError",
-                    message=f"SSH execution failed: {e}",
+                    "TunnelError",
+                    f"SSH execution failed: {e}",
                 )
             force_rebuild = True
             continue
@@ -395,10 +361,10 @@ def try_exec_via_ssh_tunnel(
             return EXIT_TIMEOUT
         except Exception as e:
             if ssh_execution_started:
-                return _emit_cli_error(
+                return _emit_error(
                     ctx,
-                    error_type="SSHExecutionError",
-                    message=f"SSH execution failed: {e}",
+                    "SSHExecutionError",
+                    f"SSH execution failed: {e}",
                 )
             if _verbose_output(ctx):
                 click.echo(f"SSH execution failed: {e}", err=True)
