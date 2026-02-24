@@ -238,6 +238,34 @@ the `github-public` sync step (see STEP 4 above):
 - `.claude/skills/playwright-cli/` - Internal browser automation skill
 - `.claude/plans/` - Development plans
 
+## Training Job API: Browser vs OpenAPI
+
+Two separate endpoints exist for creating training jobs:
+
+| Endpoint | Auth | Payload Schema |
+|----------|------|---------------|
+| `POST /api/v1/train_job/create` | Browser session (SSO cookie) | `framework_config[].resource_spec_price.quota_id` |
+| `POST /openapi/v1/train_job/create` | Token (`Authorization: Bearer`) | `framework_config[].spec_id` |
+
+Both produce identical job records on the scheduler. Confirmed by comparing a RUNNING job (web-created) and a QUEUING job (OpenAPI-created) with identical configs.
+
+**Resource spec IDs** (aka `quota_id`) are shared across all compute groups (H100 and H200 use the same IDs). Fetched from:
+```
+POST /api/v1/resource_prices/logic_compute_groups/
+  body: {"schedule_config_type": "SCHEDULE_CONFIG_TYPE_TRAIN"}
+```
+
+Current specs (H200, 141GB VRAM each):
+| GPUs | CPU | RAM | spec_id / quota_id |
+|------|-----|-----|-------------------|
+| 1 | 15 | 200GB | `4dd0e854-e2a4-4253-95e6-64c13f0b5117` |
+| 2 | 30 | 400GB | `7166bd2e-6cbe-4bd9-be38-762d11003e7f` |
+| 4 | 60 | 800GB | `45ab2351-fc8a-4d50-a30b-b39a5306c906` |
+| 8 | 120 | 1600GB | `f23c8d53-395f-473c-81e0-dbd132711861` (standard) |
+| 8 | 180 | 1800GB | `b618f5cb-...` (expanded, not used by CLI) |
+
+**Known issue (2025-02):** Jobs created via OpenAPI may queue indefinitely even when GPUs are free and the payload matches web-created jobs exactly. Root cause is server-side (not a CLI payload issue). Comparing running vs queuing jobs shows identical payloads, same project, same compute group, same spec, created seconds apart.
+
 ## Remote Environment Variables
 
 The `[remote_env]` config section injects env vars into remote commands:

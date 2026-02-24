@@ -31,20 +31,32 @@ class ProjectInfo:
     budget: float = 0.0  # Total budget allocated
     remain_budget: float = 0.0  # Remaining budget
     member_remain_budget: float = 0.0  # Remaining budget for current user
-    member_remain_gpu_hours: float = 0.0  # Remaining GPU hours (negative = over quota)
-    gpu_limit: bool = False  # Whether GPU limits are enforced
-    member_gpu_limit: bool = False  # Whether member GPU limits are enforced
+    member_remain_gpu_hours: float = 0.0  # Member-level remaining GPU hours (informational)
+    gpu_limit: bool = False  # Whether project-level GPU-hour limits are enforced
+    member_gpu_limit: bool = False  # Whether member GPU limits are enforced (informational)
     priority_level: str = ""  # Priority level (HIGH, NORMAL, etc.)
     priority_name: str = ""  # Priority name (numeric string like "10", "4")
 
-    def has_quota(self, *, needs_gpu: bool = True) -> bool:
-        """Check if the project has available quota.
+    @property
+    def gpu_unlimited(self) -> bool:
+        """True when the project has no project-level GPU-hour cap.
 
-        The platform enforces concurrent GPU limits only, not cumulative
-        GPU-hours.  A negative ``member_remain_gpu_hours`` is informational
-        and does not block job/notebook creation.  This method therefore
-        always returns ``True`` for GPU projects (the platform itself will
-        reject the request if the concurrent limit is hit).
+        Projects with ``gpu_limit=False`` never block job scheduling
+        regardless of ``member_remain_gpu_hours``.  Projects with
+        ``gpu_limit=True`` may queue indefinitely when their cumulative
+        GPU-hour budget is exhausted.
+        """
+        return not self.gpu_limit
+
+    def has_quota(self, *, needs_gpu: bool = True) -> bool:
+        """Check if the project is safe to submit GPU work to.
+
+        Returns ``True`` for projects without a GPU-hour cap
+        (``gpu_limit=False``).  For capped projects (``gpu_limit=True``)
+        we cannot reliably determine remaining quota from the API, so
+        this also returns ``True`` — the scheduler will queue the job if
+        the cap is hit.  Use :attr:`gpu_unlimited` to prefer uncapped
+        projects in sorting.
         """
         return True
 
@@ -52,9 +64,9 @@ class ProjectInfo:
         """Get formatted quota status string for display."""
         if not needs_gpu:
             return ""
-        if self.member_gpu_limit:
-            return f" ({self.member_remain_gpu_hours:.0f} GPU-hours remaining)"
-        return ""
+        if not self.gpu_limit:
+            return " (no GPU-hour limit)"
+        return " (GPU-hour limit enforced)"
 
 
 def list_projects(
@@ -126,20 +138,20 @@ def select_project(
     needs_gpu_quota: bool = True,
     project_order: list[str] | None = None,
 ) -> tuple[ProjectInfo, Optional[str]]:
-    """Select a project, with auto-fallback if over quota."""
+    """Select a project, with auto-fallback if over quota.
+
+    Sorting priority (when auto-selecting):
+      1. ``gpu_unlimited`` — prefer uncapped projects (``gpu_limit=False``)
+      2. ``project_order`` — user-defined preference ranking
+      3. ``priority_name`` — higher numeric priority first
+      4. alphabetical name
+    """
 
     def _priority_value(project: ProjectInfo) -> int:
         try:
             return int(project.priority_name) if project.priority_name else 0
         except ValueError:
             return 0
-
-    def _effective_remain_gpu_hours(project: ProjectInfo) -> float:
-        if not needs_gpu_quota:
-            return float("inf")
-        if not project.gpu_limit and not project.member_gpu_limit:
-            return float("inf")
-        return float(project.member_remain_gpu_hours or 0.0)
 
     def _order_rank(project: ProjectInfo) -> int:
         """Return position in user-defined project_order (lower is better).
@@ -154,31 +166,28 @@ def select_project(
                 return i
         return len(project_order)  # unlisted → after all listed
 
+    def _sort_key(project: ProjectInfo) -> tuple:
+        return (
+            0 if project.gpu_unlimited else 1,  # uncapped first
+            _order_rank(project),
+            -_priority_value(project),
+            project.name.lower(),
+        )
+
     def _quota_candidates(items: list[ProjectInfo]) -> list[ProjectInfo]:
         return [p for p in items if p.has_quota(needs_gpu=needs_gpu_quota)]
 
     def _best_by_quota(items: list[ProjectInfo]) -> ProjectInfo | None:
         if not items:
             return None
-        return sorted(
-            items,
-            key=lambda p: (
-                _order_rank(p),
-                -_priority_value(p),
-                -_effective_remain_gpu_hours(p),
-                p.name.lower(),
-            ),
-        )[0]
+        return sorted(items, key=_sort_key)[0]
 
     def _format_candidates(items: list[ProjectInfo]) -> str:
         ordered = sorted(
             items,
             key=lambda p: (
                 not p.has_quota(needs_gpu=needs_gpu_quota),
-                _order_rank(p),
-                -_priority_value(p),
-                -_effective_remain_gpu_hours(p),
-                p.name.lower(),
+                _sort_key(p),
             ),
         )
         lines = [
