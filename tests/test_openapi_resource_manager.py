@@ -48,7 +48,7 @@ def test_resource_manager_matches_group_name_when_location_empty() -> None:
 
     spec_id, group_id = manager.get_recommended_config("8xH200", prefer_location="H200-3号机房")
 
-    assert spec_id == "b618f5cb-c119-4422-937e-f39131853076"
+    assert spec_id == "f23c8d53-395f-473c-81e0-dbd132711861"
     assert group_id == "lcg-h200-3"
 
 
@@ -78,3 +78,83 @@ def test_resource_manager_error_lists_non_empty_labels() -> None:
     message = str(exc_info.value)
     assert "Available locations: H200-1号机房, H200-3号机房" in message
     assert "Available locations: , " not in message
+
+
+def test_resource_manager_no_preference_picks_first_group() -> None:
+    """Without prefer_location, get_recommended_config picks the first group.
+
+    This documents the behaviour that caused the queuing bug: when
+    _resolve_run_resource_and_location lost the auto-selected group name
+    (selected_location was empty and selected_group_name was not forwarded),
+    the job was submitted to the first config group regardless of availability.
+    """
+    manager = ResourceManager(
+        [
+            {"name": "H200-1号机房", "id": "lcg-h200-1", "gpu_type": "H200"},
+            {"name": "H200-2号机房", "id": "lcg-h200-2", "gpu_type": "H200"},
+        ]
+    )
+
+    _, group_id = manager.get_recommended_config("8xH200", prefer_location=None)
+    assert group_id == "lcg-h200-1"  # always first → wrong if GPUs are on group 2
+
+
+def test_autoselect_location_fallback_uses_group_name() -> None:
+    """Regression: find_best_compute_group_location must return group name
+    when location is empty so that run.py can forward it to the API."""
+    from unittest.mock import MagicMock
+
+    from inspire.cli.utils.compute_group_autoselect import find_best_compute_group_location
+    from inspire.platform.openapi.models import ComputeGroup
+
+    fake_best = MagicMock()
+    fake_best.group_id = "lcg-h200-2"
+    fake_best.group_name = "H200-2号机房"
+
+    api = MagicMock()
+    api.resource_manager.compute_groups = [
+        ComputeGroup(
+            name="H200-1号机房",
+            compute_group_id="lcg-h200-1",
+            gpu_type=GPUType.H200,
+            location="",
+        ),
+        ComputeGroup(
+            name="H200-2号机房",
+            compute_group_id="lcg-h200-2",
+            gpu_type=GPUType.H200,
+            location="",
+        ),
+    ]
+
+    import inspire.cli.utils.compute_group_autoselect as cga_mod
+
+    original = cga_mod.browser_api_module.find_best_compute_group_accurate
+
+    try:
+        cga_mod.browser_api_module.find_best_compute_group_accurate = MagicMock(
+            return_value=fake_best
+        )
+
+        best, selected_location, selected_group_name = find_best_compute_group_location(
+            api, gpu_type="H200", min_gpus=8
+        )
+
+        assert best is fake_best
+        # location is empty because config entries have no location field
+        assert selected_location == ""
+        # group name must be populated so run.py can use it as fallback
+        assert selected_group_name == "H200-2号机房"
+
+        # Verify the fallback produces correct group selection
+        location = selected_location or selected_group_name or None
+        manager = ResourceManager(
+            [
+                {"name": "H200-1号机房", "id": "lcg-h200-1", "gpu_type": "H200"},
+                {"name": "H200-2号机房", "id": "lcg-h200-2", "gpu_type": "H200"},
+            ]
+        )
+        _, group_id = manager.get_recommended_config("8xH200", prefer_location=location)
+        assert group_id == "lcg-h200-2"  # must match auto-selected, not first
+    finally:
+        cga_mod.browser_api_module.find_best_compute_group_accurate = original

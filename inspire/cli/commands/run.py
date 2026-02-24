@@ -152,8 +152,7 @@ def _resolve_run_resource_and_location(
         sys.exit(EXIT_VALIDATION_ERROR)
 
     resource_str = f"{gpus}x{gpu_type}"
-    if selected_location:
-        location = selected_location
+    location = selected_location or selected_group_name or None
 
     if ctx.debug and not ctx.json_output:
         if getattr(best, "selection_source", "") == "nodes" and getattr(best, "free_nodes", 0):

@@ -14,6 +14,9 @@ from inspire.compute_groups import load_compute_groups_from_config
 
 
 def build_default_resource_specs() -> list[ResourceSpec]:
+    # These spec_ids are quota_ids shared across all compute groups (H100/H200).
+    # Fetched from: POST /api/v1/resource_prices/logic_compute_groups/
+    #   with schedule_config_type=SCHEDULE_CONFIG_TYPE_TRAIN
     return [
         ResourceSpec(
             gpu_type=GPUType.H200,
@@ -23,6 +26,15 @@ def build_default_resource_specs() -> list[ResourceSpec]:
             gpu_memory_gb=141,
             spec_id="4dd0e854-e2a4-4253-95e6-64c13f0b5117",
             description="1 × NVIDIA H200 (141GB) + 15 CPU cores + 200GB RAM",
+        ),
+        ResourceSpec(
+            gpu_type=GPUType.H200,
+            gpu_count=2,
+            cpu_cores=30,
+            memory_gb=400,
+            gpu_memory_gb=141,
+            spec_id="7166bd2e-6cbe-4bd9-be38-762d11003e7f",
+            description="2 × NVIDIA H200 (141GB) + 30 CPU cores + 400GB RAM",
         ),
         ResourceSpec(
             gpu_type=GPUType.H200,
@@ -39,7 +51,7 @@ def build_default_resource_specs() -> list[ResourceSpec]:
             cpu_cores=120,
             memory_gb=1600,
             gpu_memory_gb=141,
-            spec_id="b618f5cb-c119-4422-937e-f39131853076",
+            spec_id="f23c8d53-395f-473c-81e0-dbd132711861",
             description="8 × NVIDIA H200 (141GB) + 120 CPU cores + 1600GB RAM",
         ),
     ]
