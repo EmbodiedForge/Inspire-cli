@@ -209,14 +209,24 @@ def _normalize_compute_groups(raw_value: Any) -> list[dict]:
     for raw_item in raw_value:
         if not isinstance(raw_item, dict):
             continue
-        normalized.append(
-            {
-                "name": str(raw_item.get("name", "")),
-                "id": str(raw_item.get("id", "")),
-                "gpu_type": str(raw_item.get("gpu_type", "")),
-                "location": str(raw_item.get("location", "")),
-            }
-        )
+
+        raw_ws = raw_item.get("workspace_ids", [])
+        if isinstance(raw_ws, str):
+            workspace_ids = [raw_ws] if raw_ws else []
+        elif isinstance(raw_ws, list):
+            workspace_ids = [str(w) for w in raw_ws if isinstance(w, str) and w]
+        else:
+            workspace_ids = []
+
+        entry: dict = {
+            "name": str(raw_item.get("name", "")),
+            "id": str(raw_item.get("id", "")),
+            "gpu_type": str(raw_item.get("gpu_type", "")),
+            "location": str(raw_item.get("location", "")),
+        }
+        if workspace_ids:
+            entry["workspace_ids"] = workspace_ids
+        normalized.append(entry)
     return normalized
 
 

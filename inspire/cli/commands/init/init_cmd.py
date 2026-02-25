@@ -127,6 +127,11 @@ def _get_config_paths() -> tuple[Path, Path]:
     default=None,
     help="Platform base URL (prompted if not configured). Only used with --discover.",
 )
+@click.option(
+    "--target-dir",
+    default=None,
+    help="Target directory on shared filesystem (skips prompt). Only used with --discover.",
+)
 @pass_context
 def init(
     ctx: Context,
@@ -143,6 +148,7 @@ def init(
     template_flag: bool,
     username: str | None,
     base_url: str | None,
+    target_dir: str | None,
 ) -> None:
     """Initialize Inspire CLI configuration.
 
@@ -200,8 +206,10 @@ def init(
             "Probe options are only effective with --discover --probe-shared-path and were ignored."
         )
 
-    if not discover and (username or base_url):
-        _warn("--username and --base-url are only effective with --discover and were ignored.")
+    if not discover and (username or base_url or target_dir):
+        _warn(
+            "--username, --base-url, and --target-dir are only effective with --discover and were ignored."
+        )
 
     try:
         if global_flag and project_flag:
@@ -235,6 +243,7 @@ def init(
                 probe_timeout=probe_timeout,
                 cli_username=username,
                 cli_base_url=base_url,
+                cli_target_dir=target_dir,
             )
 
             emit_init_json(

@@ -210,6 +210,11 @@ def _match_compute_group_by_gpu_type(
 
 def _match_cpu_only_compute_group(compute_groups: list[dict]) -> tuple[dict | None, str]:
     for group in compute_groups:
+        if group.get("gpu_type_stats"):
+            continue
+        if "CPU" in (group.get("name") or "").upper():
+            return group, ""
+    for group in compute_groups:
         if not group.get("gpu_type_stats"):
             return group, ""
     return None, ""

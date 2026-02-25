@@ -66,6 +66,7 @@ class _DiscoveryPersistRequest:
     probe_pubkey: str | None
     probe_timeout: int
     prompted_credentials: tuple[str, str, str] | None
+    cli_target_dir: str | None
 
 
 def _slugify_alias(value: str) -> str:
@@ -595,6 +596,7 @@ def _resolve_credentials_interactive(
     *,
     cli_username: str | None,
     cli_base_url: str | None,
+    allow_config_password: bool = False,
 ) -> tuple[str, str, str]:
     """Resolve base_url, username, and password, prompting when missing."""
     placeholder = "https://api.example.com"
@@ -624,10 +626,15 @@ def _resolve_credentials_interactive(
         raise SystemExit(1)
 
     # --- password ---
-    # Always prompt: we are in the interactive fallback because existing
-    # credentials/session did not work, so reusing config.password would
-    # repeat the same failure.
-    password = click.prompt("Password", type=str, hide_input=True)
+    # When the caller explicitly provided credentials (allow_config_password=True),
+    # the config/env password is likely valid — use it to support non-interactive
+    # --force mode.  In the session-failed fallback path the old password may be
+    # stale, so always prompt for a fresh one.
+    password = ""
+    if allow_config_password:
+        password = str(getattr(config, "password", "") or "").strip()
+    if not password:
+        password = click.prompt("Password", type=str, hide_input=True)
     if not password:
         click.echo(click.style("Password is required.", fg="red"))
         raise SystemExit(1)
@@ -755,7 +762,12 @@ def _merge_compute_groups(
         if not group_id:
             continue
         merged = dict(by_id.get(group_id, {}))
+        existing_ws = set(merged.get("workspace_ids") or [])
+        new_ws = set(item.get("workspace_ids") or [])
         merged.update({k: v for k, v in item.items() if v is not None and v != ""})
+        combined = sorted(existing_ws | new_ws)
+        if combined:
+            merged["workspace_ids"] = combined
         by_id[group_id] = merged
 
     merged_list = list(by_id.values())
@@ -787,6 +799,7 @@ def _resolve_discover_runtime(
             config,
             cli_username=cli_username,
             cli_base_url=cli_base_url,
+            allow_config_password=True,
         )
         prompted_credentials = (username, password, base_url)
         click.echo("Logging in...")
@@ -1148,6 +1161,32 @@ def _discover_workspace_options(
     return discovered_workspace_ids, discovered_workspace_names
 
 
+def _guess_workspace_alias(
+    alias: str,
+    discovered_workspace_ids: list[str],
+    discovered_workspace_names: dict[str, str],
+) -> str | None:
+    """Return the best-guess workspace ID for *alias* (cpu/gpu/internet), or ``None``."""
+    for ws_id in discovered_workspace_ids:
+        name = (discovered_workspace_names.get(ws_id) or "").strip()
+        if not name:
+            continue
+        low = name.lower()
+
+        if alias == "cpu" and "cpu" in low:
+            return ws_id
+        if alias == "internet" and ("上网" in name or "internet" in low):
+            return ws_id
+        if alias == "gpu":
+            gpu_hit = any(kw in low for kw in ("gpu", "h100", "h200")) or any(
+                kw in name for kw in ("训练", "分布式", "高性能")
+            )
+            if gpu_hit and "cpu" not in low and "上网" not in name and "internet" not in low:
+                return ws_id
+
+    return None
+
+
 def _prompt_workspace_aliases(
     *,
     force: bool,
@@ -1171,9 +1210,12 @@ def _prompt_workspace_aliases(
             if alias in env_overrides:
                 continue
 
+            guess = _guess_workspace_alias(
+                alias, discovered_workspace_ids, discovered_workspace_names
+            )
             default_idx = 1
             for idx, ws_id in enumerate(discovered_workspace_ids, start=1):
-                if ws_id == workspace_id:
+                if ws_id == (guess or workspace_id):
                     default_idx = idx
                     break
 
@@ -1189,9 +1231,9 @@ def _prompt_workspace_aliases(
                 merged_workspaces.setdefault(alias, workspace_id)
         return
 
-    merged_workspaces.setdefault("cpu", workspace_id)
-    merged_workspaces.setdefault("gpu", workspace_id)
-    merged_workspaces.setdefault("internet", workspace_id)
+    for alias in ("cpu", "gpu", "internet"):
+        guess = _guess_workspace_alias(alias, discovered_workspace_ids, discovered_workspace_names)
+        merged_workspaces.setdefault(alias, guess or workspace_id)
 
 
 def _persist_workspace_aliases(
@@ -1543,12 +1585,44 @@ def _populate_project_defaults_from_config(
         defaults.setdefault("shm_size", int(config.shm_size))
 
 
+def _prompt_target_dir(
+    *,
+    force: bool,
+    cli_target_dir: str | None,
+    selected_project: object,
+    project_catalog: dict[str, dict[str, Any]],
+) -> str | None:
+    """Prompt for target_dir, using the catalog workdir as suggestion."""
+    project_id = str(getattr(selected_project, "project_id", "") or "").strip()
+    entry = project_catalog.get(project_id, {})
+    catalog_workdir = str(entry.get("workdir") or "").strip()
+
+    if force:
+        return cli_target_dir or catalog_workdir or None
+
+    default = cli_target_dir or catalog_workdir or ""
+    if default:
+        result = click.prompt(
+            "Target directory on shared filesystem",
+            default=default,
+            show_default=True,
+        )
+    else:
+        result = click.prompt(
+            "Target directory on shared filesystem (e.g. /inspire/...)",
+            default="",
+            show_default=False,
+        )
+    return result.strip() or None
+
+
 def _write_discovered_project_config(
     *,
     project_path: Path,
     config: Config,
     account_key: str,
     selected_alias: str,
+    target_dir: str | None = None,
 ) -> None:
     project_data: dict[str, Any] = {}
     if project_path.exists():
@@ -1570,6 +1644,8 @@ def _write_discovered_project_config(
 
     defaults = _get_or_create_dict_table(container=project_data, key="defaults")
     _populate_project_defaults_from_config(defaults=defaults, config=config)
+    if target_dir:
+        defaults["target_dir"] = target_dir
 
     project_path.parent.mkdir(parents=True, exist_ok=True)
     project_path.write_text(_toml_dumps(project_data))
@@ -1614,6 +1690,7 @@ def _persist_discovery_catalog(request: _DiscoveryPersistRequest) -> None:
     probe_pubkey = request.probe_pubkey
     probe_timeout = request.probe_timeout
     prompted_credentials = request.prompted_credentials
+    cli_target_dir = request.cli_target_dir
 
     global_path = Config.GLOBAL_CONFIG_PATH
     project_path = Path.cwd() / PROJECT_CONFIG_DIR / CONFIG_FILENAME
@@ -1667,11 +1744,27 @@ def _persist_discovery_catalog(request: _DiscoveryPersistRequest) -> None:
         account_section=account_section,
         config=config,
     )
-    compute_groups = _discover_compute_groups(
-        browser_api_module=browser_api_module,
-        session=session,
-        workspace_id=workspace_id,
-    )
+    all_ws_ids: set[str] = {workspace_id}
+    for ws_id in list(session.all_workspace_ids or []):
+        ws_str = str(ws_id or "").strip()
+        if ws_str:
+            all_ws_ids.add(ws_str)
+    for ws_id in merged_workspaces.values():
+        ws_str = str(ws_id or "").strip()
+        if ws_str:
+            all_ws_ids.add(ws_str)
+
+    compute_groups: list[dict[str, Any]] = []
+    for ws_id in sorted(all_ws_ids):
+        for cg in _discover_compute_groups(
+            browser_api_module=browser_api_module,
+            session=session,
+            workspace_id=ws_id,
+        ):
+            cg.setdefault("workspace_ids", [])
+            if ws_id not in cg["workspace_ids"]:
+                cg["workspace_ids"].append(ws_id)
+            compute_groups.append(cg)
     _persist_compute_groups(
         global_data=global_data,
         account_section=account_section,
@@ -1721,11 +1814,18 @@ def _persist_discovery_catalog(request: _DiscoveryPersistRequest) -> None:
     selected_alias = alias_for_id.get(selected_project.project_id)
     if not selected_alias:
         selected_alias = _slugify_alias(selected_project.name) or "default"
+    target_dir = _prompt_target_dir(
+        force=force,
+        cli_target_dir=cli_target_dir,
+        selected_project=selected_project,
+        project_catalog=project_catalog,
+    )
     _write_discovered_project_config(
         project_path=project_path,
         config=config,
         account_key=account_key,
         selected_alias=selected_alias,
+        target_dir=target_dir,
     )
 
     resolved, _ = Config.from_files_and_env(require_credentials=False, require_target_dir=False)
@@ -1751,6 +1851,7 @@ def _init_discover_mode(
     probe_timeout: int,
     cli_username: str | None = None,
     cli_base_url: str | None = None,
+    cli_target_dir: str | None = None,
 ) -> None:
     """Initialize per-account catalogs by discovering projects and compute groups."""
     from inspire.platform.web import browser_api as browser_api_module
@@ -1793,5 +1894,6 @@ def _init_discover_mode(
             probe_pubkey=probe_pubkey,
             probe_timeout=probe_timeout,
             prompted_credentials=prompted_credentials,
+            cli_target_dir=cli_target_dir,
         )
     )
