@@ -21,24 +21,32 @@ inspire --help
 
 ## Quick Start
 
-### 1. Set Credentials
+### 1. Auto-discover your platform
 
 ```bash
-export INSPIRE_USERNAME="your_username"
+inspire init --discover -u YOUR_USERNAME --base-url https://your-platform.com
+```
+
+This opens a browser to log in, then automatically discovers your projects, workspaces, compute groups, and shared filesystem paths. Writes both global (`~/.config/inspire/config.toml`) and project (`.inspire/config.toml`) configs.
+
+Set your password as an env var to avoid repeated prompts:
+```bash
 export INSPIRE_PASSWORD="your_password"
-export INSPIRE_TARGET_DIR="/path/to/shared/filesystem"
 ```
 
-### 2. Initialize Config
+### 2. Verify
 
 ```bash
-inspire init
+inspire config show    # Check all values resolved
+inspire config check   # Validate API auth
 ```
 
-### 3. Check Resources
+### 3. Start using
 
 ```bash
-inspire resources list
+inspire resources list          # View GPU availability
+inspire notebook create --name dev --resource 4xCPU --wait
+inspire notebook ssh <id>       # SSH into notebook (auto-installs tunnel)
 ```
 
 ## Commands
@@ -64,7 +72,8 @@ inspire resources list
 | `inspire project list` | View projects and GPU quota |
 | `inspire resources list/nodes` | View GPU availability |
 | `inspire config show/check` | Inspect and validate configuration |
-| `inspire init` | Initialize configuration |
+| `inspire init` | Generate starter config from env vars |
+| `inspire init --discover` | Auto-discover projects, workspaces, compute groups |
 
 ## Examples
 
@@ -106,6 +115,8 @@ inspire project list
 
 ## Configuration
 
+The recommended way to configure is `inspire init --discover`, which auto-detects projects, workspaces, compute groups, and writes config files.
+
 Config files are loaded in order (later overrides earlier):
 1. Global: `~/.config/inspire/config.toml`
 2. Project: `./.inspire/config.toml`
@@ -116,7 +127,7 @@ Account password lookup follows the same layered model:
 2. `[accounts."<username>"].password` from project config (overrides global for same username)
 3. `INSPIRE_PASSWORD` (fallback only if no account password was found)
 
-Run `inspire init` to generate a starter config, or `inspire config show` to inspect the merged result.
+Run `inspire init --discover` to auto-configure, or `inspire config show` to inspect the merged result.
 
 `inspire init` probe-only options are effective only with `--discover --probe-shared-path`:
 `--probe-limit`, `--probe-keep-notebooks`, `--probe-pubkey`/`--pubkey`, and `--probe-timeout`.
@@ -151,14 +162,12 @@ id = "lcg-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 gpu_type = "H100"
 
 [ssh]
-# Optional: use a pre-cached rtunnel binary
-# rtunnel_bin = "/inspire/shared/bin/rtunnel"
-# Optional: custom rtunnel download URL
-# rtunnel_download_url = "https://..."
-# Optional: use dropbear packages from shared storage
+# For GPU notebooks (H100/H200) without internet:
+# rtunnel_bin = "/inspire/shared/tools/rtunnel"
+# Option A: APT mirror (simpler — no pre-placed debs needed)
+# apt_mirror_url = "http://nexus.example.com/repository/ubuntu/"
+# Option B: Pre-placed dropbear debs
 # dropbear_deb_dir = "/inspire/shared/debs/dropbear"
-# Required when dropbear_deb_dir is set
-# setup_script = "/inspire/shared/scripts/setup_ssh_dropbear.sh"
 ```
 
 View current config:
