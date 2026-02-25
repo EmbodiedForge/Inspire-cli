@@ -6,52 +6,48 @@ allowed-tools: Bash(inspire *), Bash(uv run inspire *), Bash(ssh *)
 
 # Inspire CLI
 
-CLI for the Inspire HPC training platform. Use `inspire --help` and `inspire <command> --help` for full command/flag reference.
+CLI for the Inspire HPC training platform. Run `inspire --help` and `inspire <command> --help` for flags and syntax — don't memorize them, they change often.
 
-## Common Workflows
+## What it can do
 
-### Submit a training job
+- **Setup**: `init --discover` (auto-detect projects/workspaces/compute groups via browser login)
+- **Jobs**: `job create`, `job status/logs/list`, `job stop/wait`, `run` (quick submit with auto-sync)
+- **Notebooks**: `notebook create/list/start/stop`, `notebook ssh` (tunnel + shell), `notebook top` (GPU monitoring)
+- **Code sync**: `sync` (git push to shared filesystem), `bridge exec` (run remote commands)
+- **File transfer**: `bridge scp` (upload/download via tunnel)
+- **Tunnels**: `tunnel add/list/status`, `notebook ssh --save-as` (create reusable bridge profiles)
+- **Info**: `resources list/nodes`, `project list`, `image list`, `config show/check`
 
-```bash
-git add -A && git commit -m "ready to train"
-inspire sync
-inspire bridge exec "git log -1"              # Verify sync landed
-inspire job create --name "exp-1" \
-  --resource "8xH200" \
-  --command "cd $TARGET_DIR && . .venv/bin/activate && bash scripts/train.sh"
-inspire job logs <job-id> --tail 50 --refresh
-```
+## Platform knowledge (things you can't get from --help)
 
-### Quick run with auto-sync
+### Network topology
+- **CPU / 4090 notebooks** → have internet. SSH auto-installs everything. Zero setup.
+- **H100 / H200 notebooks** → NO internet. SSH needs pre-placed `rtunnel_bin` on shared filesystem, plus either `apt_mirror_url` or pre-placed `dropbear_deb_dir` for the SSH server.
+- **Jobs** → NO internet. Same GPU clusters. All dependencies must be pre-installed in the image or on the shared filesystem.
 
-```bash
-git commit -am "experiment" && inspire run "bash train.sh" --sync --watch
-```
+### Shared filesystem
+- `/inspire/hdd/global_user/<username>` — visible from ALL notebooks across ALL projects. Put SSH tools here.
+- `/inspire/hdd/project/<project-slug>/<username>` — project-specific workdir. This is `target_dir` for code sync.
+- These paths come from the API catalog (`init --discover`) but **must be verified via CPU notebook SSH** — the catalog can be wrong.
 
-### Set up SSH access to a notebook
+### Project auto-selection
+- When no `--project` flag is given, auto-selection picks from available projects.
+- Sort order: `project_order` (user preference) > `gpu_unlimited` (tiebreaker) > `priority` > name.
+- `project_order` is set in `.inspire/config.toml` under `[defaults]` — list of project **names**.
+- "Unlimited GPU hours" does NOT mean unlimited concurrent GPUs. A project can have no hour cap but still be full.
 
-```bash
-inspire notebook list --workspace gpu
-inspire notebook ssh <notebook-id> --save-as bridge
-inspire tunnel status
-ssh bridge
-```
+### SSH tunnel architecture
+- `notebook ssh` opens a Jupyter terminal via WebSocket, runs a setup script (installs SSH server + rtunnel), then connects via the platform's HTTP proxy.
+- First SSH to a fresh notebook takes 10-60s (setup). Subsequent connections reuse the running processes.
+- `--save-as <name>` creates a reusable bridge profile. After that, `ssh <name>`, `bridge exec`, `sync`, `bridge scp` all work through it.
+- Tunnels break when notebooks restart. `bridge exec/ssh` auto-reconnect for notebook-backed profiles.
 
-### Install packages (compute nodes have no internet)
+## Rules the model should always follow
 
-```bash
-ssh bridge-cpu "cd /path/to/project && pip install package-name"
-```
-
-## Platform Rules
-
-1. **Commit before sync** — `inspire sync` pushes the current branch; uncommitted changes are not synced.
-2. **Jobs start in an unknown directory** — Always prefix commands with `cd /path/to/project && ...`.
+1. **Commit before sync** — `inspire sync` pushes the current git branch; uncommitted changes are lost.
+2. **Jobs start in an unknown directory** — Always `cd $TARGET_DIR && ...` in job commands.
 3. **Use `.` not `source`** for venv activation in job commands (POSIX compatibility).
-4. **Compute nodes have NO internet** — Use a CPU workspace/bridge for `pip install`, `git clone`, downloads.
-5. **Priority range is 1-10** — Values outside this range cause errors.
-6. **SSH tunnel required** — `bridge exec`, `sync`, etc. need an active tunnel. Set one up with `notebook ssh --save-as` or `tunnel add`.
-7. **No `tunnel start` command** — Create/refresh profiles with `notebook ssh --save-as` or `tunnel add/update`, verify via `tunnel status`.
-8. **`--save-as` profiles are notebook-bound** — Reusing an alias on another notebook refreshes that alias before SSH.
-9. **Python output buffering** — Use `print(..., flush=True)` or `PYTHONUNBUFFERED=1` for live log output.
-10. **`git pull` fails on GPU nodes** — No internet. Use `inspire sync` via a bridge with internet access.
+4. **GPU nodes have NO internet** — pip install, git clone, curl all fail. Use a CPU notebook/bridge.
+5. **Priority range is 1-10** — Outside this range causes API errors.
+6. **Python output buffering** — `PYTHONUNBUFFERED=1` or `print(..., flush=True)` for live log tailing.
+7. **Always run `--help`** before guessing flags — the CLI iterates fast and flags change.
