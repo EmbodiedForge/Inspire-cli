@@ -153,6 +153,7 @@ def _default_config_values() -> dict[str, Any]:
             "https://github.com/Sarfflow/rtunnel/releases/download/nightly/"
             "rtunnel-linux-amd64.tar.gz"
         ),
+        "apt_mirror_url": None,
         "tunnel_retries": 3,
         "tunnel_retry_pause": 2.0,
         "shm_size": None,

@@ -1565,6 +1565,13 @@ def test_notebook_start_name_conflict_prompts_selection(
 def test_run_notebook_ssh_validates_dropbear_setup_script(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """setup_script is now optional — built-in bootstrap handles dropbear.
+
+    This test verifies that *no* ConfigError is raised when dropbear_deb_dir
+    is set without a setup_script.  The code should proceed to the rtunnel
+    setup phase (mocked here to raise so we can verify it was reached).
+    """
+
     class FakeSession:
         workspace_id = "ws-test"
         storage_state = {}
@@ -1666,9 +1673,10 @@ def test_run_notebook_ssh_validates_dropbear_setup_script(
             setup_timeout=60,
         )
 
-    assert exc.value.code == EXIT_CONFIG_ERROR
-    assert captured["type"] == "ConfigError"
-    assert "setup_script" in captured["message"]
+    # No longer a ConfigError — the code now proceeds to rtunnel setup
+    # which is mocked to raise AssertionError ("should not be called" was
+    # correct when the validation blocked it; now we expect it to be called).
+    assert exc.value.code != EXIT_CONFIG_ERROR
 
 
 def test_run_notebook_ssh_fails_fast_on_account_mismatch(

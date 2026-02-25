@@ -59,6 +59,58 @@ def test_dropbear_without_setup_script_uses_dpkg() -> None:
     assert "SETUP_SCRIPT=" not in joined
 
 
+def test_dropbear_apt_mirror_fallback() -> None:
+    """When apt_mirror_url is set, the bootstrap should fall back to
+    apt-get install dropbear-bin if dpkg fails."""
+    runtime = SshRuntimeConfig(
+        dropbear_deb_dir="/project/dropbear",
+        apt_mirror_url="http://nexus.example/repository/ubuntu/",
+    )
+
+    commands = build_rtunnel_setup_commands(
+        port=31337,
+        ssh_port=22222,
+        ssh_public_key=None,
+        ssh_runtime=runtime,
+    )
+    joined = "\n".join(commands)
+
+    assert "APT_MIRROR_URL=" in joined
+    assert "apt-get install -y -qq dropbear-bin" in joined
+    assert "inspire-mirror.list" in joined
+    # dpkg path should still be tried first
+    assert "dpkg -i" in joined
+    # Codename detection via /etc/os-release (primary) then lsb_release (fallback)
+    assert "/etc/os-release" in joined
+    assert "VERSION_CODENAME" in joined
+    assert "lsb_release" in joined
+    # Existing sources moved aside to avoid timeout on unreachable mirrors
+    assert "sources.list.bak" in joined
+
+
+def test_apt_mirror_only_without_dropbear_deb_dir() -> None:
+    """When only apt_mirror_url is set (no dropbear_deb_dir), the dropbear
+    path should still be entered and apt install should run."""
+    runtime = SshRuntimeConfig(
+        apt_mirror_url="http://nexus.example/repository/ubuntu/",
+    )
+
+    commands = build_rtunnel_setup_commands(
+        port=31337,
+        ssh_port=22222,
+        ssh_public_key=None,
+        ssh_runtime=runtime,
+    )
+    joined = "\n".join(commands)
+
+    assert "APT_MIRROR_URL=" in joined
+    assert "apt-get install -y -qq dropbear-bin" in joined
+    # Should use dropbear path (not openssh)
+    assert "dropbear" in joined
+    # Should NOT have DROPBEAR_DEB_DIR set
+    assert "DROPBEAR_DEB_DIR=" not in joined
+
+
 def test_dropbear_command_contains_setup_script_and_args() -> None:
     runtime = SshRuntimeConfig(
         rtunnel_bin="/project/rtunnel",

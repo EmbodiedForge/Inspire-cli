@@ -16,8 +16,8 @@ Help users configure inspire-cli by collecting info that can't be auto-detected.
 | Workspace alias assignment | Smart defaults in `--discover` | Confirmation or override |
 | target_dir | Catalog workdir as default | Confirmation or custom path |
 | Project preference order | Nothing — must ask user | Ranked list of project names |
-| SSH tools on internet machines | `notebook ssh` auto-installs | Nothing |
-| SSH tools on GPU (no internet) | `notebook ssh` uses pre-placed binaries | Install dir on shared filesystem |
+| SSH tools on internet machines | `notebook ssh` auto-installs | Nothing — guaranteed to work |
+| SSH tools on GPU (no internet) | `notebook ssh` uses apt mirror or pre-placed binaries | APT mirror URL, or install dir on shared filesystem |
 | Bridge profile | `notebook ssh <id> --save-as bridge` | Which notebook to use |
 
 ## Phase 1: Credentials
@@ -41,7 +41,7 @@ inspire init --discover -u <username> --force --target-dir <path>
 Needs playwright: if missing, run `uv run playwright install chromium` first.
 
 **What to ask the user:**
-- **target_dir** — "Where is your code on the shared filesystem?" The `--discover` suggests the catalog workdir but user may want a subdirectory. This is the most important config value — sync, bridge exec, and job logs all depend on it.
+- **target_dir** — "Where is your code on the shared filesystem?" The `--discover` suggests the catalog workdir but this is from the API and may not be correct. **Always verify via CPU notebook SSH in Phase 2c before finalizing.** This is the most important config value — sync, bridge exec, and job logs all depend on it.
 
 **After discovery, verify:**
 ```
@@ -64,30 +64,103 @@ After `--discover`, the project catalog is written. Now ask the user to rank the
 project_order = ["preferred-project", "second-choice", "fallback"]
 ```
 
-The values are project **names** (not IDs). The auto-selection sort uses this as the primary ranking after `gpu_unlimited` status. Projects not listed sort after all listed ones.
+The values are project **names** (not IDs). The auto-selection sort uses `project_order` as the primary ranking, with `gpu_unlimited` as a tiebreaker. Projects not listed sort after all listed ones.
+
+## Phase 2c: Verify shared paths via CPU notebook
+
+**CPU notebook SSH is guaranteed to work** — CPU/internet notebooks have internet access, so `notebook ssh` auto-installs openssh + rtunnel with zero pre-setup. This makes a CPU notebook the best tool for verifying filesystem paths.
+
+**Always do this** — the `--discover` catalog gets paths from the API, but they may be stale, wrong, or the directory may not exist yet. Never blindly trust catalog paths for `target_dir`. A CPU notebook is the ground truth.
+
+**How:**
+1. Create a CPU notebook in any project:
+   ```bash
+   inspire notebook create --name path-check --resource 4xCPU --image pytorch25 --wait
+   ```
+2. SSH in and explore the shared filesystem:
+   ```bash
+   inspire notebook ssh <cpu-id> --command "
+     echo '=== Global user dir ==='
+     ls /inspire/hdd/global_user/
+     echo '=== Project dirs ==='
+     ls /inspire/hdd/project/
+     echo '=== My home ==='
+     echo \$HOME
+     echo '=== Workdir ==='
+     pwd
+   "
+   ```
+3. Use the output to confirm or correct `target_dir` and `shared_path_group` in the config.
+4. **Keep this notebook running** — reuse it for Phase 3 (rtunnel bootstrap) if GPU SSH is needed.
+
+**Key paths to discover:**
+- `shared_path_group`: Usually `/inspire/hdd/global_user/<username>` — visible from ALL notebooks across ALL projects. This is where SSH tools (rtunnel) should go.
+- `target_dir`: Usually `/inspire/hdd/project/<project-slug>/<username>` — project-specific workdir for code sync.
 
 ## Phase 3: SSH tools bootstrap (only for GPU clusters without internet)
 
 **Skip this phase if** the user only uses CPU/4090 notebooks (they have internet, `notebook ssh` auto-installs everything).
 
-**When needed:** H100/H200 clusters have no internet. `notebook ssh` still auto-installs, but it needs pre-placed binaries (rtunnel, dropbear) on the shared filesystem.
+**When needed:** H100/H200 clusters have no internet. `notebook ssh` still works, but needs either an APT mirror URL or pre-placed binaries for dropbear. It always needs a pre-placed rtunnel binary.
 
 **Key concept:** After `--discover`, the global config catalog has `shared_path_group` per project (e.g. `/inspire/hdd/global_user/<username>`). This path is visible from ALL notebooks across all projects. SSH tools must go here, not in a project-specific workdir.
 
 **What to ask the user:**
 1. **"Do you need SSH access to GPU notebooks (H100/H200)?"** — if no, skip this phase entirely
-2. **"Where should SSH tools be installed?"** — suggest `<shared_path_group>/tools/` from the catalog. User may already have tools installed (check if paths exist). Let them provide a custom path.
-3. **"Which project to use for the CPU notebook?"** — show project list from catalog. Any project works since tools go on the shared path. Prefer a project with low queue priority.
+2. **"Does your platform have an internal APT mirror reachable from GPU notebooks?"** — many platforms provide a Nexus/Artifactory mirror on the internal network (e.g. `http://nexus.example.com/repository/ubuntu/`). If yes, this greatly simplifies setup — dropbear can be installed via apt automatically, no pre-placed debs needed.
+3. **"Where should SSH tools be installed?"** — suggest `<shared_path_group>/tools/` using the path verified in Phase 2c.
 
-**The bootstrap itself:**
+**Reuse the CPU notebook from Phase 2c** if still running. Otherwise create one — CPU SSH is guaranteed to work.
+
+### Path A: APT mirror available (simpler)
+
+If the platform has an internal APT mirror reachable from GPU notebooks:
+
+**Mirror requirements:**
+- Must be a full Ubuntu mirror with at least `main` and `universe` components
+- Must have packages for the container's Ubuntu codename (auto-detected from `/etc/os-release`, e.g. `jammy` for 22.04, `noble` for 24.04)
+- `dropbear-bin` depends on `libtomcrypt1`, `libtommath1`, `zlib1g` — these are pulled automatically by `apt-get install` from the mirror
+- The bootstrap temporarily disables existing apt sources (archive.ubuntu.com) that are unreachable from no-internet GPUs, installs dropbear, then restores them
+
+1. Set `apt_mirror_url` in project config:
+   ```toml
+   [ssh]
+   apt_mirror_url = "http://nexus.example.com/repository/ubuntu/"
+   ```
+2. Still need rtunnel pre-placed — SSH into the CPU notebook and download rtunnel to the shared path:
+   ```bash
+   inspire notebook ssh <cpu-id> --command "
+     TOOLS=<shared_path_group>/tools
+     mkdir -p \$TOOLS
+     curl -fsSL https://github.com/Sarfflow/rtunnel/releases/download/nightly/rtunnel-linux-amd64.tar.gz \
+       -o /tmp/rtunnel.tgz
+     tar -xzf /tmp/rtunnel.tgz -C \$TOOLS
+     chmod +x \$TOOLS/rtunnel
+   "
+   ```
+3. Set rtunnel path in project config:
+   ```toml
+   [ssh]
+   rtunnel_bin = "<shared_path_group>/tools/rtunnel"
+   apt_mirror_url = "http://nexus.example.com/repository/ubuntu/"
+   ```
+4. Stop the CPU notebook (unless needed for bridge).
+
+**Dropbear is handled automatically** — `notebook ssh` detects the apt mirror, adds it as a source, and runs `apt-get install dropbear-bin` on the GPU notebook. No `dropbear_deb_dir` needed.
+
+### Path B: No APT mirror (full bootstrap)
+
+If no mirror is available, pre-place both rtunnel and dropbear on the shared filesystem:
+
 - Start a CPU notebook in the chosen project
 - SSH into it (`inspire notebook ssh <id>`) — this auto-installs openssh + rtunnel on the CPU side
 - From inside: download rtunnel binary + dropbear deb packages to the chosen install dir
-- Set config: `INSPIRE_RTUNNEL_BIN`, `INSPIRE_DROPBEAR_DEB_DIR` (env vars or `[ssh]` in project config)
-- `setup_script` is optional — the built-in bootstrap in `notebook ssh` already handles dpkg install + dropbear startup inline
+- Set config: `rtunnel_bin`, `dropbear_deb_dir` (in `[ssh]` section of project config)
 - Stop the CPU notebook
 
-**If tools already exist** (user says "I already have them" or paths exist on disk), just ask for the paths and set the config.
+### If tools already exist
+
+If the user says "I already have them" or paths exist on disk, just ask for the paths and set the config.
 
 ## Phase 4: Bridge setup
 
@@ -106,5 +179,5 @@ If something isn't working, check in this order:
 2. `inspire config check` — validates auth, catches stale passwords
 3. Missing `target_dir` — most common cause of sync/bridge failures
 4. Wrong workspace — bridge/sync need CPU workspace (has internet), jobs need GPU
-5. SSH paths not set — `INSPIRE_RTUNNEL_BIN` etc. needed for GPU notebook SSH
+5. SSH paths not set — `rtunnel_bin` needed for GPU notebook SSH; also need either `apt_mirror_url` or `dropbear_deb_dir`
 6. Stale session — re-run `inspire init --discover` to refresh

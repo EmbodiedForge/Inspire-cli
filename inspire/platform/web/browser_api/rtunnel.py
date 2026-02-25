@@ -92,6 +92,9 @@ def build_rtunnel_setup_commands(
         cmd_lines.append(f"SSHD_DEB_DIR={shlex.quote(sshd_deb_dir)}")
     if dropbear_deb_dir:
         cmd_lines.append(f"DROPBEAR_DEB_DIR={shlex.quote(dropbear_deb_dir)}")
+    apt_mirror_url = ssh_runtime.apt_mirror_url
+    if apt_mirror_url:
+        cmd_lines.append(f"APT_MIRROR_URL={shlex.quote(apt_mirror_url)}")
 
     openssh_bootstrap_cmd = (
         'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x /tmp/rtunnel ] '
@@ -118,29 +121,55 @@ def build_rtunnel_setup_commands(
         ">/dev/null 2>&1 & fi"
     )
     # Dropbear may die between sessions (container restart, OOM, etc.).
-    # Ensure it is running when dropbear_deb_dir is configured.
-    # Supports two layouts:
+    # Ensure it is running when dropbear_deb_dir or apt_mirror_url is configured.
+    # Supports three installation paths (tried in order):
     #  1. Extracted deb tree: $DROPBEAR_DEB_DIR/usr/sbin/dropbear exists
     #  2. Raw .deb packages: $DROPBEAR_DEB_DIR/*.deb  (installed via dpkg -i)
+    #  3. APT mirror: $APT_MIRROR_URL (for no-internet GPU notebooks with missing deps)
     start_dropbear_cmd = (
-        'if [ -n "${DROPBEAR_DEB_DIR:-}" ]; then '
+        'if [ -n "${DROPBEAR_DEB_DIR:-}" ] || [ -n "${APT_MIRROR_URL:-}" ]; then '
+        'DB_BIN=""; '
+        # Path 1: Extracted deb tree with runtime verification
+        'if [ -n "${DROPBEAR_DEB_DIR:-}" ] && [ -x "$DROPBEAR_DEB_DIR/usr/sbin/dropbear" ]; then '
         'DB_BIN="$DROPBEAR_DEB_DIR/usr/sbin/dropbear"; '
-        # If extracted tree exists, set LD_LIBRARY_PATH for it
-        'if [ -x "$DB_BIN" ]; then '
         "export LD_LIBRARY_PATH="
         '"$DROPBEAR_DEB_DIR/lib/x86_64-linux-gnu:'
         "$DROPBEAR_DEB_DIR/usr/lib/x86_64-linux-gnu:"
         '${LD_LIBRARY_PATH:-}"; '
-        # If not extracted but .deb files exist, install via dpkg
-        'elif ls "$DROPBEAR_DEB_DIR"/*.deb >/dev/null 2>&1; then '
+        '"$DB_BIN" -V >/dev/null 2>&1 || DB_BIN=""; fi; '
+        # Path 2: Raw .deb packages via dpkg
+        'if [ -z "$DB_BIN" ] && [ -n "${DROPBEAR_DEB_DIR:-}" ] && '
+        'ls "$DROPBEAR_DEB_DIR"/*.deb >/dev/null 2>&1; then '
         'dpkg -i "$DROPBEAR_DEB_DIR"/*.deb >/dev/null 2>&1 || true; '
-        "DB_BIN=/usr/sbin/dropbear; fi; "
+        "[ -x /usr/sbin/dropbear ] && DB_BIN=/usr/sbin/dropbear; fi; "
         # Also check system-installed dropbear as fallback
-        'if [ ! -x "$DB_BIN" ] && [ -x /usr/sbin/dropbear ]; then '
-        "DB_BIN=/usr/sbin/dropbear; fi; "
-        'if [ -x "$DB_BIN" ] && ! ps -ef | grep -q "[d]ropbear.*-p.*$SSH_PORT"; then '
-        'DB_KEY="$DROPBEAR_DEB_DIR/usr/bin/dropbearkey"; '
-        '[ -x "$DB_KEY" ] || DB_KEY=$(which dropbearkey 2>/dev/null || true); '
+        'if [ -z "$DB_BIN" ] || [ ! -x "$DB_BIN" ]; then '
+        "[ -x /usr/sbin/dropbear ] && DB_BIN=/usr/sbin/dropbear; fi; "
+        # Path 3: APT mirror fallback — install dropbear + deps (libtomcrypt1 etc.)
+        # Uses /etc/os-release for codename (more reliable than lsb_release which
+        # may not exist in containers).  Temporarily disables default sources to
+        # avoid slow timeouts on unreachable mirrors (archive.ubuntu.com) in
+        # no-internet GPUs.
+        'if { [ -z "$DB_BIN" ] || [ ! -x "$DB_BIN" ]; } && [ -n "${APT_MIRROR_URL:-}" ]; then '
+        'CODENAME=$(. /etc/os-release 2>/dev/null && echo "${VERSION_CODENAME:-}"); '
+        '[ -z "$CODENAME" ] && CODENAME=$(lsb_release -cs 2>/dev/null || true); '
+        '[ -z "$CODENAME" ] && CODENAME=jammy; '
+        "for _f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do "
+        '[ -f "$_f" ] && mv "$_f" "$_f.bak" 2>/dev/null; done; '
+        'echo "deb $APT_MIRROR_URL $CODENAME main restricted universe multiverse" '
+        "> /etc/apt/sources.list.d/inspire-mirror.list; "
+        "export DEBIAN_FRONTEND=noninteractive; "
+        "apt-get update -qq >/dev/null 2>&1 && "
+        "apt-get install -y -qq dropbear-bin >/dev/null 2>&1 || true; "
+        "for _f in /etc/apt/sources.list.bak /etc/apt/sources.list.d/*.list.bak; do "
+        '[ -f "$_f" ] && mv "$_f" "${_f%.bak}" 2>/dev/null; done; '
+        "[ -x /usr/sbin/dropbear ] && DB_BIN=/usr/sbin/dropbear; fi; "
+        # Start dropbear if found and not already running
+        'if [ -n "$DB_BIN" ] && [ -x "$DB_BIN" ] && ! ps -ef | grep -q "[d]ropbear.*-p.*$SSH_PORT"; then '
+        'DB_KEY=""; '
+        '[ -n "${DROPBEAR_DEB_DIR:-}" ] && [ -x "$DROPBEAR_DEB_DIR/usr/bin/dropbearkey" ] '
+        '&& DB_KEY="$DROPBEAR_DEB_DIR/usr/bin/dropbearkey"; '
+        '[ -z "$DB_KEY" ] && DB_KEY=$(which dropbearkey 2>/dev/null || true); '
         'if [ ! -f /tmp/dropbear_ed25519_host_key ] && [ -n "$DB_KEY" ] && [ -x "$DB_KEY" ]; then '
         '"$DB_KEY" -t ed25519 -f /tmp/dropbear_ed25519_host_key >/dev/null 2>&1; fi; '
         '"$DB_BIN" -E -s -g -p "127.0.0.1:$SSH_PORT" '
@@ -154,7 +183,7 @@ def build_rtunnel_setup_commands(
         ">/tmp/rtunnel-server.log 2>&1 & fi"
     )
 
-    if dropbear_deb_dir:
+    if dropbear_deb_dir or apt_mirror_url:
         setup_script = ssh_runtime.setup_script
         if setup_script:
             cmd_lines.append(f"SETUP_SCRIPT={shlex.quote(setup_script)}")
@@ -801,7 +830,7 @@ def _build_terminal_websocket_url(lab_url: str, term_name: str) -> str:
 
 
 def _send_terminal_command_via_websocket(
-    page: Any,
+    page_or_frame: Any,
     *,
     ws_url: str,
     command: str,
@@ -809,6 +838,10 @@ def _send_terminal_command_via_websocket(
     completion_marker: str | None = None,
 ) -> bool:
     """Send a command to a Jupyter terminal via WebSocket.
+
+    *page_or_frame* should be the Playwright frame whose origin matches the
+    WebSocket URL (typically the JupyterLab iframe, not the outer page) so
+    that the browser creates a same-origin WebSocket connection.
 
     Waits for a shell prompt (``["stdout", ...]`` message) before sending
     stdin so that the command is not lost if bash hasn't initialized yet.
@@ -820,9 +853,8 @@ def _send_terminal_command_via_websocket(
     """
     stdin_payload = command.rstrip("\r\n") + "\r"
     try:
-        return bool(
-            page.evaluate(
-                """
+        result = page_or_frame.evaluate(
+            """
                 async ({ wsUrl, stdinData, timeoutMs, promptTimeoutMs, marker }) => {
                   return await new Promise((resolve) => {
                     let settled = false;
@@ -902,15 +934,15 @@ def _send_terminal_command_via_websocket(
                   });
                 }
                 """,
-                {
-                    "wsUrl": ws_url,
-                    "stdinData": stdin_payload,
-                    "timeoutMs": int(timeout_ms),
-                    "promptTimeoutMs": min(int(timeout_ms) - 500, 3000),
-                    "marker": completion_marker or "",
-                },
-            )
+            {
+                "wsUrl": ws_url,
+                "stdinData": stdin_payload,
+                "timeoutMs": int(timeout_ms),
+                "promptTimeoutMs": min(int(timeout_ms) - 500, 3000),
+                "marker": completion_marker or "",
+            },
         )
+        return bool(result)
     except (PlaywrightError, AttributeError, RuntimeError, TypeError, ValueError):
         return False
 
@@ -918,7 +950,6 @@ def _send_terminal_command_via_websocket(
 def _send_setup_command_via_terminal_ws(
     *,
     context: Any,
-    page: Any,
     lab_frame: Any,
     batch_cmd: str,
 ) -> bool:
@@ -928,14 +959,14 @@ def _send_setup_command_via_terminal_ws(
 
     ws_url = _build_terminal_websocket_url(lab_frame.url, term_name)
     return _send_terminal_command_via_websocket(
-        page,
+        lab_frame,
         ws_url=ws_url,
         command=batch_cmd,
         # The setup script ends with `echo INSPIRE_RTUNNEL_SETUP_DONE`.
         # Wait for this marker so the caller knows the script finished
-        # (dpkg -i can take 5-10s on GPU notebooks).  Use a generous
-        # timeout; the overall setup_timeout guards against hangs.
-        timeout_ms=30000,
+        # (dpkg -i can take 5-10s on GPU notebooks, apt install 60-90s).
+        # Use a generous timeout; the overall setup_timeout guards against hangs.
+        timeout_ms=120000,
         completion_marker="INSPIRE_RTUNNEL_SETUP_DONE",
     )
 
@@ -1531,7 +1562,6 @@ def _send_rtunnel_setup_script(
     try:
         setup_sent_via_ws = _send_setup_command_via_terminal_ws(
             context=context,
-            page=page,
             lab_frame=lab_frame,
             batch_cmd=batch_cmd,
         )
@@ -1574,10 +1604,17 @@ def _wait_for_setup_completion(
     setup_sent_via_ws: bool,
     timer: "_StepTimer",
 ) -> None:
+    # Both WS and Playwright paths need time for the setup commands to execute
+    # (dpkg install, dropbear keygen/start, rtunnel start).  The WS path sends
+    # commands instantly but they still take time to run on the remote.
     if not setup_sent_via_ws:
         # xterm.js renders to <canvas>, so Playwright text locators are blind
         # to output. A short delay lets setup finish before HTTP probe checks.
         page.wait_for_timeout(3000)
+    else:
+        import time
+
+        time.sleep(3)
     timer.mark("wait_marker")
 
 

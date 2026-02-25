@@ -59,6 +59,15 @@ SSH_OPTIONS: list[ConfigOption] = [
         category="SSH",
         scope="global",
     ),
+    ConfigOption(
+        env_var="INSPIRE_APT_MIRROR_URL",
+        toml_key="ssh.apt_mirror_url",
+        field_name="apt_mirror_url",
+        description="APT mirror URL for offline dropbear installation (e.g. http://nexus.example/repository/ubuntu/)",
+        default=None,
+        category="SSH",
+        scope="global",
+    ),
 ]
 
 TUNNEL_OPTIONS: list[ConfigOption] = [

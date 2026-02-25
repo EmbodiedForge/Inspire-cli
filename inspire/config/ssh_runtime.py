@@ -21,6 +21,7 @@ class SshRuntimeConfig:
     dropbear_deb_dir: Optional[str] = None
     setup_script: Optional[str] = None
     rtunnel_download_url: str = DEFAULT_RTUNNEL_DOWNLOAD_URL
+    apt_mirror_url: Optional[str] = None
 
 
 def resolve_ssh_runtime_config(
@@ -41,6 +42,7 @@ def resolve_ssh_runtime_config(
         "dropbear_deb_dir": config.dropbear_deb_dir,
         "setup_script": config.setup_script,
         "rtunnel_download_url": config.rtunnel_download_url or DEFAULT_RTUNNEL_DOWNLOAD_URL,
+        "apt_mirror_url": config.apt_mirror_url,
     }
 
     if cli_overrides:
@@ -57,6 +59,7 @@ def resolve_ssh_runtime_config(
         dropbear_deb_dir=values["dropbear_deb_dir"],
         setup_script=values["setup_script"],
         rtunnel_download_url=download_url,
+        apt_mirror_url=values["apt_mirror_url"],
     )
 
 

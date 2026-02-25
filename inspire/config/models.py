@@ -125,6 +125,7 @@ class Config:
     rtunnel_download_url: str = (
         "https://github.com/Sarfflow/rtunnel/releases/download/nightly/rtunnel-linux-amd64.tar.gz"
     )
+    apt_mirror_url: Optional[str] = None
 
     # Tunnel retry settings
     tunnel_retries: int = 3

@@ -63,7 +63,7 @@ def test_has_quota_true_for_cpu_only() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Auto-selection (no --project): gpu_unlimited first, then priority
+# Auto-selection (no --project): project_order first, then gpu_unlimited, then priority
 # ---------------------------------------------------------------------------
 
 
@@ -316,6 +316,27 @@ def test_project_order_unlisted_projects_fall_through() -> None:
 
     selected, _ = select_project([unlisted_high, listed], project_order=["Listed"])
     assert selected.project_id == "p-listed"
+
+
+def test_project_order_overrides_gpu_unlimited() -> None:
+    """User-defined project_order should take priority over gpu_unlimited.
+
+    Real scenario: CI has unlimited GPU hours but limited concurrent GPUs.
+    User prefers CQ (capped) over CI (unlimited) — project_order must win.
+    """
+    capped = _project("p-capped", "CQ", gpu_limit=True, priority_name="6")
+    unlimited = _project("p-unlimited", "CI", gpu_limit=False, priority_name="6")
+
+    # Without project_order: unlimited wins (tiebreaker)
+    selected, _ = select_project([capped, unlimited])
+    assert selected.project_id == "p-unlimited"
+
+    # With project_order: capped wins because user listed it first
+    selected, _ = select_project(
+        [capped, unlimited],
+        project_order=["CQ", "CI"],
+    )
+    assert selected.project_id == "p-capped"
 
 
 def test_project_order_empty_list_uses_default_sort() -> None:

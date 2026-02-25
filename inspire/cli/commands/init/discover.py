@@ -1373,6 +1373,46 @@ def _discover_compute_groups(
     return compute_groups
 
 
+def _correct_workspace_aliases(
+    merged_workspaces: dict[str, str],
+    compute_groups: list[dict[str, Any]],
+) -> None:
+    """Fix workspace aliases using actual compute-group GPU types.
+
+    The initial guess (``_guess_workspace_alias``) relies on workspace *names*
+    only.  After compute groups are discovered we know which workspaces actually
+    contain GPU resources and can correct mis-classifications — e.g. a workspace
+    named "高性能计算" that contains only CPU groups should not be the "gpu"
+    alias.
+    """
+
+    # Build workspace → set-of-gpu-types mapping.
+    ws_gpu_types: dict[str, set[str]] = {}
+    for cg in compute_groups:
+        gt = str(cg.get("gpu_type") or "").strip()
+        for ws_id in cg.get("workspace_ids") or []:
+            ws_gpu_types.setdefault(ws_id, set()).add(gt)
+
+    def _has_real_gpu(ws_id: str) -> bool:
+        return any(t and t != "CPU" for t in ws_gpu_types.get(ws_id, set()))
+
+    current_gpu_ws = merged_workspaces.get("gpu", "")
+    if current_gpu_ws and _has_real_gpu(current_gpu_ws):
+        return  # current assignment is fine
+
+    # Current gpu workspace has no real GPUs — find a better one.
+    best_ws: str | None = None
+    best_count = 0
+    for ws_id, types in ws_gpu_types.items():
+        real = sum(1 for t in types if t and t != "CPU")
+        if real > best_count:
+            best_ws = ws_id
+            best_count = real
+
+    if best_ws:
+        merged_workspaces["gpu"] = best_ws
+
+
 def _persist_compute_groups(
     *,
     global_data: dict[str, Any],
@@ -1805,6 +1845,7 @@ def _persist_discovery_catalog(request: _DiscoveryPersistRequest) -> None:
             if ws_id not in cg["workspace_ids"]:
                 cg["workspace_ids"].append(ws_id)
             compute_groups.append(cg)
+    _correct_workspace_aliases(merged_workspaces, compute_groups)
     _persist_compute_groups(
         global_data=global_data,
         account_section=account_section,

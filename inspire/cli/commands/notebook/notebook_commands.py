@@ -1272,11 +1272,7 @@ def _run_interactive_notebook_ssh_with_reconnect(
         )
 
     def _runtime_validator(runtime: object) -> None:
-        if runtime.dropbear_deb_dir and not runtime.setup_script:
-            raise ConfigError(
-                "Missing SSH setup script: ssh.setup_script (or INSPIRE_SETUP_SCRIPT) is required "
-                "when ssh.dropbear_deb_dir is configured."
-            )
+        pass  # setup_script is optional; built-in bootstrap handles dropbear
 
     while True:
         tunnel_config = load_tunnel_config(account=tunnel_account)
@@ -1590,20 +1586,6 @@ def run_notebook_ssh(
         )
     except ConfigError as e:
         _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
-        return
-
-    if ssh_runtime.dropbear_deb_dir and not ssh_runtime.setup_script:
-        _handle_error(
-            ctx,
-            "ConfigError",
-            "Missing SSH setup script: ssh.setup_script (or INSPIRE_SETUP_SCRIPT) is required "
-            "when ssh.dropbear_deb_dir is configured.",
-            EXIT_CONFIG_ERROR,
-            hint=(
-                "Set [ssh].setup_script in config.toml or export INSPIRE_SETUP_SCRIPT to the "
-                "setup script path on the cluster."
-            ),
-        )
         return
 
     try:

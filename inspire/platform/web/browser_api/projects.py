@@ -142,8 +142,8 @@ def select_project(
 
     Sorting priority (when auto-selecting):
       - GPU workloads (``needs_gpu_quota=True``):
-        1. ``gpu_unlimited`` — prefer uncapped projects (``gpu_limit=False``)
-        2. ``project_order`` — user-defined preference ranking
+        1. ``project_order`` — user-defined preference ranking
+        2. ``gpu_unlimited`` — prefer uncapped projects (tiebreaker)
         3. ``priority_name`` — higher numeric priority first
         4. alphabetical name
       - CPU workloads (``needs_gpu_quota=False``):
@@ -179,8 +179,8 @@ def select_project(
 
     def _sort_key(project: ProjectInfo) -> tuple:
         return (
-            _gpu_cap_rank(project),
             _order_rank(project),
+            _gpu_cap_rank(project),
             -_priority_value(project),
             project.name.lower(),
         )
