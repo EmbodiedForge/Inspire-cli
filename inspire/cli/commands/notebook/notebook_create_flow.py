@@ -208,16 +208,59 @@ def _match_compute_group_by_gpu_type(
     return None, ""
 
 
-def _match_cpu_only_compute_group(compute_groups: list[dict]) -> tuple[dict | None, str]:
+def _match_cpu_only_compute_group(
+    compute_groups: list[dict],
+    *,
+    workspace_id: str = "",
+    session: Optional[WebSession] = None,
+) -> tuple[dict | None, str]:
+    """Select the best CPU-only compute group.
+
+    Two-pass selection:
+    1. Prefer groups with "CPU" in name that have actual resource specs.
+    2. Fall back to any non-GPU group with resource specs.
+    3. Last resort: first non-GPU group (even if empty).
+    """
+    candidates: list[dict] = []
     for group in compute_groups:
         if group.get("gpu_type_stats"):
             continue
+        candidates.append(group)
+
+    if not candidates:
+        return None, ""
+
+    # Probe resource prices to find groups that actually have CPU resources.
+    if workspace_id and session:
+        groups_with_resources: list[dict] = []
+        for group in candidates:
+            gid = group.get("logic_compute_group_id", "")
+            if not gid:
+                continue
+            try:
+                prices = browser_api_module.get_resource_prices(
+                    workspace_id=workspace_id,
+                    logic_compute_group_id=gid,
+                    session=session,
+                )
+                cpu_prices = [p for p in prices if p.get("gpu_count", 0) == 0]
+                if cpu_prices:
+                    groups_with_resources.append(group)
+            except Exception:
+                continue
+
+        if groups_with_resources:
+            # Prefer CPU-named groups among those with resources.
+            for group in groups_with_resources:
+                if "CPU" in (group.get("name") or "").upper():
+                    return group, ""
+            return groups_with_resources[0], ""
+
+    # No session or all probes failed — fall back to name-based heuristic.
+    for group in candidates:
         if "CPU" in (group.get("name") or "").upper():
             return group, ""
-    for group in compute_groups:
-        if not group.get("gpu_type_stats"):
-            return group, ""
-    return None, ""
+    return candidates[0], ""
 
 
 def _build_compute_group_hint(*, compute_groups: list[dict], gpu_count: int) -> str | None:
@@ -291,7 +334,23 @@ def resolve_notebook_compute_group(
             gpu_pattern=gpu_pattern,
         )
     if not selected_group and gpu_count == 0:
-        selected_group, selected_gpu_type = _match_cpu_only_compute_group(compute_groups)
+        # The API listing may not return all CPU compute groups.  Merge in
+        # config-based groups so resource probing can find groups the API missed.
+        api_ids = {g.get("logic_compute_group_id") for g in compute_groups}
+        try:
+            from inspire.platform.web.browser_api.notebooks import (
+                _config_compute_groups_fallback,
+            )
+
+            config_groups = _config_compute_groups_fallback(workspace_id=workspace_id)
+            for cg in config_groups:
+                if cg.get("logic_compute_group_id") not in api_ids:
+                    compute_groups.append(cg)
+        except Exception:
+            pass
+        selected_group, selected_gpu_type = _match_cpu_only_compute_group(
+            compute_groups, workspace_id=workspace_id, session=session
+        )
 
     if not selected_group:
         hint = _build_compute_group_hint(compute_groups=compute_groups, gpu_count=gpu_count)

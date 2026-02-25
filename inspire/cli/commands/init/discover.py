@@ -1286,6 +1286,40 @@ def _persist_api_base_url(
     account_section.pop("api", None)
 
 
+def _discover_docker_registry(
+    *,
+    global_data: dict[str, Any],
+    browser_api_module,  # noqa: ANN001
+    session,  # noqa: ANN001
+    workspace_id: str,
+) -> None:
+    """Auto-detect docker_registry from image URLs returned by the platform."""
+    api_section = global_data.get("api")
+    if isinstance(api_section, dict) and api_section.get("docker_registry"):
+        return  # already set
+
+    try:
+        images = browser_api_module.list_images(
+            workspace_id=workspace_id, source="SOURCE_OFFICIAL", session=session
+        )
+    except Exception:
+        return
+
+    for img in images:
+        url = str(getattr(img, "url", "") or "").strip()
+        if not url:
+            continue
+        # Image URLs look like "registry.host/path/image:tag" — extract hostname.
+        url = url.split("://", 1)[-1]  # strip scheme if present
+        host = url.split("/", 1)[0]
+        if host and "." in host:
+            if not isinstance(api_section, dict):
+                api_section = {}
+                global_data["api"] = api_section
+            api_section["docker_registry"] = host
+            return
+
+
 def _discover_compute_groups(
     *,
     browser_api_module,  # noqa: ANN001
@@ -1743,6 +1777,12 @@ def _persist_discovery_catalog(request: _DiscoveryPersistRequest) -> None:
         global_data=global_data,
         account_section=account_section,
         config=config,
+    )
+    _discover_docker_registry(
+        global_data=global_data,
+        browser_api_module=browser_api_module,
+        session=session,
+        workspace_id=workspace_id,
     )
     all_ws_ids: set[str] = {workspace_id}
     for ws_id in list(session.all_workspace_ids or []):

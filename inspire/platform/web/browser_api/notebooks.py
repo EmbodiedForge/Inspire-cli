@@ -320,6 +320,7 @@ def _config_compute_groups_fallback(workspace_id: str | None = None) -> list[dic
         if workspace_id and group_ws_ids and workspace_id not in group_ws_ids:
             continue
         gpu_type = g.get("gpu_type", "")
+        is_real_gpu = gpu_type and gpu_type.upper() != "CPU"
         result.append(
             {
                 "logic_compute_group_id": g.get("id", ""),
@@ -334,7 +335,7 @@ def _config_compute_groups_fallback(workspace_id: str | None = None) -> list[dic
                             },
                         }
                     ]
-                    if gpu_type
+                    if is_real_gpu
                     else []
                 ),
             }
