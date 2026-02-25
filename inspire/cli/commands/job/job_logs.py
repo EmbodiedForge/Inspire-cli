@@ -394,6 +394,10 @@ def _try_get_ssh_exit_code(
 ) -> int | None:
     try:
         if is_tunnel_available():
+            if follow and ctx.json_output:
+                # JSON follow mode must stay machine-readable.
+                # Skip SSH tail -f output and use workflow follow path instead.
+                return None
             if follow:
                 if not ctx.json_output:
                     click.echo("Using SSH tunnel (fast path)")
@@ -450,7 +454,7 @@ def _follow_logs(
     cache_path: Path,
     refresh: bool,
     interval: int,
-) -> None:
+) -> int:
     api = AuthManager.get_api(config)
     terminal_statuses = {
         "SUCCEEDED",
@@ -600,17 +604,18 @@ def _follow_logs(
                     click.echo(new_content, nl=False)
 
         if final_status in {"SUCCEEDED", "job_succeeded"}:
-            sys.exit(EXIT_SUCCESS)
+            return EXIT_SUCCESS
         if final_status in {"FAILED", "CANCELLED", "job_failed", "job_cancelled"}:
-            sys.exit(EXIT_GENERAL_ERROR)
-        sys.exit(EXIT_SUCCESS)
+            return EXIT_GENERAL_ERROR
+        return EXIT_SUCCESS
 
     except KeyboardInterrupt:
         if not ctx.json_output:
             click.echo("\nStopped following.")
-        sys.exit(EXIT_SUCCESS)
+        return EXIT_SUCCESS
     except GiteaAuthError as e:
         _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
+        return EXIT_CONFIG_ERROR
 
 
 def _bulk_update_logs(
@@ -787,7 +792,7 @@ def _run_job_logs_single_job(
             sys.exit(EXIT_SUCCESS)
 
         if follow:
-            _follow_logs(
+            follow_exit_code = _follow_logs(
                 ctx=ctx,
                 config=config,
                 cache=cache,
@@ -797,7 +802,7 @@ def _run_job_logs_single_job(
                 refresh=refresh,
                 interval=interval,
             )
-            return
+            sys.exit(follow_exit_code)
 
         current_offset = _get_current_log_offset(
             cache,

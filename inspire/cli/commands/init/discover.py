@@ -1587,6 +1587,9 @@ def _print_discover_completion(
     click.echo(f"  - {project_path}")
     click.echo()
     if prompted_credentials:
+        click.echo("Note: prompted account password was stored in global config for this account.")
+        click.echo(f"  Location: {global_path}")
+        click.echo()
         click.echo("Ready to use:")
         click.echo("  inspire config show     # Verify configuration")
         click.echo("  inspire resources list  # View available GPUs")

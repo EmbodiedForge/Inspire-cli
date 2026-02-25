@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from inspire.bridge.tunnel import BridgeProfile, TunnelConfig, save_tunnel_config
 from inspire.config.ssh_runtime import SshRuntimeConfig
@@ -14,6 +16,37 @@ from inspire.platform.web.session import WebSession
 DEFAULT_RTUNNEL_PORT = 31337
 SSH_DISCONNECT_RETURN_CODES = {255}
 _PROXY_PORT_RE = re.compile(r"/proxy/(\d+)/")
+
+
+class NotebookBridgeReconnectStatus(str, Enum):
+    """Outcome of a single notebook bridge rebuild attempt."""
+
+    REBUILT = "rebuilt"
+    RETRY_LATER = "retry_later"
+    EXHAUSTED = "exhausted"
+    NOT_REBUILDABLE = "not_rebuildable"
+
+
+@dataclass
+class NotebookBridgeReconnectState:
+    """Mutable reconnect state shared across repeated rebuild attempts."""
+
+    reconnect_limit: int
+    reconnect_pause: float
+    reconnect_attempt: int = 0
+    web_session: Optional[WebSession] = None
+    ssh_public_key: str = ""
+    ssh_runtime: Optional[SshRuntimeConfig] = None
+
+
+@dataclass
+class NotebookBridgeReconnectResult:
+    """Result of a reconnect/rebuild attempt."""
+
+    status: NotebookBridgeReconnectStatus
+    attempt: int
+    error: Exception | None = None
+    pause_seconds: float = 0.0
 
 
 def extract_rtunnel_port(proxy_url: str, *, default_port: int = DEFAULT_RTUNNEL_PORT) -> int:
@@ -113,8 +146,88 @@ def rebuild_notebook_bridge_profile(
     return updated
 
 
+def attempt_notebook_bridge_rebuild(
+    *,
+    state: NotebookBridgeReconnectState,
+    bridge_name: str,
+    bridge: BridgeProfile,
+    tunnel_config: TunnelConfig,
+    session_loader: Callable[[], WebSession],
+    runtime_loader: Callable[[], SshRuntimeConfig],
+    rebuild_fn: Callable[..., BridgeProfile] = rebuild_notebook_bridge_profile,
+    key_loader: Callable[[Optional[str]], str] = load_ssh_public_key_material,
+    runtime_validator: Callable[[SshRuntimeConfig], None] | None = None,
+    pubkey_path: Optional[str] = None,
+    timeout: int = 300,
+    headless: bool = True,
+) -> NotebookBridgeReconnectResult:
+    """Run one rebuild attempt and update reconnect state in place."""
+    notebook_id = str(getattr(bridge, "notebook_id", "") or "").strip()
+    if not notebook_id:
+        return NotebookBridgeReconnectResult(
+            status=NotebookBridgeReconnectStatus.NOT_REBUILDABLE,
+            attempt=state.reconnect_attempt,
+        )
+
+    if state.reconnect_attempt >= state.reconnect_limit:
+        return NotebookBridgeReconnectResult(
+            status=NotebookBridgeReconnectStatus.EXHAUSTED,
+            attempt=state.reconnect_attempt,
+        )
+
+    state.reconnect_attempt += 1
+    attempt = state.reconnect_attempt
+
+    try:
+        if state.web_session is None:
+            state.web_session = session_loader()
+        if not state.ssh_public_key:
+            state.ssh_public_key = key_loader(pubkey_path)
+        if state.ssh_runtime is None:
+            state.ssh_runtime = runtime_loader()
+        if runtime_validator is not None:
+            runtime_validator(state.ssh_runtime)
+
+        rebuild_fn(
+            bridge_name=bridge_name,
+            bridge=bridge,
+            tunnel_config=tunnel_config,
+            session=state.web_session,
+            ssh_public_key=state.ssh_public_key,
+            ssh_runtime=state.ssh_runtime,
+            timeout=timeout,
+            headless=headless,
+        )
+        return NotebookBridgeReconnectResult(
+            status=NotebookBridgeReconnectStatus.REBUILT,
+            attempt=attempt,
+        )
+    except Exception as error:  # noqa: BLE001
+        if state.reconnect_attempt >= state.reconnect_limit:
+            return NotebookBridgeReconnectResult(
+                status=NotebookBridgeReconnectStatus.EXHAUSTED,
+                attempt=attempt,
+                error=error,
+            )
+
+        return NotebookBridgeReconnectResult(
+            status=NotebookBridgeReconnectStatus.RETRY_LATER,
+            attempt=attempt,
+            error=error,
+            pause_seconds=retry_pause_seconds(
+                state.reconnect_attempt,
+                base_pause=state.reconnect_pause,
+                progressive=True,
+            ),
+        )
+
+
 __all__ = [
     "DEFAULT_RTUNNEL_PORT",
+    "NotebookBridgeReconnectResult",
+    "NotebookBridgeReconnectState",
+    "NotebookBridgeReconnectStatus",
+    "attempt_notebook_bridge_rebuild",
     "extract_rtunnel_port",
     "load_ssh_public_key_material",
     "rebuild_notebook_bridge_profile",

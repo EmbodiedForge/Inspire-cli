@@ -12,6 +12,7 @@ from inspire.cli.context import (
     EXIT_API_ERROR,
     EXIT_CONFIG_ERROR,
     EXIT_AUTH_ERROR,
+    EXIT_GENERAL_ERROR,
     EXIT_TIMEOUT,
     EXIT_LOG_NOT_FOUND,
     EXIT_JOB_NOT_FOUND,
@@ -34,6 +35,22 @@ TEST_JOB_ID = "job-12345678-1234-1234-1234-123456789abc"
 TEST_JOB_ID_2 = "job-abcdef12-3456-7890-abcd-ef1234567890"
 TEST_JOB_ID_3 = "job-11111111-2222-3333-4444-555555555555"
 TEST_DOCKER_REGISTRY = "registry.local"
+
+
+def _parse_json_stream(output: str) -> List[Dict[str, Any]]:
+    """Parse one or more JSON documents echoed sequentially."""
+    decoder = json.JSONDecoder()
+    payloads: List[Dict[str, Any]] = []
+    index = 0
+    length = len(output)
+    while index < length:
+        while index < length and output[index].isspace():
+            index += 1
+        if index >= length:
+            break
+        parsed, index = decoder.raw_decode(output, index)
+        payloads.append(parsed)
+    return payloads
 
 
 def make_test_config(tmp_path: Path, include_compute_groups: bool = False) -> config_module.Config:
@@ -490,6 +507,37 @@ def test_job_wait_succeeds_and_exits_zero(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert "SUCCEEDED" in result.output
 
 
+def test_job_wait_json_output_has_no_human_banner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    api = patch_config_and_auth(monkeypatch, tmp_path)
+
+    def get_job_detail(job_id: str) -> Dict[str, Any]:
+        return {
+            "data": {
+                "job_id": job_id,
+                "name": "wait-job",
+                "status": "SUCCEEDED",
+                "running_time_ms": "1000",
+            }
+        }
+
+    api.get_job_detail = get_job_detail  # type: ignore[assignment]
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_main,
+        ["--json", "job", "wait", TEST_JOB_ID, "--timeout", "60", "--interval", "1"],
+    )
+
+    assert result.exit_code == EXIT_SUCCESS
+    assert "Waiting for job" not in result.output
+    payloads = _parse_json_stream(result.output)
+    assert payloads
+    for payload in payloads:
+        assert payload["success"] is True
+
+
 def test_job_wait_times_out(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     patch_config_and_auth(monkeypatch, tmp_path)
 
@@ -551,6 +599,35 @@ def test_job_list_uses_local_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     assert result.exit_code == 0
     assert "cached-job" in result.output
     assert TEST_JOB_ID in result.output
+
+
+def test_job_list_watch_json_does_not_clear_screen(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    patch_config_and_auth(monkeypatch, tmp_path)
+
+    from importlib import import_module
+
+    job_commands_module = import_module("inspire.cli.commands.job.job_commands")
+
+    def fail_clear(cmd: str) -> int:  # noqa: ARG001
+        raise AssertionError("clear should not be called in JSON mode")
+
+    monkeypatch.setattr(job_commands_module.os, "system", fail_clear)
+    monkeypatch.setattr(
+        job_commands_module.job_deps.time,
+        "sleep",
+        lambda interval: (_ for _ in ()).throw(KeyboardInterrupt()),  # noqa: ARG005
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["--json", "job", "list", "--watch", "--interval", "1"])
+
+    assert result.exit_code == EXIT_SUCCESS
+    payloads = _parse_json_stream(result.output)
+    assert payloads
+    for payload in payloads:
+        assert payload["success"] is True
 
 
 def test_job_update_refreshes_job_creating_status(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
@@ -742,6 +819,77 @@ def test_job_logs_missing_file_sets_exit_code(monkeypatch: pytest.MonkeyPatch, t
 
     assert result.exit_code == EXIT_LOG_NOT_FOUND
     assert f"No log file found for job {TEST_JOB_ID}" in result.output
+
+
+def test_job_logs_follow_json_skips_ssh_follow_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    patch_config_and_auth(monkeypatch, tmp_path)
+
+    config = make_test_config(tmp_path)
+    cache = JobCache(config.get_expanded_cache_path())
+    remote_log_path = f"/train/logs/.inspire/training_master_{TEST_JOB_ID}.log"
+    cache.add_job(
+        job_id=TEST_JOB_ID,
+        name="test-job",
+        resource="H200",
+        command="echo test",
+        status="RUNNING",
+        log_path=remote_log_path,
+    )
+
+    from importlib import import_module
+
+    job_logs_module = import_module("inspire.cli.commands.job.job_logs")
+
+    called = {"workflow_follow": False}
+    monkeypatch.setattr(job_logs_module, "is_tunnel_available", lambda: True)
+    monkeypatch.setattr(
+        job_logs_module,
+        "_follow_logs_via_ssh",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not be called")),
+    )
+    monkeypatch.setattr(
+        job_logs_module,
+        "_follow_logs",
+        lambda *args, **kwargs: (called.__setitem__("workflow_follow", True) or EXIT_SUCCESS),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["--json", "job", "logs", TEST_JOB_ID, "--follow"])
+
+    assert result.exit_code == EXIT_SUCCESS
+    assert called["workflow_follow"] is True
+
+
+def test_job_logs_follow_returns_follow_exit_code(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    patch_config_and_auth(monkeypatch, tmp_path)
+
+    config = make_test_config(tmp_path)
+    cache = JobCache(config.get_expanded_cache_path())
+    remote_log_path = f"/train/logs/.inspire/training_master_{TEST_JOB_ID}.log"
+    cache.add_job(
+        job_id=TEST_JOB_ID,
+        name="test-job",
+        resource="H200",
+        command="echo test",
+        status="RUNNING",
+        log_path=remote_log_path,
+    )
+
+    from importlib import import_module
+
+    job_logs_module = import_module("inspire.cli.commands.job.job_logs")
+
+    monkeypatch.setattr(job_logs_module, "is_tunnel_available", lambda: False)
+    monkeypatch.setattr(job_logs_module, "_follow_logs", lambda *args, **kwargs: EXIT_GENERAL_ERROR)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["job", "logs", TEST_JOB_ID, "--follow"])
+
+    assert result.exit_code == EXIT_GENERAL_ERROR
 
 
 # ---------------------------------------------------------------------------

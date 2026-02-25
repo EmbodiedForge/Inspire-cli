@@ -151,7 +151,8 @@ def init(
     ~/.config/inspire/config.toml, project options go to ./.inspire/config.toml.
 
     Use --global or --project to force all options to a single file.
-    Secrets (passwords, tokens) are never written to config files for security.
+    Template/smart modes avoid writing secrets. In --discover mode, prompted
+    account passwords are stored in global config for the selected account.
 
     If no environment variables are detected (or with --template), creates
     a template config with placeholder values.

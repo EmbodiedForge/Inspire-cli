@@ -598,6 +598,8 @@ class TestInitCommand:
         result = runner.invoke(init, ["--help"])
 
         assert result.exit_code == 0
+        assert "Template/smart modes avoid writing secrets." in result.output
+        assert "stored in global config for the selected account." in result.output
         assert "--probe-pubkey" in result.output
         assert "--pubkey" in result.output
         assert "Only effective with --discover" in result.output
@@ -1104,6 +1106,7 @@ class TestInitCommand:
         )
 
         assert result.exit_code == 0
+        assert "Note: prompted account password was stored in global config" in result.output
         # Verify the freshly prompted password (not the stale one) was persisted
         global_data = Config._load_toml(global_config)
         account = global_data["accounts"]["newuser"]

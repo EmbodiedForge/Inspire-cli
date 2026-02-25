@@ -42,9 +42,11 @@ from inspire.cli.utils.output import (
     emit_success as emit_output_success,
 )
 from inspire.cli.utils.tunnel_reconnect import (
+    NotebookBridgeReconnectState,
+    NotebookBridgeReconnectStatus,
+    attempt_notebook_bridge_rebuild,
     load_ssh_public_key_material,
     rebuild_notebook_bridge_profile,
-    retry_pause_seconds,
     should_attempt_ssh_reconnect,
 )
 from inspire.config.ssh_runtime import resolve_ssh_runtime_config
@@ -92,28 +94,19 @@ def try_exec_via_ssh_tunnel(
     """
     reconnect_limit = max(0, int(getattr(config, "tunnel_retries", 0)))
     reconnect_pause = float(getattr(config, "tunnel_retry_pause", 0.0) or 0.0)
-    reconnect_attempt = 0
+    reconnect_state = NotebookBridgeReconnectState(
+        reconnect_limit=reconnect_limit,
+        reconnect_pause=reconnect_pause,
+    )
     resolved_bridge_name = bridge_name
     force_rebuild = False
     opened_once = False
     ssh_execution_started = False
-    web_session = None
-    ssh_public_key = ""
-    ssh_runtime = None
     full_command = _build_remote_command(
         command=command,
         target_dir=str(config.target_dir),
         remote_env=config.remote_env,
     )
-
-    def _pause_before_retry() -> None:
-        pause_s = retry_pause_seconds(
-            reconnect_attempt,
-            base_pause=reconnect_pause,
-            progressive=True,
-        )
-        if pause_s > 0:
-            time.sleep(pause_s)
 
     def _require_rebuild(
         bridge: object,
@@ -121,10 +114,9 @@ def try_exec_via_ssh_tunnel(
         *,
         reason: str,
     ) -> Optional[int]:
-        nonlocal reconnect_attempt, web_session, ssh_public_key, ssh_runtime, force_rebuild
+        nonlocal force_rebuild
 
-        notebook_id = str(getattr(bridge, "notebook_id", "") or "").strip()
-        if not notebook_id:
+        if not str(getattr(bridge, "notebook_id", "") or "").strip():
             hint = (
                 "Run 'inspire tunnel status' to troubleshoot. "
                 "If needed, re-create the bridge via "
@@ -139,7 +131,7 @@ def try_exec_via_ssh_tunnel(
                 hint=hint,
             )
 
-        if reconnect_attempt >= reconnect_limit:
+        if reconnect_state.reconnect_attempt >= reconnect_limit:
             return _emit_error(
                 ctx,
                 "TunnelError",
@@ -150,57 +142,61 @@ def try_exec_via_ssh_tunnel(
                 ),
             )
 
-        reconnect_attempt += 1
         if not ctx.json_output:
             click.echo(
-                f"{reason} (attempt {reconnect_attempt}/{reconnect_limit})...",
+                (
+                    f"{reason} "
+                    f"(attempt {reconnect_state.reconnect_attempt + 1}/{reconnect_limit})..."
+                ),
                 err=True,
             )
 
-        try:
-            if web_session is None:
-                web_session = require_web_session(
-                    ctx,
-                    hint=(
-                        "Automatic tunnel rebuild needs web authentication. "
-                        "Set [auth].username and configure password via INSPIRE_PASSWORD "
-                        'or [accounts."<username>"].password.'
-                    ),
-                )
-            if not ssh_public_key:
-                ssh_public_key = load_ssh_public_key_material()
-            if ssh_runtime is None:
-                ssh_runtime = resolve_ssh_runtime_config()
-            rebuild_notebook_bridge_profile(
-                bridge_name=str(getattr(bridge, "name")),
-                bridge=bridge,
-                tunnel_config=tunnel_config,
-                session=web_session,
-                ssh_public_key=ssh_public_key,
-                ssh_runtime=ssh_runtime,
-            )
+        result = attempt_notebook_bridge_rebuild(
+            state=reconnect_state,
+            bridge_name=str(getattr(bridge, "name")),
+            bridge=bridge,
+            tunnel_config=tunnel_config,
+            session_loader=lambda: require_web_session(
+                ctx,
+                hint=(
+                    "Automatic tunnel rebuild needs web authentication. "
+                    "Set [auth].username and configure password via INSPIRE_PASSWORD "
+                    'or [accounts."<username>"].password.'
+                ),
+            ),
+            runtime_loader=resolve_ssh_runtime_config,
+            rebuild_fn=rebuild_notebook_bridge_profile,
+            key_loader=lambda path=None: load_ssh_public_key_material(),
+        )
+
+        if result.status is NotebookBridgeReconnectStatus.REBUILT:
             force_rebuild = False
             return None
-        except (ValueError, ConfigError) as e:
-            if reconnect_attempt >= reconnect_limit:
-                return _emit_error(
-                    ctx,
-                    "TunnelError",
-                    f"Automatic tunnel rebuild failed: {e}",
-                    hint="Check credentials, SSH key, and notebook status, then retry.",
-                )
-            _pause_before_retry()
+
+        if result.status is NotebookBridgeReconnectStatus.RETRY_LATER:
+            if result.pause_seconds > 0:
+                time.sleep(result.pause_seconds)
             return None
-        except Exception as e:
-            if reconnect_attempt >= reconnect_limit:
-                return _emit_error(
-                    ctx,
-                    "TunnelError",
-                    f"Automatic tunnel rebuild failed: {e}",
-                    hint="Verify the notebook is RUNNING and retry.",
-                )
-            _pause_before_retry()
-            return None
+
+        # EXHAUSTED or unexpected status — rebuild failed.
+        if isinstance(result.error, (ValueError, ConfigError)):
+            return _emit_error(
+                ctx,
+                "TunnelError",
+                f"Automatic tunnel rebuild failed: {result.error}",
+                hint="Check credentials, SSH key, and notebook status, then retry.",
+            )
+
+        return _emit_error(
+            ctx,
+            "TunnelError",
+            (
+                f"Automatic tunnel rebuild failed: {result.error}"
+                if result.error
+                else "SSH tunnel not available"
+            ),
+            hint="Verify the notebook is RUNNING and retry.",
+        )
 
     def _should_retry_after_disconnect_code(
         *,

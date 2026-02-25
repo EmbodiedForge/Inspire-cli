@@ -83,7 +83,8 @@ def _watch_jobs(
         total_count: int,
         completed_list: list,
     ) -> None:
-        os.system("clear")
+        if not ctx.json_output:
+            os.system("clear")
         if ctx.json_output:
             timestamp = datetime.now().strftime("%H:%M:%S")
             click.echo(
@@ -357,7 +358,8 @@ def wait(ctx: Context, job_id: str, timeout: int, interval: int) -> None:
         start_time = job_deps.time.time()
         last_status = None
 
-        click.echo(f"Waiting for job {job_id} (timeout: {timeout}s, interval: {interval}s)")
+        if not ctx.json_output:
+            click.echo(f"Waiting for job {job_id} (timeout: {timeout}s, interval: {interval}s)")
 
         while True:
             elapsed = job_deps.time.time() - start_time
@@ -418,7 +420,8 @@ def wait(ctx: Context, job_id: str, timeout: int, interval: int) -> None:
     except AuthenticationError as e:
         _handle_error(ctx, "AuthenticationError", str(e), EXIT_AUTH_ERROR)
     except KeyboardInterrupt:
-        click.echo("\nInterrupted")
+        if not ctx.json_output:
+            click.echo("\nInterrupted")
         sys.exit(EXIT_GENERAL_ERROR)
 
 
