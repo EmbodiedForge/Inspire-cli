@@ -386,6 +386,58 @@ def test_get_web_session_force_refresh_bypasses_cache(monkeypatch: pytest.Monkey
     assert login_calls["base_url"] == "https://example.invalid"
 
 
+def test_asyncio_browser_fallback_uses_disposable_clients(monkeypatch: pytest.MonkeyPatch):
+    """Two consecutive browser-backed requests from an asyncio context must each
+    get their own disposable _BrowserRequestClient — not the global cached one —
+    to avoid cross-thread greenlet / thread-affinity errors.
+    """
+    import asyncio
+    import threading
+
+    session = WebSession(
+        storage_state={"cookies": [{"name": "session", "value": "abc"}]},
+        cookies={"session": "abc"},
+        workspace_id="ws-test",
+        created_at=0,
+    )
+
+    created: list = []
+
+    class TrackedClient:
+        def __init__(self, _session):
+            self.thread_id = threading.current_thread().ident
+            self.closed = False
+            created.append(self)
+
+        def request_json(self, method, url, headers=None, body=None, timeout=30):
+            # Core assertion: client used on the same thread that created it
+            assert threading.current_thread().ident == self.thread_id
+            return {"ok": True}
+
+        def close(self):
+            self.closed = True
+
+    def _fail_global_cache(_session):
+        raise AssertionError("global cache must not be used in asyncio path")
+
+    monkeypatch.setattr(ws, "_BrowserRequestClient", TrackedClient)
+    monkeypatch.setattr(ws, "_BROWSER_API_FORCE_BROWSER", True)
+    monkeypatch.setattr(ws, "_get_browser_client", _fail_global_cache)
+
+    async def two_requests():
+        r1 = ws.request_json(session, "GET", "https://example.test/1")
+        r2 = ws.request_json(session, "GET", "https://example.test/2")
+        return r1, r2
+
+    r1, r2 = asyncio.run(two_requests())
+
+    assert r1 == {"ok": True}
+    assert r2 == {"ok": True}
+    assert len(created) == 2, "each call should create its own client"
+    assert created[0] is not created[1], "clients must not be reused"
+    assert all(c.closed for c in created), "disposable clients must be closed"
+
+
 def test_clear_session_cache_removes_scoped_and_legacy_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

@@ -71,6 +71,17 @@ def login_with_playwright(
 
     The login flow: qz/login -> CAS (Keycloak broker) -> Keycloak -> qz.
     """
+    from inspire.platform.web.browser_api.core import _in_asyncio_loop, _run_in_thread
+
+    if _in_asyncio_loop():
+        return _run_in_thread(
+            login_with_playwright,
+            username,
+            password,
+            base_url=base_url,
+            headless=headless,
+        )
+
     from playwright.sync_api import sync_playwright
 
     proxy = get_playwright_proxy()

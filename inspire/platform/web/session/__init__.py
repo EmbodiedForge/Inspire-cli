@@ -108,8 +108,26 @@ def request_json(
         finally:
             http.close()
 
-    client = _get_browser_client(session)
+    from inspire.platform.web.browser_api.core import _in_asyncio_loop, _run_in_thread
+
+    def _browser_request_in_thread() -> dict:
+        """Disposable client per thread — avoids cross-thread greenlet errors."""
+        client = _BrowserRequestClient(session)
+        try:
+            return client.request_json(
+                method,
+                url,
+                headers=headers,
+                body=body,
+                timeout=timeout,
+            )
+        finally:
+            client.close()
+
     try:
+        if _in_asyncio_loop():
+            return _run_in_thread(_browser_request_in_thread)
+        client = _get_browser_client(session)
         return client.request_json(
             method,
             url,
