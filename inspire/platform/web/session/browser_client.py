@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from typing import Optional
+from weakref import WeakSet
 
 from .models import SessionExpiredError, WebSession
 from .proxy import get_playwright_proxy
@@ -15,6 +17,7 @@ class _BrowserRequestClient:
         from playwright.sync_api import sync_playwright
 
         proxy = get_playwright_proxy()
+        self._closed = False
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(headless=True, proxy=proxy)
         self._context = self._browser.new_context(
@@ -33,6 +36,9 @@ class _BrowserRequestClient:
         body: Optional[dict] = None,
         timeout: int = 30,
     ) -> dict:
+        if self._closed:
+            raise RuntimeError("Browser request client is closed")
+
         req_headers = headers or {}
         method_upper = method.upper()
         timeout_ms = timeout * 1000
@@ -64,6 +70,10 @@ class _BrowserRequestClient:
         return resp.json()
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+
         try:
             self._context.close()
         except Exception:
@@ -96,25 +106,66 @@ def _session_fingerprint(session: WebSession) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-_BROWSER_CLIENT: Optional[_BrowserRequestClient] = None
+_BROWSER_CLIENT_TLS = threading.local()
+_BROWSER_CLIENTS: "WeakSet[_BrowserRequestClient]" = WeakSet()
+_BROWSER_CLIENTS_LOCK = threading.Lock()
+
+
+def _get_thread_client() -> Optional[_BrowserRequestClient]:
+    client = getattr(_BROWSER_CLIENT_TLS, "client", None)
+    if client is not None and getattr(client, "_closed", False):
+        try:
+            delattr(_BROWSER_CLIENT_TLS, "client")
+        except Exception:
+            pass
+        return None
+    return client
+
+
+def _set_thread_client(client: _BrowserRequestClient) -> None:
+    setattr(_BROWSER_CLIENT_TLS, "client", client)
+
+
+def _clear_thread_client() -> None:
+    try:
+        delattr(_BROWSER_CLIENT_TLS, "client")
+    except Exception:
+        pass
+
+
+def _register_client(client: _BrowserRequestClient) -> None:
+    with _BROWSER_CLIENTS_LOCK:
+        _BROWSER_CLIENTS.add(client)
+
+
+def _unregister_client(client: _BrowserRequestClient) -> None:
+    with _BROWSER_CLIENTS_LOCK:
+        _BROWSER_CLIENTS.discard(client)
 
 
 def _get_browser_client(session: WebSession) -> _BrowserRequestClient:
-    global _BROWSER_CLIENT
-
     fingerprint = _session_fingerprint(session)
-    if _BROWSER_CLIENT and _BROWSER_CLIENT.session_fingerprint == fingerprint:
-        return _BROWSER_CLIENT
+    client = _get_thread_client()
+    if client and client.session_fingerprint == fingerprint:
+        return client
 
-    if _BROWSER_CLIENT:
-        _BROWSER_CLIENT.close()
+    if client:
+        client.close()
+        _unregister_client(client)
+        _clear_thread_client()
 
-    _BROWSER_CLIENT = _BrowserRequestClient(session)
-    return _BROWSER_CLIENT
+    client = _BrowserRequestClient(session)
+    _set_thread_client(client)
+    _register_client(client)
+    return client
 
 
 def _close_browser_client() -> None:
-    global _BROWSER_CLIENT
-    if _BROWSER_CLIENT:
-        _BROWSER_CLIENT.close()
-        _BROWSER_CLIENT = None
+    with _BROWSER_CLIENTS_LOCK:
+        clients = list(_BROWSER_CLIENTS)
+        _BROWSER_CLIENTS.clear()
+
+    for client in clients:
+        client.close()
+
+    _clear_thread_client()

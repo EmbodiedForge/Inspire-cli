@@ -1,4 +1,5 @@
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -6,6 +7,7 @@ import pytest
 from inspire.config import Config
 from inspire.platform.web import session as ws
 from inspire.platform.web.session import auth as ws_auth
+from inspire.platform.web.session import browser_client as ws_browser_client
 from inspire.platform.web.session import WebSession
 
 
@@ -222,6 +224,7 @@ def test_browser_request_context_posts_json_bytes():
     client = ws._BrowserRequestClient.__new__(ws._BrowserRequestClient)
     context = DummyBrowserContext()
     client._context = context
+    client._closed = False
     client.session_fingerprint = "test"
 
     result = client.request_json("POST", "https://example.test", body={"a": 1})
@@ -233,6 +236,108 @@ def test_browser_request_context_posts_json_bytes():
     assert json.loads(data) == {"a": 1}
     header_keys = {key.lower() for key in (headers or {})}
     assert "content-type" in header_keys
+
+
+def test_browser_client_cache_is_thread_local(monkeypatch: pytest.MonkeyPatch):
+    session = WebSession(
+        storage_state={"cookies": [{"name": "session", "value": "abc"}]},
+        cookies={"session": "abc"},
+        workspace_id="ws-test",
+        created_at=0,
+    )
+
+    created: list["FakeBrowserClient"] = []
+
+    class FakeBrowserClient:
+        def __init__(self, current_session: WebSession) -> None:
+            self.session_fingerprint = ws_browser_client._session_fingerprint(current_session)
+            self.created_thread = threading.get_ident()
+            self._closed = False
+            created.append(self)
+
+        def close(self) -> None:
+            self._closed = True
+
+    monkeypatch.setattr(ws_browser_client, "_BrowserRequestClient", FakeBrowserClient)
+    ws_browser_client._close_browser_client()
+
+    main_client_1 = ws_browser_client._get_browser_client(session)
+    main_client_2 = ws_browser_client._get_browser_client(session)
+
+    worker: dict[str, object] = {}
+
+    def _worker() -> None:
+        worker_client_1 = ws_browser_client._get_browser_client(session)
+        worker_client_2 = ws_browser_client._get_browser_client(session)
+        worker["client"] = worker_client_1
+        worker["same"] = worker_client_1 is worker_client_2
+
+    thread = threading.Thread(target=_worker)
+    thread.start()
+    thread.join()
+
+    assert main_client_1 is main_client_2
+    assert worker["same"] is True
+    assert worker["client"] is not main_client_1
+    assert len(created) == 2
+
+    ws_browser_client._close_browser_client()
+    assert all(client._closed for client in created)
+
+
+def test_browser_client_recreates_closed_thread_local_client(monkeypatch: pytest.MonkeyPatch):
+    session = WebSession(
+        storage_state={"cookies": [{"name": "session", "value": "abc"}]},
+        cookies={"session": "abc"},
+        workspace_id="ws-test",
+        created_at=0,
+    )
+
+    created: list["FakeBrowserClient"] = []
+
+    class FakeBrowserClient:
+        def __init__(self, current_session: WebSession) -> None:
+            self.session_fingerprint = ws_browser_client._session_fingerprint(current_session)
+            self._closed = False
+            created.append(self)
+
+        def close(self) -> None:
+            self._closed = True
+
+    monkeypatch.setattr(ws_browser_client, "_BrowserRequestClient", FakeBrowserClient)
+    ws_browser_client._close_browser_client()
+
+    ready = threading.Event()
+    proceed = threading.Event()
+    done = threading.Event()
+    result: dict[str, object] = {}
+
+    def _worker() -> None:
+        first = ws_browser_client._get_browser_client(session)
+        result["first"] = first
+        ready.set()
+        assert proceed.wait(timeout=2.0)
+        second = ws_browser_client._get_browser_client(session)
+        result["second"] = second
+        done.set()
+
+    thread = threading.Thread(target=_worker)
+    thread.start()
+    assert ready.wait(timeout=2.0)
+
+    ws_browser_client._close_browser_client()
+    proceed.set()
+    assert done.wait(timeout=2.0)
+    thread.join(timeout=2.0)
+
+    first = result["first"]
+    second = result["second"]
+
+    assert first is not second
+    assert getattr(first, "_closed", False) is True
+    assert getattr(second, "_closed", False) is False
+
+    ws_browser_client._close_browser_client()
 
 
 def test_get_credentials_prefers_project_toml_when_prefer_source_toml(
