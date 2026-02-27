@@ -17,8 +17,8 @@ Treat CLI help as source of truth (`inspire --help`, `inspire <group> --help`, `
 | Workspace aliases (cpu/gpu/internet) | Smart defaults in `--discover` | Confirmation or override |
 | `target_dir` | Catalog workdir as suggestion | **Must verify via CPU notebook SSH** |
 | Project preference order | Nothing | Ranked list of project names |
-| CPU/4090 notebook SSH | Fully automatic | Nothing |
-| GPU notebook SSH (no internet) | Automatic bootstrap with config | **Always** `rtunnel_bin`, plus `apt_mirror_url` or `dropbear_deb_dir` |
+| CPU/4090 notebook SSH | Fully automatic (rtunnel auto-downloaded and uploaded) | Nothing |
+| GPU notebook SSH (no internet) | Automatic (rtunnel auto-uploaded) | `apt_mirror_url` or `dropbear_deb_dir` for SSH server |
 | Bridge profile | `inspire notebook ssh --save-as` | Which notebook to use |
 
 ## Setup flow
@@ -47,27 +47,28 @@ Sort order when no `--project` flag: `project_order` (first match wins) > `gpu_u
 **Always use `--project` explicitly** when creating notebooks during setup. At this point `project_order` isn't configured yet, so auto-selection falls back to `gpu_unlimited > priority` which often picks the wrong project. Ask the user which project to use.
 
 Create a CPU notebook, SSH in, explore the filesystem. Confirm:
-- `shared_path_group` — usually `/inspire/hdd/global_user/<username>`, visible across ALL projects. SSH tools go here.
+- `shared_path_group` — usually `/inspire/hdd/global_user/<username>`, visible across ALL projects.
 - `target_dir` — usually `/inspire/hdd/project/<slug>/<username>`, project-specific workdir.
 
-**Keep the CPU notebook running** for Phase 3.
+The CPU notebook can be stopped after verification — it is not needed for subsequent phases.
 
 ### Phase 3: GPU SSH bootstrap (skip if CPU/4090 only)
 
-GPU notebooks (H100/H200) have no internet. `notebook ssh` still works but needs:
-- **Always**: `rtunnel_bin` on shared filesystem (download via CPU notebook). Lives on `shared_path_group` so it's downloaded once for all projects.
-- **Plus one of**:
-  - `apt_mirror_url` — simpler, no pre-placed debs needed. Ask if the platform has an internal Ubuntu mirror (Nexus/Artifactory). Dropbear installed automatically.
+GPU notebooks (H100/H200) have no internet. `notebook ssh` still works but needs an SSH server package installed on the notebook.
+
+**rtunnel is handled automatically.** The CLI downloads rtunnel locally (`~/.local/bin/rtunnel`) and uploads it to each notebook via the Jupyter Contents API. No shared filesystem placement or CPU notebook needed.
+
+**SSH server requirement — one of:**
+  - `apt_mirror_url` — simpler, no pre-placed debs needed. Ask if the platform has an internal Ubuntu mirror (Nexus/Artifactory). Dropbear installed automatically via apt.
   - `dropbear_deb_dir` — pre-place dropbear .deb packages on shared filesystem.
 
 Both go in `[ssh]` section of project config.
 
 **Questions to ask:**
 1. "Do you need GPU notebook SSH?" — skip if no
-2. "Does your platform have an internal APT mirror?" — determines Path A vs B
-3. "Where should tools go?" — suggest `<shared_path_group>/tools/`
+2. "Does your platform have an internal APT mirror?" — determines `apt_mirror_url` vs `dropbear_deb_dir`
 
-Reuse the CPU notebook from Phase 2c for downloading rtunnel.
+**Legacy option:** `rtunnel_bin` in `[ssh]` config is still respected as highest priority if set. Users who already have rtunnel on shared filesystem do not need to change anything.
 
 ### Phase 4: Bridge profile
 
@@ -81,5 +82,12 @@ Bridge profiles break when notebooks restart. `bridge exec`/`ssh` auto-reconnect
 2. `inspire config check` — validates auth, catches stale passwords
 3. Missing `target_dir` — most common cause of sync/bridge failures
 4. Wrong workspace — bridge/sync need CPU workspace (internet), jobs need GPU
-5. GPU SSH not working — needs `rtunnel_bin` plus either `apt_mirror_url` or `dropbear_deb_dir`
-6. Stale catalog — re-run `inspire init --discover` to refresh
+5. GPU SSH not working — needs either `apt_mirror_url` or `dropbear_deb_dir` for SSH server installation. rtunnel is auto-uploaded and should not be the cause; check `~/.local/bin/rtunnel` exists locally
+6. rtunnel upload failed — check Jupyter Contents API access; fallback: set `rtunnel_bin` in `[ssh]` config pointing to a shared filesystem path
+7. Stale catalog — re-run `inspire init --discover` to refresh
+
+## Reporting issues
+
+If you encounter a setup problem you can't resolve (discovery failures, unexpected CLI behavior, missing features), suggest the user file an issue:
+- **Private (Codeberg):** https://codeberg.org/cyteena/inspire-cli/issues
+- **Public (GitHub):** https://github.com/EmbodiedForge/Inspire-cli/issues
