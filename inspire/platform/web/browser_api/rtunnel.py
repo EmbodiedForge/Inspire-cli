@@ -99,9 +99,12 @@ def build_rtunnel_setup_commands(
     openssh_bootstrap_cmd = (
         'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x /tmp/rtunnel ] '
         "|| [ ! -x /usr/sbin/sshd ]; then "
-        'if [ ! -x /usr/sbin/sshd ] && [ -z "${SSHD_DEB_DIR:-}" ]; then '
+        "if [ ! -x /usr/sbin/sshd ]; then "
+        'if [ -n "${SSHD_DEB_DIR:-}" ] && ls "$SSHD_DEB_DIR"/*.deb >/dev/null 2>&1; then '
+        'dpkg -i "$SSHD_DEB_DIR"/*.deb >/dev/null 2>&1 || true; '
+        'elif [ -z "${SSHD_DEB_DIR:-}" ]; then '
         "export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && "
-        "apt-get install -y -qq openssh-server; fi; "
+        "apt-get install -y -qq openssh-server; fi; fi; "
         "RTUNNEL_BIN=/tmp/rtunnel; "
         'if [ -n "${RTUNNEL_BIN_PATH:-}" ] && [ -x "$RTUNNEL_BIN_PATH" ]; then '
         'cp "$RTUNNEL_BIN_PATH" /tmp/rtunnel && chmod +x /tmp/rtunnel; fi; '
@@ -111,6 +114,16 @@ def build_rtunnel_setup_commands(
         "2>/dev/null; fi; "
         'if [ -x /usr/sbin/sshd ] && [ -x "$RTUNNEL_BIN" ]; then '
         'touch "$BOOTSTRAP_SENTINEL"; else rm -f "$BOOTSTRAP_SENTINEL"; fi; fi'
+    )
+    ensure_rtunnel_cmd = (
+        "RTUNNEL_BIN=/tmp/rtunnel; "
+        'if [ ! -x "$RTUNNEL_BIN" ] && [ -n "${RTUNNEL_BIN_PATH:-}" ] '
+        '&& [ -x "$RTUNNEL_BIN_PATH" ]; then '
+        'cp "$RTUNNEL_BIN_PATH" /tmp/rtunnel && chmod +x /tmp/rtunnel; fi; '
+        'if [ ! -x "$RTUNNEL_BIN" ]; then curl -fsSL '
+        f"'{rtunnel_download_url}' -o /tmp/rtunnel.tgz && "
+        "tar -xzf /tmp/rtunnel.tgz -C /tmp && chmod +x /tmp/rtunnel "
+        "2>/dev/null; fi"
     )
     start_sshd_cmd = (
         'if [ -x /usr/sbin/sshd ] && ! ps -ef | grep -q "[s]shd -p $SSH_PORT"; then '
@@ -172,9 +185,10 @@ def build_rtunnel_setup_commands(
         '[ -z "$DB_KEY" ] && DB_KEY=$(which dropbearkey 2>/dev/null || true); '
         'if [ ! -f /tmp/dropbear_ed25519_host_key ] && [ -n "$DB_KEY" ] && [ -x "$DB_KEY" ]; then '
         '"$DB_KEY" -t ed25519 -f /tmp/dropbear_ed25519_host_key >/dev/null 2>&1; fi; '
+        "if [ -f /tmp/dropbear_ed25519_host_key ]; then "
         '"$DB_BIN" -E -s -g -p "127.0.0.1:$SSH_PORT" '
         "-r /tmp/dropbear_ed25519_host_key -P /tmp/dropbear.pid "
-        "2>>/tmp/dropbear.log; fi; fi"
+        "2>>/tmp/dropbear.log; fi; fi; fi"
     )
     start_rtunnel_cmd = (
         "if [ -x /tmp/rtunnel ] && ! ps -ef | "
@@ -206,6 +220,7 @@ def build_rtunnel_setup_commands(
             # No external setup_script: use internal dpkg-based bootstrap.
             # The start_dropbear_cmd handles dpkg -i when .deb files are found.
             cmd_lines.append(f"RTUNNEL_URL={rtunnel_download_url!r}")
+            cmd_lines.append(ensure_rtunnel_cmd)
         cmd_lines.append(start_dropbear_cmd)
         cmd_lines.append(start_sshd_cmd)
         cmd_lines.append(start_rtunnel_cmd)
@@ -759,6 +774,19 @@ def _jupyter_server_base(lab_url: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
 
 
+def _build_jupyter_xsrf_headers(context: Any) -> dict[str, str]:
+    """Return Jupyter XSRF headers from browser context cookies (best-effort)."""
+    headers: dict[str, str] = {}
+    try:
+        for cookie in context.cookies():
+            if cookie.get("name") == "_xsrf":
+                headers["X-XSRFToken"] = cookie["value"]
+                break
+    except (AttributeError, KeyError, TypeError):
+        pass
+    return headers
+
+
 def _create_terminal_via_api(context: Any, lab_url: str) -> str | None:
     """Create a JupyterLab terminal via REST API.
 
@@ -770,16 +798,7 @@ def _create_terminal_via_api(context: Any, lab_url: str) -> str | None:
     base = _jupyter_server_base(lab_url)
     api_url = f"{base}api/terminals"
     try:
-        # JupyterLab XSRF protection: extract _xsrf cookie value
-        headers: dict[str, str] = {}
-        try:
-            for cookie in context.cookies():
-                if cookie.get("name") == "_xsrf":
-                    headers["X-XSRFToken"] = cookie["value"]
-                    break
-        except (AttributeError, KeyError, TypeError):
-            pass
-
+        headers = _build_jupyter_xsrf_headers(context)
         resp = context.request.post(api_url, headers=headers, timeout=10000)
         if resp.status in (200, 201):
             data = resp.json()
@@ -795,6 +814,38 @@ def _create_terminal_via_api(context: Any, lab_url: str) -> str | None:
     ):
         pass
     return None
+
+
+def _delete_terminal_via_api(
+    context: Any,
+    *,
+    lab_url: str,
+    term_name: str,
+) -> bool:
+    """Delete a Jupyter terminal by name (best-effort cleanup)."""
+    from urllib.parse import quote
+
+    safe_term_name = (term_name or "").strip()
+    if not safe_term_name:
+        return False
+
+    base = _jupyter_server_base(lab_url)
+    api_url = f"{base}api/terminals/{quote(safe_term_name, safe='')}"
+    try:
+        headers = _build_jupyter_xsrf_headers(context)
+        resp = context.request.delete(api_url, headers=headers, timeout=5000)
+        # 404 means the terminal is already gone, which is a successful cleanup.
+        return resp.status in (200, 204, 404)
+    except (
+        PlaywrightError,
+        ConnectionError,
+        OSError,
+        RuntimeError,
+        TimeoutError,
+        ValueError,
+        TypeError,
+    ):
+        return False
 
 
 def _extract_jupyter_token(lab_url: str) -> str | None:
@@ -957,14 +1008,17 @@ def _send_setup_command_via_terminal_ws(
     if not term_name:
         return False
 
-    ws_url = _build_terminal_websocket_url(lab_frame.url, term_name)
-    return _send_terminal_command_via_websocket(
-        lab_frame,
-        ws_url=ws_url,
-        command=batch_cmd,
-        timeout_ms=120000,
-        completion_marker="INSPIRE_RTUNNEL_SETUP_DONE",
-    )
+    try:
+        ws_url = _build_terminal_websocket_url(lab_frame.url, term_name)
+        return _send_terminal_command_via_websocket(
+            lab_frame,
+            ws_url=ws_url,
+            command=batch_cmd,
+            timeout_ms=120000,
+            completion_marker=SETUP_DONE_MARKER,
+        )
+    finally:
+        _delete_terminal_via_api(context, lab_url=lab_frame.url, term_name=term_name)
 
 
 def _build_batch_setup_script(cmd_lines: list[str]) -> str:
@@ -1003,6 +1057,7 @@ _API_TERMINAL_TAB_POKE_INTERVAL_MS = 1200
 _FOCUS_INPUT_WAIT_TIMEOUT_MS = 900
 _FOCUS_INPUT_CLICK_TIMEOUT_MS = 500
 _FOCUS_TAB_CLICK_TIMEOUT_MS = 450
+_FOCUS_TEXTAREA_ATTACH_TIMEOUT_MS = 3000
 _FOCUS_RETRY_PASSES = 4
 
 
@@ -1137,7 +1192,28 @@ def _focus_terminal_input(
     lab_frame: Any,
     page: Any,
 ) -> bool:
+    # Gate: wait for xterm.js to create its helper textarea.
+    # The .xterm container attaches before the textarea is created,
+    # so _wait_for_terminal_surface() may pass while focus is impossible.
+    textarea_found = False
+    for sel in _TERMINAL_INPUT_SELECTORS:
+        try:
+            lab_frame.locator(sel).first.wait_for(
+                state="attached", timeout=_FOCUS_TEXTAREA_ATTACH_TIMEOUT_MS
+            )
+            textarea_found = True
+            break
+        except (PlaywrightError, TimeoutError, RuntimeError, AttributeError, ValueError):
+            pass
+
+    if not textarea_found:
+        return False
+
     for pass_idx in range(_FOCUS_RETRY_PASSES):
+        # Dismiss any dialog that may be stealing focus (e.g. jp-mod-accept)
+        if pass_idx == 0:
+            _dismiss_terminal_dialog_once(lab_frame=lab_frame, page=page, settle_ms=80)
+
         # Try 1: Click the visible .xterm container (triggers xterm.js internal focus)
         try:
             xterm_el = lab_frame.locator(".xterm").first
@@ -1211,11 +1287,11 @@ def _open_terminal_via_rest_api(
     context: Any,
     page: Any,
     lab_frame: Any,
-) -> tuple[bool, bool]:
+) -> tuple[bool, bool, str | None]:
     lab_url = lab_frame.url
     term_name = _create_terminal_via_api(context, lab_url)
     if not term_name:
-        return False, False
+        return False, False, None
 
     _log_terminal_status(f"  Created terminal '{term_name}' via REST API.")
     server_base = _jupyter_server_base(lab_url)
@@ -1223,17 +1299,17 @@ def _open_terminal_via_rest_api(
     try:
         lab_frame.goto(term_url, timeout=15000, wait_until="domcontentloaded")
         if _wait_for_terminal_surface(lab_frame, timeout_ms=_FAST_API_XTERM_ATTACH_TIMEOUT_MS):
-            return True, True
+            return True, True, term_name
     except (PlaywrightError, TimeoutError, RuntimeError, AttributeError, ValueError) as _nav_err:
         _log_terminal_status(
             f"  REST API terminal created but navigation failed ({type(_nav_err).__name__}: {str(_nav_err)[:150]}), trying DOM fallbacks..."
         )
-        return False, True
+        return False, True, term_name
 
     _log_terminal_status(
         "  REST API terminal created but xterm not yet visible; continuing with API terminal path."
     )
-    return _wait_for_api_terminal_surface(lab_frame, page), True
+    return _wait_for_api_terminal_surface(lab_frame, page), True, term_name
 
 
 def _recover_api_terminal_surface(
@@ -1292,7 +1368,7 @@ def _dismiss_terminal_dialog_once(
     page: Any,
     settle_ms: int,
 ) -> bool:
-    for label in ("Dismiss", "No", "否", "不接收", "取消"):
+    for label in ("Dismiss", "OK", "Accept", "No", "否", "不接收", "取消", "确定"):
         try:
             btn = lab_frame.get_by_role("button", name=label)
             if btn.count() > 0:
@@ -1302,14 +1378,20 @@ def _dismiss_terminal_dialog_once(
         except (PlaywrightError, TimeoutError, RuntimeError, AttributeError, ValueError):
             pass
 
-    try:
-        close_btn = lab_frame.locator("button.jp-Dialog-close, button[aria-label='Close']")
-        if close_btn.count() > 0:
-            close_btn.first.click(timeout=1000)
-            page.wait_for_timeout(settle_ms)
-            return True
-    except (PlaywrightError, TimeoutError, RuntimeError, AttributeError, ValueError):
-        pass
+    # Fallback: click the accept button by CSS class (covers unlabeled/localized dialogs)
+    for selector in (
+        "button.jp-Dialog-button.jp-mod-accept",
+        "button.jp-Dialog-close",
+        "button[aria-label='Close']",
+    ):
+        try:
+            btn = lab_frame.locator(selector)
+            if btn.count() > 0:
+                btn.first.click(timeout=1000)
+                page.wait_for_timeout(settle_ms)
+                return True
+        except (PlaywrightError, TimeoutError, RuntimeError, AttributeError, ValueError):
+            pass
 
     return False
 
@@ -1383,18 +1465,18 @@ def _open_or_create_terminal(
     context: Any,
     page: Any,
     lab_frame: Any,
-) -> bool:
+) -> tuple[bool, str | None]:
     """Open a terminal in JupyterLab.  REST API first, then DOM fallbacks."""
-    terminal_ready, api_term_created = _open_terminal_via_rest_api(
+    terminal_ready, api_term_created, term_name = _open_terminal_via_rest_api(
         context=context,
         page=page,
         lab_frame=lab_frame,
     )
     if terminal_ready:
-        return True
+        return True, term_name
 
     if api_term_created and _recover_api_terminal_surface(lab_frame=lab_frame, page=page):
-        return True
+        return True, term_name
 
     _wait_for_terminal_entry_point(lab_frame=lab_frame, api_term_created=api_term_created)
     _dismiss_terminal_dialog_once(lab_frame=lab_frame, page=page, settle_ms=150)
@@ -1404,7 +1486,7 @@ def _open_or_create_terminal(
         page=page,
         api_term_created=api_term_created,
     ):
-        return False
+        return False, None
 
     _click_terminal_tab(
         lab_frame,
@@ -1413,7 +1495,7 @@ def _open_or_create_terminal(
         settle_ms=80,
     )
     _dismiss_terminal_dialog_once(lab_frame=lab_frame, page=page, settle_ms=120)
-    return True
+    return True, term_name
 
 
 def _build_vscode_proxy_url(page, *, port: int) -> str | None:  # noqa: ANN001
@@ -1606,26 +1688,37 @@ def _send_rtunnel_setup_script(
     _sys.stderr.write("  WebSocket terminal setup unavailable, using browser automation.\n")
     _sys.stderr.flush()
 
-    if not _open_or_create_terminal(context, page, lab_frame):
-        raise ValueError("Failed to open Jupyter terminal")
-    timer.mark("open_terminal")
+    browser_term_name: str | None = None
+    try:
+        result, browser_term_name = _open_or_create_terminal(context, page, lab_frame)
+        if not result:
+            raise ValueError("Failed to open Jupyter terminal")
+        timer.mark("open_terminal")
 
-    if not _focus_terminal_input(lab_frame, page):
-        page.wait_for_timeout(350)
-        if not _wait_for_terminal_surface(lab_frame, timeout_ms=2000):
-            raise ValueError("Failed to focus Jupyter terminal: xterm surface not ready")
         if not _focus_terminal_input(lab_frame, page):
-            raise ValueError("Failed to focus Jupyter terminal input")
-    timer.mark("focus_xterm")
+            page.wait_for_timeout(350)
+            if not _wait_for_terminal_surface(lab_frame, timeout_ms=2000):
+                raise ValueError("Failed to focus Jupyter terminal: xterm surface not ready")
+            if not _focus_terminal_input(lab_frame, page):
+                raise ValueError("Failed to focus Jupyter terminal input")
+        timer.mark("focus_xterm")
 
-    _sys.stderr.write(
-        f"  Executing setup script ({len(batch_cmd)} chars) in notebook terminal...\n"
-    )
-    _sys.stderr.flush()
-    page.keyboard.insert_text(batch_cmd)
-    page.keyboard.press("Enter")
-    timer.mark("build_and_send_cmd")
-    return False
+        _sys.stderr.write(
+            f"  Executing setup script ({len(batch_cmd)} chars) in notebook terminal...\n"
+        )
+        _sys.stderr.flush()
+        page.keyboard.insert_text(batch_cmd)
+        page.keyboard.press("Enter")
+        timer.mark("build_and_send_cmd")
+        return False
+    finally:
+        if browser_term_name:
+            try:
+                _delete_terminal_via_api(
+                    context, lab_url=lab_frame.url, term_name=browser_term_name
+                )
+            except Exception:
+                pass
 
 
 def _wait_for_setup_completion(
@@ -1642,9 +1735,8 @@ def _wait_for_setup_completion(
         # to output. A short delay lets setup finish before HTTP probe checks.
         page.wait_for_timeout(3000)
     else:
-        import time
-
-        time.sleep(3)
+        # WS path waits for SETUP_DONE_MARKER, so only a short settle is needed.
+        page.wait_for_timeout(500)
     timer.mark("wait_marker")
 
 
