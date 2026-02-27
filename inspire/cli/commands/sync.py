@@ -190,6 +190,7 @@ def _effective_ssh_source(source: str, bridge: BridgeProfile) -> str:
 def _effective_push_mode(
     *,
     no_push: bool,
+    force: bool,
     push_mode: Optional[str],
     transport: str,
     ssh_source: Optional[str],
@@ -199,6 +200,8 @@ def _effective_push_mode(
         return "skip"
     if push_mode:
         return push_mode
+    if force and transport == "ssh":
+        return "best-effort"
     if transport == "ssh" and ssh_source == "bundle":
         return "best-effort"
     return "required"
@@ -258,7 +261,8 @@ def _summarize_sync_failure(
         message = f"Branch '{branch}' on Bridge diverged and cannot be fast-forwarded."
         hint = (
             f"Reconcile branch history (merge/rebase) and retry sync. "
-            f"If you expected a fresh tip, push '{branch}' to '{remote}' first."
+            f"If you expected a fresh tip, push '{branch}' to '{remote}' first. "
+            "To overwrite Bridge with your selected commit, rerun with --force."
         )
         return message, hint, normalized
 
@@ -275,6 +279,7 @@ def sync_via_tunnel(
     commit_msg: str,
     remote: str,
     timeout: int,
+    force: bool = False,
     offline_bundle: bool = False,
     bridge_name: Optional[str] = None,
     tunnel_config=None,
@@ -291,6 +296,7 @@ def sync_via_tunnel(
             target_dir=config.target_dir,
             branch=branch,
             commit_sha=commit_sha,
+            force=force,
             bridge_name=bridge_name,
             config=tunnel_config,
             timeout=timeout,
@@ -301,6 +307,7 @@ def sync_via_tunnel(
             branch=branch,
             commit_sha=commit_sha,
             remote=remote,
+            force=force,
             bridge_name=bridge_name,
             config=tunnel_config,
             timeout=timeout,
@@ -505,6 +512,14 @@ def sync_via_workflow(
     help="Allow sync with uncommitted changes (syncs committed branch tip only)",
 )
 @click.option(
+    "--force",
+    is_flag=True,
+    help=(
+        "Force sync mode: imply --allow-dirty, default push mode to best-effort, "
+        "and hard-reset diverged Bridge branch on SSH sync"
+    ),
+)
+@click.option(
     "--wait/--no-wait",
     default=True,
     help="Wait for sync to complete (default: wait)",
@@ -541,6 +556,7 @@ def sync(
     remote: Optional[str],
     no_push: bool,
     allow_dirty: bool,
+    force: bool,
     wait: bool,
     timeout: int,
     transport: str,
@@ -564,6 +580,8 @@ def sync(
         inspire sync --push-mode best-effort  # Continue even if git push fails
         inspire sync --no-push                # Skip git push (equivalent to --push-mode skip)
         inspire sync --allow-dirty            # Sync committed branch tip even if worktree is dirty
+        inspire sync --allow-dirty --no-push --source bundle --force
+                                             # Also force-resets Bridge branch to selected commit
 
     \b
     Environment variables:
@@ -601,6 +619,16 @@ def sync(
             message="--source is only supported with '--transport ssh'",
             exit_code=EXIT_CONFIG_ERROR,
             human_lines=["Error: --source is only supported with '--transport ssh'."],
+        )
+        sys.exit(EXIT_CONFIG_ERROR)
+
+    if transport == "workflow" and force:
+        emit_output_error(
+            ctx,
+            error_type="ValidationError",
+            message="--force is only supported with '--transport ssh'",
+            exit_code=EXIT_CONFIG_ERROR,
+            human_lines=["Error: --force is only supported with '--transport ssh'."],
         )
         sys.exit(EXIT_CONFIG_ERROR)
 
@@ -726,8 +754,12 @@ def sync(
 
     # Check for uncommitted changes
     if has_uncommitted_changes():
-        if not allow_dirty:
-            hint = "Commit/stash changes, or pass --allow-dirty to sync committed HEAD only."
+        if not (allow_dirty or force):
+            hint = (
+                "Commit/stash changes, or pass --allow-dirty to sync committed HEAD only. "
+                "Use --force only when you also want force-sync behavior "
+                "(implies --allow-dirty and may overwrite a diverged Bridge branch)."
+            )
             emit_output_error(
                 ctx,
                 error_type="ValidationError",
@@ -738,9 +770,10 @@ def sync(
             )
             sys.exit(EXIT_GENERAL_ERROR)
 
+        dirty_override_flag = "--allow-dirty" if allow_dirty else "--force"
         if not ctx.json_output:
             click.echo(
-                f"Warning: Uncommitted changes detected; syncing committed tip of '{branch}' only (--allow-dirty).",
+                f"Warning: Uncommitted changes detected; syncing committed tip of '{branch}' only ({dirty_override_flag}).",
                 err=True,
             )
 
@@ -748,6 +781,7 @@ def sync(
     commit_msg = get_commit_message(branch)
     effective_push_mode = _effective_push_mode(
         no_push=no_push,
+        force=force,
         push_mode=push_mode,
         transport=transport,
         ssh_source=ssh_source,
@@ -785,6 +819,7 @@ def sync(
             commit_msg=commit_msg,
             remote=remote,
             timeout=timeout,
+            force=force,
             offline_bundle=use_offline_bundle,
             bridge_name=selected_bridge.name,
             tunnel_config=tunnel_config,

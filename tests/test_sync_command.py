@@ -130,6 +130,37 @@ def test_sync_workflow_preflight_happens_before_push(
     assert push_called["value"] is False
 
 
+def test_sync_force_requires_ssh_transport(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config = make_sync_config(tmp_path)
+    preflight_called = {"value": False}
+    push_called = {"value": False}
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+    monkeypatch.setattr(sync_cmd_module, "get_current_branch", lambda: "main")
+    monkeypatch.setattr(
+        sync_cmd_module,
+        "_preflight_workflow_transport",
+        lambda *_args, **_kwargs: preflight_called.update(value=True),
+    )
+    monkeypatch.setattr(
+        sync_cmd_module,
+        "push_to_remote",
+        lambda *args, **kwargs: push_called.update(value=True),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["sync", "--transport", "workflow", "--force"])
+
+    assert result.exit_code == EXIT_CONFIG_ERROR
+    assert "--force is only supported" in result.output
+    assert preflight_called["value"] is False
+    assert push_called["value"] is False
+
+
 def test_sync_ssh_passes_remote_to_tunnel_sync(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -157,6 +188,7 @@ def test_sync_ssh_passes_remote_to_tunnel_sync(
     assert result.exit_code == EXIT_SUCCESS
     assert captured["remote"] == "upstream"
     assert captured["commit_sha"] == "a" * 40
+    assert captured["force"] is False
 
 
 def test_sync_ssh_prefers_cpu_bridge_over_default(
@@ -308,6 +340,7 @@ def test_sync_source_bundle_forces_bundle_even_on_internet_bridge(
 ) -> None:
     config = make_sync_config(tmp_path)
     bundle_called = {"value": False}
+    bundle_kwargs: Dict[str, Any] = {}
     ssh_called = {"value": False}
 
     monkeypatch.setattr(
@@ -322,6 +355,7 @@ def test_sync_source_bundle_forces_bundle_even_on_internet_bridge(
         sync_cmd_module,
         "sync_via_ssh_bundle",
         lambda *args, **kwargs: bundle_called.update(value=True)
+        or bundle_kwargs.update(kwargs)
         or {"success": True, "synced_sha": "a" * 40, "error": None},
     )
     monkeypatch.setattr(
@@ -337,6 +371,40 @@ def test_sync_source_bundle_forces_bundle_even_on_internet_bridge(
     assert result.exit_code == EXIT_SUCCESS
     assert bundle_called["value"] is True
     assert ssh_called["value"] is False
+    assert bundle_kwargs["force"] is False
+
+
+def test_sync_source_bundle_force_passes_hard_reset_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_sync_config(tmp_path)
+    bundle_kwargs: Dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+    _patch_common_git_helpers(monkeypatch)
+    monkeypatch.setattr(sync_cmd_module, "load_tunnel_config", make_tunnel_config)
+    monkeypatch.setattr(sync_cmd_module, "is_tunnel_available", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        sync_cmd_module,
+        "sync_via_ssh_bundle",
+        lambda *args, **kwargs: bundle_kwargs.update(kwargs)
+        or {"success": True, "synced_sha": "a" * 40, "error": None},
+    )
+    monkeypatch.setattr(
+        sync_cmd_module,
+        "sync_via_ssh",
+        lambda *args, **kwargs: {"success": False, "synced_sha": None, "error": "should not run"},
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["sync", "--no-push", "--source", "bundle", "--force"])
+
+    assert result.exit_code == EXIT_SUCCESS
+    assert bundle_kwargs["force"] is True
 
 
 def test_sync_resolves_commit_and_message_from_selected_branch(
@@ -488,6 +556,81 @@ def test_sync_push_mode_best_effort_continues_on_remote(
     assert ssh_called["value"] is True
 
 
+def test_sync_force_defaults_to_best_effort_push_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_sync_config(tmp_path)
+    ssh_called = {"value": False}
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+    _patch_common_git_helpers(monkeypatch)
+    monkeypatch.setattr(sync_cmd_module, "load_tunnel_config", make_tunnel_config)
+    monkeypatch.setattr(sync_cmd_module, "is_tunnel_available", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        sync_cmd_module,
+        "push_to_remote",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            sync_cmd_module.click.ClickException("push failed")
+        ),
+    )
+    monkeypatch.setattr(
+        sync_cmd_module,
+        "sync_via_ssh",
+        lambda *args, **kwargs: ssh_called.update(value=True)
+        or {"success": True, "synced_sha": "a" * 40, "error": None},
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["sync", "--source", "remote", "--force"])
+
+    assert result.exit_code == EXIT_SUCCESS
+    assert "best-effort" in result.output
+    assert ssh_called["value"] is True
+
+
+def test_sync_force_respects_explicit_push_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_sync_config(tmp_path)
+    ssh_called = {"value": False}
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+    _patch_common_git_helpers(monkeypatch)
+    monkeypatch.setattr(sync_cmd_module, "load_tunnel_config", make_tunnel_config)
+    monkeypatch.setattr(sync_cmd_module, "is_tunnel_available", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        sync_cmd_module,
+        "push_to_remote",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            sync_cmd_module.click.ClickException("push failed")
+        ),
+    )
+    monkeypatch.setattr(
+        sync_cmd_module,
+        "sync_via_ssh",
+        lambda *args, **kwargs: ssh_called.update(value=True)
+        or {"success": True, "synced_sha": "a" * 40, "error": None},
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_main,
+        ["sync", "--source", "remote", "--force", "--push-mode", "required"],
+    )
+
+    assert result.exit_code == EXIT_GENERAL_ERROR
+    assert "push failed" in result.output
+    assert ssh_called["value"] is False
+
+
 def test_sync_no_push_conflicts_with_non_skip_push_mode(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -535,6 +678,7 @@ def test_sync_fails_on_dirty_tree_without_allow_dirty(
     assert push_called["value"] is False
     assert "Uncommitted changes detected" in result.output
     assert "--allow-dirty" in result.output
+    assert "Use --force only" in result.output
 
 
 def test_sync_allow_dirty_continues_with_committed_head(
@@ -569,6 +713,41 @@ def test_sync_allow_dirty_continues_with_committed_head(
     assert result.exit_code == EXIT_SUCCESS
     assert captured["commit_sha"] == "a" * 40
     assert "syncing committed tip of 'main' only" in result.output
+
+
+def test_sync_force_allows_dirty_tree_with_committed_head(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_sync_config(tmp_path)
+    captured: Dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+    monkeypatch.setattr(sync_cmd_module, "get_current_branch", lambda: "main")
+    monkeypatch.setattr(sync_cmd_module, "get_current_commit_sha", lambda revision="HEAD": "a" * 40)
+    monkeypatch.setattr(
+        sync_cmd_module, "get_commit_message", lambda revision="HEAD": "test commit"
+    )
+    monkeypatch.setattr(sync_cmd_module, "has_uncommitted_changes", lambda: True)
+    monkeypatch.setattr(sync_cmd_module, "load_tunnel_config", make_tunnel_config)
+    monkeypatch.setattr(sync_cmd_module, "is_tunnel_available", lambda *args, **kwargs: True)
+
+    def fake_sync_via_ssh(*args: Any, **kwargs: Any) -> dict:
+        captured.update(kwargs)
+        return {"success": True, "synced_sha": "a" * 40, "error": None}
+
+    monkeypatch.setattr(sync_cmd_module, "sync_via_ssh", fake_sync_via_ssh)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["sync", "--no-push", "--force"])
+
+    assert result.exit_code == EXIT_SUCCESS
+    assert captured["commit_sha"] == "a" * 40
+    assert captured["force"] is True
+    assert "syncing committed tip of 'main' only (--force)" in result.output
 
 
 def test_sync_failure_summarizes_divergence_and_filters_locale_noise(
