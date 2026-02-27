@@ -33,6 +33,8 @@ def test_build_commands_uses_explicit_runtime_config(monkeypatch: pytest.MonkeyP
     assert "https://project.example/rtunnel.tgz" in joined
     assert "/env/rtunnel" not in joined
     assert "/env/sshd" not in joined
+    # With sshd_deb_dir set, dpkg -i should be used for .deb installation
+    assert "dpkg -i" in joined
 
 
 def test_dropbear_without_setup_script_uses_dpkg() -> None:
@@ -55,6 +57,8 @@ def test_dropbear_without_setup_script_uses_dpkg() -> None:
     assert "DROPBEAR_DEB_DIR=" in joined
     # Should contain dpkg -i fallback for raw .deb packages
     assert "dpkg -i" in joined
+    # Should download rtunnel binary (ensure_rtunnel_cmd)
+    assert "curl -fsSL" in joined
     # Should NOT contain SETUP_SCRIPT (no external script)
     assert "SETUP_SCRIPT=" not in joined
 
@@ -86,6 +90,8 @@ def test_dropbear_apt_mirror_fallback() -> None:
     assert "lsb_release" in joined
     # Existing sources moved aside to avoid timeout on unreachable mirrors
     assert "sources.list.bak" in joined
+    # Dropbear launch should be guarded by host key existence
+    assert "[ -f /tmp/dropbear_ed25519_host_key ]" in joined
 
 
 def test_apt_mirror_only_without_dropbear_deb_dir() -> None:
@@ -164,3 +170,67 @@ def test_non_dropbear_uses_bootstrap_sentinel_and_start_only_commands() -> None:
     assert 'pkill -f "rtunnel.*:$PORT"' not in joined
     assert 'grep -q "[s]shd -p ' in joined
     assert 'grep -Eq "[r]tunnel .*([[:space:]]|:)$PORT([[:space:]]|$)"' in joined
+
+
+# ---------------------------------------------------------------------------
+# contents_api_filename parameter
+# ---------------------------------------------------------------------------
+
+
+def test_contents_api_filename_inserts_move_command() -> None:
+    runtime = SshRuntimeConfig()
+    commands = build_rtunnel_setup_commands(
+        port=31337,
+        ssh_port=22222,
+        ssh_public_key=None,
+        ssh_runtime=runtime,
+        contents_api_filename=".inspire_rtunnel_bin",
+    )
+    joined = "\n".join(commands)
+
+    assert ".inspire_rtunnel_bin" in joined
+    assert 'mv "$HOME"/' in joined
+    assert "chmod +x /tmp/rtunnel" in joined
+    assert "[ ! -x /tmp/rtunnel ]" in joined
+
+
+def test_contents_api_filename_none_has_no_move_command() -> None:
+    runtime = SshRuntimeConfig()
+    commands = build_rtunnel_setup_commands(
+        port=31337,
+        ssh_port=22222,
+        ssh_public_key=None,
+        ssh_runtime=runtime,
+        contents_api_filename=None,
+    )
+    joined = "\n".join(commands)
+
+    assert ".inspire_rtunnel_bin" not in joined
+
+
+def test_contents_api_filename_does_not_override_rtunnel_bin_path() -> None:
+    runtime = SshRuntimeConfig(
+        rtunnel_bin="/project/rtunnel",
+    )
+    commands = build_rtunnel_setup_commands(
+        port=31337,
+        ssh_port=22222,
+        ssh_public_key=None,
+        ssh_runtime=runtime,
+        contents_api_filename=".inspire_rtunnel_bin",
+    )
+
+    # Find first indices of the RTUNNEL_BIN_PATH copy and the contents API move
+    bin_path_idx = None
+    contents_api_idx = None
+    for i, line in enumerate(commands):
+        if bin_path_idx is None and 'cp "$RTUNNEL_BIN_PATH" /tmp/rtunnel' in line:
+            bin_path_idx = i
+        if contents_api_idx is None and ".inspire_rtunnel_bin" in line and "mv" in line:
+            contents_api_idx = i
+
+    assert bin_path_idx is not None, "RTUNNEL_BIN_PATH copy line not found"
+    assert contents_api_idx is not None, "Contents API move line not found"
+    assert (
+        bin_path_idx < contents_api_idx
+    ), "RTUNNEL_BIN_PATH copy must come before contents API move"

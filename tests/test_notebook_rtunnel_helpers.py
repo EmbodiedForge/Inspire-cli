@@ -3,22 +3,26 @@
 from __future__ import annotations
 
 import base64
+from pathlib import Path
 
 import pytest
 
 from inspire.platform.web.browser_api import rtunnel as rtunnel_module
 from inspire.platform.web.browser_api.rtunnel import (
+    _CONTENTS_API_RTUNNEL_FILENAME,
     _StepTimer,
     _build_batch_setup_script,
     _build_terminal_websocket_url,
     _create_terminal_via_api,
     _delete_terminal_via_api,
+    _download_rtunnel_locally,
     _extract_jupyter_token,
     _focus_terminal_input,
     _jupyter_server_base,
     _open_or_create_terminal,
     _send_setup_command_via_terminal_ws,
     _send_terminal_command_via_websocket,
+    _upload_rtunnel_via_contents_api,
     _verify_terminal_focus,
     _wait_for_setup_completion,
     _wait_for_terminal_surface,
@@ -1002,3 +1006,189 @@ def test_step_timer_summary_empty_when_no_steps(
     captured = capsys.readouterr()
     assert captured.err == ""
     assert captured.out == ""
+
+
+# ---------------------------------------------------------------------------
+# _upload_rtunnel_via_contents_api
+# ---------------------------------------------------------------------------
+
+
+class _DummyUploadResponse:
+    def __init__(self, status: int) -> None:
+        self.status = status
+
+
+class _DummyUploadRequest:
+    def __init__(self, response: _DummyUploadResponse) -> None:
+        self._response = response
+        self.calls: list[tuple[str, dict | None, dict | None, int]] = []
+
+    def put(
+        self,
+        url: str,
+        headers: dict | None = None,
+        data: dict | None = None,
+        timeout: int = 0,
+    ) -> _DummyUploadResponse:
+        self.calls.append((url, headers, data, timeout))
+        return self._response
+
+
+class _DummyUploadContext:
+    def __init__(self, request: _DummyUploadRequest) -> None:
+        self.request = request
+
+    def cookies(self) -> list[dict]:
+        return []
+
+
+def test_upload_rtunnel_via_contents_api_success(tmp_path: Path) -> None:
+    binary = tmp_path / "rtunnel"
+    binary.write_bytes(b"\x7fELF_test_binary")
+
+    resp = _DummyUploadResponse(201)
+    req = _DummyUploadRequest(resp)
+    ctx = _DummyUploadContext(req)
+
+    result = _upload_rtunnel_via_contents_api(ctx, "https://nb.example.com/lab", binary)
+    assert result is True
+    assert len(req.calls) == 1
+
+    url, _headers, data, timeout = req.calls[0]
+    assert url == f"https://nb.example.com/api/contents/{_CONTENTS_API_RTUNNEL_FILENAME}"
+    assert data["type"] == "file"
+    assert data["format"] == "base64"
+    # Verify the payload round-trips
+    import base64 as _b64
+
+    assert _b64.b64decode(data["content"]) == b"\x7fELF_test_binary"
+    assert timeout == 30000
+
+
+def test_upload_rtunnel_via_contents_api_failure_status(tmp_path: Path) -> None:
+    binary = tmp_path / "rtunnel"
+    binary.write_bytes(b"\x7fELF")
+
+    resp = _DummyUploadResponse(500)
+    req = _DummyUploadRequest(resp)
+    ctx = _DummyUploadContext(req)
+
+    result = _upload_rtunnel_via_contents_api(ctx, "https://nb.example.com/lab", binary)
+    assert result is False
+
+
+def test_upload_rtunnel_via_contents_api_missing_binary() -> None:
+    resp = _DummyUploadResponse(201)
+    req = _DummyUploadRequest(resp)
+    ctx = _DummyUploadContext(req)
+
+    result = _upload_rtunnel_via_contents_api(
+        ctx, "https://nb.example.com/lab", Path("/nonexistent/rtunnel")
+    )
+    assert result is False
+    assert len(req.calls) == 0
+
+
+def test_upload_rtunnel_via_contents_api_network_error(tmp_path: Path) -> None:
+    binary = tmp_path / "rtunnel"
+    binary.write_bytes(b"\x7fELF")
+
+    class _BrokenUploadRequest:
+        def put(self, url: str, **kwargs: object) -> None:
+            raise ConnectionError("network failure")
+
+    ctx = _DummyUploadContext(_BrokenUploadRequest())  # type: ignore[arg-type]
+
+    result = _upload_rtunnel_via_contents_api(ctx, "https://nb.example.com/lab", binary)
+    assert result is False
+
+
+# ---------------------------------------------------------------------------
+# _download_rtunnel_locally
+# ---------------------------------------------------------------------------
+
+
+def test_download_rtunnel_locally_success(tmp_path: Path) -> None:
+    import tarfile
+
+    # Build a valid .tar.gz containing a file named "rtunnel"
+    binary_content = b"\x7fELF_fake_rtunnel"
+    tar_path = tmp_path / "rtunnel.tar.gz"
+    member_path = tmp_path / "rtunnel"
+    member_path.write_bytes(binary_content)
+    with tarfile.open(str(tar_path), "w:gz") as tar:
+        tar.add(str(member_path), arcname="rtunnel")
+
+    dest = tmp_path / "output" / "rtunnel"
+
+    import shutil
+    import urllib.request
+
+    original_urlretrieve = urllib.request.urlretrieve
+
+    def fake_urlretrieve(url: str, filename: str) -> tuple:
+        shutil.copy2(str(tar_path), filename)
+        return (filename, None)
+
+    urllib.request.urlretrieve = fake_urlretrieve  # type: ignore[assignment]
+    try:
+        result = _download_rtunnel_locally("https://example.com/rtunnel.tar.gz", dest)
+    finally:
+        urllib.request.urlretrieve = original_urlretrieve  # type: ignore[assignment]
+
+    assert result is True
+    assert dest.exists()
+    assert dest.read_bytes() == binary_content
+    assert dest.stat().st_mode & 0o755
+
+
+def test_download_rtunnel_locally_network_error(tmp_path: Path) -> None:
+    import urllib.error
+    import urllib.request
+
+    dest = tmp_path / "rtunnel"
+
+    original_urlretrieve = urllib.request.urlretrieve
+
+    def broken_urlretrieve(url: str, filename: str) -> None:
+        raise urllib.error.URLError("network failure")
+
+    urllib.request.urlretrieve = broken_urlretrieve  # type: ignore[assignment]
+    try:
+        result = _download_rtunnel_locally("https://example.com/rtunnel.tar.gz", dest)
+    finally:
+        urllib.request.urlretrieve = original_urlretrieve  # type: ignore[assignment]
+
+    assert result is False
+    assert not dest.exists()
+
+
+def test_download_rtunnel_locally_no_rtunnel_in_archive(tmp_path: Path) -> None:
+    import tarfile
+
+    # Build a .tar.gz with no file named "rtunnel"
+    tar_path = tmp_path / "bad.tar.gz"
+    other_file = tmp_path / "other.txt"
+    other_file.write_text("not rtunnel")
+    with tarfile.open(str(tar_path), "w:gz") as tar:
+        tar.add(str(other_file), arcname="other.txt")
+
+    dest = tmp_path / "output" / "rtunnel"
+
+    import shutil
+    import urllib.request
+
+    original_urlretrieve = urllib.request.urlretrieve
+
+    def fake_urlretrieve(url: str, filename: str) -> tuple:
+        shutil.copy2(str(tar_path), filename)
+        return (filename, None)
+
+    urllib.request.urlretrieve = fake_urlretrieve  # type: ignore[assignment]
+    try:
+        result = _download_rtunnel_locally("https://example.com/rtunnel.tar.gz", dest)
+    finally:
+        urllib.request.urlretrieve = original_urlretrieve  # type: ignore[assignment]
+
+    assert result is False
+    assert not dest.exists()
