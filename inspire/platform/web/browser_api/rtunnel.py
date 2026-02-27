@@ -922,24 +922,35 @@ def _send_terminal_command_via_websocket(
 
                     const timer = setTimeout(() => finish(false), timeoutMs);
 
+                    const CHUNK = 2048;
+                    const DELAY = 50;
                     const doSend = () => {
                       if (sent || settled) return;
                       sent = true;
-                      try {
-                        socket.send(JSON.stringify(["stdin", stdinData]));
-                      } catch (_) {
-                        clearTimeout(timer);
-                        finish(false);
-                        return;
-                      }
-                      if (!marker) {
-                        setTimeout(() => {
+                      const chunks = [];
+                      for (let i = 0; i < stdinData.length; i += CHUNK)
+                        chunks.push(stdinData.slice(i, i + CHUNK));
+                      let idx = 0;
+                      const next = () => {
+                        if (settled) return;
+                        try {
+                          socket.send(JSON.stringify(["stdin", chunks[idx]]));
+                        } catch (_) {
                           clearTimeout(timer);
-                          finish(true);
-                        }, 180);
-                      }
-                      // When marker is set, we keep listening for it
-                      // in the message handler below.
+                          finish(false);
+                          return;
+                        }
+                        idx++;
+                        if (idx < chunks.length) {
+                          setTimeout(next, DELAY);
+                        } else if (!marker) {
+                          setTimeout(() => {
+                            clearTimeout(timer);
+                            finish(true);
+                          }, 180);
+                        }
+                      };
+                      next();
                     };
 
                     try {
@@ -950,13 +961,19 @@ def _send_terminal_command_via_websocket(
                       return;
                     }
 
+                    let stdoutBuf = "";
+                    const promptRe = /[$#]\\s*$/;
                     socket.addEventListener("message", (ev) => {
                       try {
                         const msg = JSON.parse(ev.data);
                         if (Array.isArray(msg) && msg[0] === "stdout") {
+                          const text = String(msg[1]);
                           if (!sent) {
-                            doSend();
-                          } else if (marker && String(msg[1]).includes(marker)) {
+                            stdoutBuf += text;
+                            if (promptRe.test(stdoutBuf)) {
+                              doSend();
+                            }
+                          } else if (marker && text.includes(marker)) {
                             clearTimeout(timer);
                             finish(true);
                           }
@@ -965,9 +982,8 @@ def _send_terminal_command_via_websocket(
                     });
 
                     socket.addEventListener("open", () => {
-                      // Wait for a stdout message (shell prompt) before
-                      // sending.  Fall back after promptTimeoutMs in case
-                      // the shell never emits a visible prompt.
+                      // Fall back after promptTimeoutMs in case
+                      // the shell never emits a recognisable prompt.
                       setTimeout(() => doSend(), promptTimeoutMs);
                     });
 
@@ -976,7 +992,7 @@ def _send_terminal_command_via_websocket(
                       finish(false);
                     });
 
-                    socket.addEventListener("close", () => {
+                    socket.addEventListener("close", (ev) => {
                       if (!settled) {
                         clearTimeout(timer);
                         finish(false);
