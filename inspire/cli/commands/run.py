@@ -274,6 +274,7 @@ def _run_flow(
                 priority=priority,
                 nodes=nodes,
                 max_time_hours=max_time,
+                project_name=selected_project.name,
             )
         except ValueError as e:
             _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)

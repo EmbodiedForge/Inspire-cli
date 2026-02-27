@@ -69,6 +69,7 @@ class JobCache:
         command: str,
         status: str = "PENDING",
         log_path: Optional[str] = None,
+        project: Optional[str] = None,
     ) -> None:
         """Add a newly created job to the cache.
 
@@ -78,6 +79,7 @@ class JobCache:
             resource: Resource specification used
             command: Start command
             status: Initial status (default: PENDING)
+            project: Project name used for submission
         """
         jobs = self._load()
         jobs[job_id] = {
@@ -90,6 +92,8 @@ class JobCache:
         }
         if log_path is not None:
             jobs[job_id]["log_path"] = log_path
+        if project is not None:
+            jobs[job_id]["project"] = project
         self._save(jobs)
 
     def update_status(self, job_id: str, status: str) -> None:

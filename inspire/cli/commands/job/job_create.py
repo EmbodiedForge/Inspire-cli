@@ -166,6 +166,7 @@ def run_job_create(
                 priority=priority,
                 nodes=nodes,
                 max_time_hours=max_time,
+                project_name=selected.name,
             )
         except ValueError as e:
             _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)

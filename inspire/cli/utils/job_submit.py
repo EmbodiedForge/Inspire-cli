@@ -107,6 +107,7 @@ def cache_created_job(
     resource: str,
     command: str,
     log_path: str | None,
+    project: str | None = None,
 ) -> None:
     cache = JobCache(config.get_expanded_cache_path())
     cache.add_job(
@@ -116,6 +117,7 @@ def cache_created_job(
         command=command,
         status="PENDING",
         log_path=log_path,
+        project=project,
     )
 
 
@@ -134,6 +136,7 @@ def submit_training_job(
     priority: int,
     nodes: int,
     max_time_hours: float,
+    project_name: Optional[str] = None,
 ) -> JobSubmission:
     wrapped_command = wrap_in_bash(command)
     final_command, log_path = build_remote_logged_command(config, command=wrapped_command)
@@ -174,6 +177,7 @@ def submit_training_job(
             resource=resource,
             command=wrapped_command,
             log_path=log_path,
+            project=project_name,
         )
 
     return JobSubmission(
