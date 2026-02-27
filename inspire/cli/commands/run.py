@@ -252,9 +252,9 @@ def _run_flow(
             return
         project_id = selected_project.project_id
 
+        if not ctx.json_output and fallback_msg:
+            click.echo(fallback_msg)
         if ctx.debug and not ctx.json_output:
-            if fallback_msg:
-                click.echo(fallback_msg)
             click.echo(
                 f"Using project: {selected_project.name}{selected_project.get_quota_status()}"
             )

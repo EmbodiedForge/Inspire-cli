@@ -228,12 +228,14 @@ def test_resolve_notebook_project_passes_quota_and_shared_path_settings(monkeypa
         shared_path_group_by_id=None,
         needs_gpu_quota=True,
         project_order=None,
+        congested_projects=None,
     ):
         called["requested"] = requested_value
         called["allow_requested_over_quota"] = allow_requested_over_quota
         called["shared_path_group_by_id"] = shared_path_group_by_id
         called["needs_gpu_quota"] = needs_gpu_quota
         called["project_order"] = project_order
+        called["congested_projects"] = congested_projects
         return requested, None
 
     monkeypatch.setattr(
@@ -355,3 +357,125 @@ def test_project_order_does_not_affect_explicit_request() -> None:
 
     selected, _ = select_project([a, b], requested="p-a", project_order=["Beta"])
     assert selected.project_id == "p-a"
+
+
+# ---------------------------------------------------------------------------
+# Congested projects: scheduling health-aware selection
+# ---------------------------------------------------------------------------
+
+
+def test_congested_project_strictly_filtered() -> None:
+    """Auto-select skips congested project even if first in project_order."""
+    first = _project("p-first", "First", priority_name="10")
+    second = _project("p-second", "Second", priority_name="4")
+
+    # Without congestion: first wins (higher priority)
+    selected, _ = select_project(
+        [first, second],
+        project_order=["First", "Second"],
+    )
+    assert selected.project_id == "p-first"
+
+    # With congestion on first: second is selected
+    selected, _ = select_project(
+        [first, second],
+        project_order=["First", "Second"],
+        congested_projects={"p-first"},
+    )
+    assert selected.project_id == "p-second"
+
+
+def test_congested_project_explicit_still_selected_with_warning() -> None:
+    """Explicit --project still selects congested project but returns warning."""
+    proj = _project("p-congested", "Congested", priority_name="10")
+    other = _project("p-other", "Other", priority_name="4")
+
+    selected, msg = select_project(
+        [proj, other],
+        requested="p-congested",
+        congested_projects={"p-congested"},
+    )
+    assert selected.project_id == "p-congested"
+    assert msg is not None
+    assert "Unschedulable" in msg
+    assert "Congested" in msg
+
+
+def test_no_congestion_data_uses_default_sort() -> None:
+    """congested_projects=None doesn't change behavior."""
+    high = _project("p-high", "HighPri", priority_name="10")
+    low = _project("p-low", "LowPri", priority_name="2")
+
+    selected, _ = select_project(
+        [high, low],
+        congested_projects=None,
+    )
+    assert selected.project_id == "p-high"
+
+
+def test_all_projects_congested_falls_back() -> None:
+    """When all projects are congested, still selects (no raise), uses normal sort."""
+    high = _project("p-high", "HighPri", priority_name="10")
+    low = _project("p-low", "LowPri", priority_name="2")
+
+    selected, _ = select_project(
+        [high, low],
+        congested_projects={"p-high", "p-low"},
+    )
+    # Falls back to full list, high priority wins
+    assert selected.project_id == "p-high"
+
+
+def test_cpu_notebook_skips_health_check(monkeypatch) -> None:
+    """CPU notebook (needs_gpu_quota=False) path doesn't trigger congestion logic."""
+    proj = _project("p-a", "Alpha", priority_name="10")
+    called: dict[str, object] = {}
+
+    def fake_select_project(
+        projects,
+        requested_value=None,
+        *,
+        allow_requested_over_quota=False,
+        shared_path_group_by_id=None,
+        needs_gpu_quota=True,
+        project_order=None,
+        congested_projects=None,
+    ):
+        called["congested_projects"] = congested_projects
+        return proj, None
+
+    health_check_called = False
+
+    def fake_check_scheduling_health(workspace_id, project_ids, session):
+        nonlocal health_check_called
+        health_check_called = True
+        return {"p-a"}
+
+    monkeypatch.setattr(
+        notebook_create_flow.browser_api_module,
+        "select_project",
+        fake_select_project,
+    )
+    monkeypatch.setattr(
+        notebook_create_flow.browser_api_module,
+        "check_scheduling_health",
+        fake_check_scheduling_health,
+    )
+
+    config = Config(username="user", password="pass")
+
+    resolved = notebook_create_flow.resolve_notebook_project(
+        notebook_create_flow.Context(),
+        projects=[proj],
+        config=config,
+        project=None,
+        allow_requested_over_quota=False,
+        needs_gpu_quota=False,
+        json_output=True,
+        workspace_id="ws-test",
+        session=object(),
+    )
+
+    assert resolved is proj
+    assert not health_check_called
+    assert called["congested_projects"] is None

@@ -16,6 +16,7 @@ __all__ = [
     "JobInfo",
     "get_current_user",
     "get_train_job_workdir",
+    "list_job_events",
     "list_job_users",
     "list_jobs",
 ]
@@ -33,6 +34,7 @@ class JobInfo:
     finished_at: Optional[str]
     created_by_name: str
     created_by_id: str
+    project_id: str
     project_name: str
     compute_group_name: str
     gpu_type: str
@@ -55,6 +57,7 @@ class JobInfo:
             finished_at=data.get("finished_at"),
             created_by_name=data.get("created_by", {}).get("name", ""),
             created_by_id=data.get("created_by", {}).get("id", ""),
+            project_id=data.get("project_id", ""),
             project_name=data.get("project_name", ""),
             compute_group_name=data.get("logic_compute_group_name", ""),
             gpu_type=gpu_info.get("gpu_type_display", ""),
@@ -185,3 +188,32 @@ def get_train_job_workdir(
         return value or None
 
     return None
+
+
+def list_job_events(
+    job_id: str,
+    session: Optional[WebSession] = None,
+) -> list[dict]:
+    """List K8s events for a training job. Best-effort: returns [] on any error."""
+    try:
+        if session is None:
+            session = get_web_session()
+
+        data = _request_json(
+            session,
+            "POST",
+            _browser_api_path("/train_job/job_event_list"),
+            referer=f"{_get_base_url()}/jobs/distributedTraining",
+            body={"job_id": job_id},
+            timeout=30,
+        )
+
+        if data.get("code") != 0:
+            return []
+
+        events = data.get("data", {}).get("events", [])
+        if not isinstance(events, list):
+            return []
+        return events
+    except Exception:
+        return []

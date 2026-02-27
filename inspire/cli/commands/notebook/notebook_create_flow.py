@@ -477,6 +477,8 @@ def resolve_notebook_project(
     allow_requested_over_quota: bool,
     needs_gpu_quota: bool,
     json_output: bool,
+    workspace_id: str | None = None,
+    session: WebSession | None = None,
 ) -> object | None:
     project_value = project
     if project_value and not project_value.startswith("project-"):
@@ -490,6 +492,17 @@ def resolve_notebook_project(
         if not isinstance(shared_groups, dict) or not shared_groups:
             shared_groups = None
 
+        congested: set[str] | None = None
+        if needs_gpu_quota and workspace_id and session:
+            congested = (
+                browser_api_module.check_scheduling_health(
+                    workspace_id=workspace_id,
+                    project_ids={p.project_id for p in projects},
+                    session=session,
+                )
+                or None
+            )
+
         selected_project, fallback_msg = browser_api_module.select_project(
             projects,
             project_value,
@@ -497,6 +510,7 @@ def resolve_notebook_project(
             shared_path_group_by_id=shared_groups,
             needs_gpu_quota=needs_gpu_quota,
             project_order=config.project_order or None,
+            congested_projects=congested,
         )
 
         if not json_output:
@@ -1109,6 +1123,8 @@ def run_notebook_create(
         allow_requested_over_quota=False,
         needs_gpu_quota=(gpu_count > 0),
         json_output=json_output,
+        workspace_id=workspace_id,
+        session=session,
     )
     if not selected_project:
         return

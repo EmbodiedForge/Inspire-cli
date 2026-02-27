@@ -70,6 +70,12 @@ def select_project_for_workspace(
     if not projects:
         raise ConfigError("No projects available")
 
+    congested = browser_api_module.check_scheduling_health(
+        workspace_id=workspace_id,
+        project_ids={p.project_id for p in projects},
+        session=session,
+    )
+
     requested_value = requested
     if not requested_value and not config.project_order:
         requested_value = config.job_project_id
@@ -89,6 +95,7 @@ def select_project_for_workspace(
         requested_value,
         shared_path_group_by_id=shared_groups,
         project_order=config.project_order or None,
+        congested_projects=congested or None,
     )
 
 

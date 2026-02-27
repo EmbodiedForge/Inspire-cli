@@ -18,6 +18,7 @@ from .jobs import (
     JobInfo,
     get_current_user,
     get_train_job_workdir,
+    list_job_events,
     list_job_users,
     list_jobs,
 )
@@ -48,6 +49,7 @@ from .images import (
 from .rtunnel import setup_notebook_rtunnel
 from .projects import (
     ProjectInfo,
+    check_scheduling_health,
     list_projects,
     select_project,
 )
@@ -57,6 +59,7 @@ __all__ = [
     "JobInfo",
     "get_current_user",
     "get_train_job_workdir",
+    "list_job_events",
     "list_job_users",
     "list_jobs",
     # Availability
@@ -68,6 +71,7 @@ __all__ = [
     "list_compute_groups",
     # Projects
     "ProjectInfo",
+    "check_scheduling_health",
     "list_projects",
     "select_project",
     # Images

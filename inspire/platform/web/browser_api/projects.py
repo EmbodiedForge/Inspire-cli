@@ -11,10 +11,12 @@ from dataclasses import dataclass
 from typing import Optional
 
 from inspire.platform.web.browser_api.core import _browser_api_path, _get_base_url, _request_json
+from inspire.platform.web.browser_api.jobs import list_job_events, list_jobs
 from inspire.platform.web.session import DEFAULT_WORKSPACE_ID, WebSession, get_web_session
 
 __all__ = [
     "ProjectInfo",
+    "check_scheduling_health",
     "list_projects",
     "select_project",
 ]
@@ -129,6 +131,44 @@ def list_projects(
     ]
 
 
+def check_scheduling_health(
+    workspace_id: str,
+    project_ids: set[str],
+    session: WebSession,
+) -> set[str]:
+    """Return project_ids that have Unschedulable queuing jobs.
+
+    Fully best-effort: returns empty set on any API failure.
+    """
+    try:
+        jobs, _ = list_jobs(
+            workspace_id=workspace_id,
+            status="job_queuing",
+            page_size=50,
+            session=session,
+        )
+    except Exception:
+        return set()
+
+    # Group queuing jobs by project_id, keeping only projects we care about.
+    project_jobs: dict[str, list[str]] = {}
+    for job in jobs:
+        pid = job.project_id
+        if pid in project_ids:
+            project_jobs.setdefault(pid, []).append(job.job_id)
+
+    congested: set[str] = set()
+    for pid, job_ids in project_jobs.items():
+        try:
+            events = list_job_events(job_ids[0], session=session)
+            if any(e.get("reason") == "Unschedulable" for e in events):
+                congested.add(pid)
+        except Exception:
+            continue
+
+    return congested
+
+
 def select_project(
     projects: list[ProjectInfo],
     requested: Optional[str] = None,
@@ -137,15 +177,17 @@ def select_project(
     shared_path_group_by_id: dict[str, str] | None = None,
     needs_gpu_quota: bool = True,
     project_order: list[str] | None = None,
+    congested_projects: set[str] | None = None,
 ) -> tuple[ProjectInfo, Optional[str]]:
     """Select a project, with auto-fallback if over quota.
 
     Sorting priority (when auto-selecting):
       - GPU workloads (``needs_gpu_quota=True``):
-        1. ``project_order`` — user-defined preference ranking
-        2. ``gpu_unlimited`` — prefer uncapped projects (tiebreaker)
-        3. ``priority_name`` — higher numeric priority first
-        4. alphabetical name
+        1. ``congested_projects`` — strictly filter out projects with Unschedulable jobs
+        2. ``project_order`` — user-defined preference ranking
+        3. ``gpu_unlimited`` — prefer uncapped projects (tiebreaker)
+        4. ``priority_name`` — higher numeric priority first
+        5. alphabetical name
       - CPU workloads (``needs_gpu_quota=False``):
         1. ``project_order`` — user-defined preference ranking
         2. ``priority_name`` — higher numeric priority first
@@ -222,7 +264,13 @@ def select_project(
             raise ValueError(f"Project '{requested}' not found")
 
         if target.has_quota(needs_gpu=needs_gpu_quota):
-            return (target, None)
+            msg = None
+            if congested_projects and target.project_id in congested_projects:
+                msg = (
+                    f"Warning: project '{target.name}' has jobs stuck as Unschedulable "
+                    "— GPUs may not be available."
+                )
+            return (target, msg)
 
         if allow_requested_over_quota:
             proceed_msg = (
@@ -279,7 +327,13 @@ def select_project(
             fallback_msg = fallback_msg + group_note
         return (fallback, fallback_msg)
 
-    selected = _best_by_quota(_quota_candidates(projects))
+    candidates = _quota_candidates(projects)
+    if congested_projects:
+        healthy = [p for p in candidates if p.project_id not in congested_projects]
+        if healthy:
+            candidates = healthy
+
+    selected = _best_by_quota(candidates)
     if selected is None:
         raise ValueError("All projects are over quota\n" + _format_candidates(projects))
 
