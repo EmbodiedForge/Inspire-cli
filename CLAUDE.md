@@ -97,6 +97,21 @@ git checkout main && git branch -D public-sync
 
 **Why file copy instead of merge?** Histories are forever unrelated (orphan commit on github-public). `git merge --squash` causes conflicts every time. The `git rm -r .` step is critical — without it, files deleted/renamed in main survive on github-public and shadow correct files.
 
+### Lightweight Sync (small changes, no file renames/deletions)
+
+When only a few files changed and no files were renamed or deleted, skip the full wipe-and-copy. Checkout just the changed files:
+
+```bash
+git fetch github-public
+git checkout -b public-sync github-public/main
+git checkout main -- path/to/file1 path/to/file2   # only changed files
+git commit -m "fix: description"
+git push github-public public-sync:main
+git checkout main && git branch -D public-sync
+```
+
+**When to use:** Small patches, bug fixes, or changes to existing files only. **Do NOT use** when files were deleted, renamed, or when private-only files may leak — use the full sync for those.
+
 ### Security Rules
 
 1. **Never** push regular commits to `github-public`

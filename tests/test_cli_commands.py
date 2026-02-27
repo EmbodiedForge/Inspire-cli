@@ -690,11 +690,13 @@ def test_job_logs_path_and_tail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     from importlib import import_module
 
     job_deps = import_module("inspire.cli.commands.job.job_deps")
+    job_logs_module = import_module("inspire.cli.commands.job.job_logs")
 
     def fake_fetch(config, job_id, remote_log_path, cache_path, refresh):  # noqa: ARG001
         pass  # Log already exists locally
 
     monkeypatch.setattr(job_deps, "fetch_remote_log_via_bridge", fake_fetch)
+    monkeypatch.setattr(job_logs_module, "is_tunnel_available", lambda *args, **kwargs: False)
 
     runner = CliRunner()
 
@@ -738,11 +740,13 @@ def test_job_logs_json_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     from importlib import import_module
 
     job_deps = import_module("inspire.cli.commands.job.job_deps")
+    job_logs_module = import_module("inspire.cli.commands.job.job_logs")
 
     def fake_fetch(config, job_id, remote_log_path, cache_path, refresh):  # noqa: ARG001
         pass
 
     monkeypatch.setattr(job_deps, "fetch_remote_log_via_bridge", fake_fetch)
+    monkeypatch.setattr(job_logs_module, "is_tunnel_available", lambda *args, **kwargs: False)
 
     runner = CliRunner()
     result = runner.invoke(cli_main, ["--json", "job", "logs", TEST_JOB_ID])
@@ -780,11 +784,13 @@ def test_job_logs_legacy_filename_is_migrated(monkeypatch: pytest.MonkeyPatch, t
     from importlib import import_module
 
     job_deps = import_module("inspire.cli.commands.job.job_deps")
+    job_logs_module = import_module("inspire.cli.commands.job.job_logs")
 
     def fail_fetch(*args, **kwargs):  # noqa: ARG001
         raise AssertionError("fetch should not be called when legacy cache exists")
 
     monkeypatch.setattr(job_deps, "fetch_remote_log_via_bridge", fail_fetch)
+    monkeypatch.setattr(job_logs_module, "is_tunnel_available", lambda *args, **kwargs: False)
 
     runner = CliRunner()
     result = runner.invoke(cli_main, ["job", "logs", TEST_JOB_ID, "--tail", "1"])
@@ -1450,7 +1456,7 @@ def test_notebook_start_accepts_name(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     )
 
     runner = CliRunner()
-    result = runner.invoke(cli_main, ["notebook", "start", "ring-8h100-test"])
+    result = runner.invoke(cli_main, ["notebook", "start", "ring-8h100-test", "--no-keepalive"])
 
     assert result.exit_code == EXIT_SUCCESS
     assert started["notebook_id"] == item["id"]
@@ -1556,7 +1562,11 @@ def test_notebook_start_name_conflict_prompts_selection(
     )
 
     runner = CliRunner()
-    result = runner.invoke(cli_main, ["notebook", "start", "ring-8h100-test"], input="2\n")
+    result = runner.invoke(
+        cli_main,
+        ["notebook", "start", "ring-8h100-test", "--no-keepalive"],
+        input="2\n",
+    )
 
     assert result.exit_code == EXIT_SUCCESS
     assert started["notebook_id"] == "nb-gpu"
