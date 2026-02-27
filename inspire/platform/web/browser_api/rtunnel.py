@@ -962,10 +962,6 @@ def _send_setup_command_via_terminal_ws(
         lab_frame,
         ws_url=ws_url,
         command=batch_cmd,
-        # The setup script ends with `echo INSPIRE_RTUNNEL_SETUP_DONE`.
-        # Wait for this marker so the caller knows the script finished
-        # (dpkg -i can take 5-10s on GPU notebooks, apt install 60-90s).
-        # Use a generous timeout; the overall setup_timeout guards against hangs.
         timeout_ms=120000,
         completion_marker="INSPIRE_RTUNNEL_SETUP_DONE",
     )
@@ -1127,20 +1123,51 @@ def _open_terminal_from_file_menu(
     return False
 
 
+def _verify_terminal_focus(lab_frame: Any) -> bool:
+    """Check that document.activeElement is the xterm textarea."""
+    try:
+        tag = lab_frame.evaluate("document.activeElement?.tagName?.toLowerCase()")
+        cls = lab_frame.evaluate("document.activeElement?.className || ''")
+        return tag == "textarea" and "xterm" in cls
+    except (PlaywrightError, TimeoutError, RuntimeError, AttributeError, ValueError, TypeError):
+        return False
+
+
 def _focus_terminal_input(
     lab_frame: Any,
     page: Any,
 ) -> bool:
-    for _ in range(_FOCUS_RETRY_PASSES):
-        for selector in _TERMINAL_INPUT_SELECTORS:
-            try:
-                term_focus = lab_frame.locator(selector).first
-                term_focus.wait_for(state="attached", timeout=_FOCUS_INPUT_WAIT_TIMEOUT_MS)
-                term_focus.click(timeout=_FOCUS_INPUT_CLICK_TIMEOUT_MS)
+    for pass_idx in range(_FOCUS_RETRY_PASSES):
+        # Try 1: Click the visible .xterm container (triggers xterm.js internal focus)
+        try:
+            xterm_el = lab_frame.locator(".xterm").first
+            if xterm_el.count() > 0:
+                xterm_el.click(timeout=_FOCUS_INPUT_CLICK_TIMEOUT_MS, force=True)
                 page.wait_for_timeout(40)
+                if _verify_terminal_focus(lab_frame):
+                    return True
+        except (PlaywrightError, TimeoutError, RuntimeError, AttributeError, ValueError):
+            pass
+
+        # Try 2: Atomic JS — dispatch mousedown on .xterm then focus textarea
+        try:
+            ok = lab_frame.evaluate(
+                """(() => {
+                    const xterm = document.querySelector('.xterm');
+                    if (xterm) {
+                        xterm.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+                        xterm.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
+                    }
+                    const el = document.querySelector('textarea.xterm-helper-textarea');
+                    if (!el) return false;
+                    el.focus();
+                    return document.activeElement === el;
+                })()"""
+            )
+            if ok:
                 return True
-            except (PlaywrightError, TimeoutError, RuntimeError, AttributeError, ValueError):
-                pass
+        except (PlaywrightError, TimeoutError, RuntimeError, AttributeError, ValueError, TypeError):
+            pass
 
         _click_terminal_tab(
             lab_frame,
@@ -1197,9 +1224,9 @@ def _open_terminal_via_rest_api(
         lab_frame.goto(term_url, timeout=15000, wait_until="domcontentloaded")
         if _wait_for_terminal_surface(lab_frame, timeout_ms=_FAST_API_XTERM_ATTACH_TIMEOUT_MS):
             return True, True
-    except (PlaywrightError, TimeoutError, RuntimeError, AttributeError, ValueError):
+    except (PlaywrightError, TimeoutError, RuntimeError, AttributeError, ValueError) as _nav_err:
         _log_terminal_status(
-            "  REST API terminal created but navigation failed, trying DOM fallbacks..."
+            f"  REST API terminal created but navigation failed ({type(_nav_err).__name__}: {str(_nav_err)[:150]}), trying DOM fallbacks..."
         )
         return False, True
 
@@ -1575,6 +1602,9 @@ def _send_rtunnel_setup_script(
         timer.mark("focus_xterm")
         timer.mark("build_and_send_cmd")
         return True
+
+    _sys.stderr.write("  WebSocket terminal setup unavailable, using browser automation.\n")
+    _sys.stderr.flush()
 
     if not _open_or_create_terminal(context, page, lab_frame):
         raise ValueError("Failed to open Jupyter terminal")

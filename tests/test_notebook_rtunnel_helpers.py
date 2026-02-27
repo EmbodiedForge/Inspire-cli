@@ -17,6 +17,7 @@ from inspire.platform.web.browser_api.rtunnel import (
     _jupyter_server_base,
     _open_or_create_terminal,
     _send_terminal_command_via_websocket,
+    _verify_terminal_focus,
     _wait_for_terminal_surface,
     _wait_for_terminal_surface_progressive,
 )
@@ -244,9 +245,11 @@ class _LocatorStub:
         *,
         count: int = 0,
         wait_ok: bool = False,
+        visible: bool = False,
     ) -> None:
         self._count = count
         self._wait_ok = wait_ok
+        self._visible = visible
         self.first = self
         self.wait_calls: list[tuple[str, int]] = []
         self.click_calls: list[int] = []
@@ -254,21 +257,37 @@ class _LocatorStub:
     def count(self) -> int:
         return self._count
 
+    def is_visible(self, timeout: int = 0) -> bool:
+        return self._visible
+
     def wait_for(self, *, state: str, timeout: int) -> None:
         self.wait_calls.append((state, timeout))
         if not self._wait_ok:
             raise TimeoutError("not ready")
 
-    def click(self, timeout: int = 0) -> None:
+    def click(self, timeout: int = 0, force: bool = False) -> None:
         self.click_calls.append(timeout)
 
 
 class _FrameStub:
-    def __init__(self, selectors: dict[str, _LocatorStub]) -> None:
+    def __init__(
+        self,
+        selectors: dict[str, _LocatorStub],
+        evaluate_results: list[object] | None = None,
+    ) -> None:
         self._selectors = selectors
+        self._evaluate_results = list(evaluate_results) if evaluate_results else []
+        self._evaluate_idx = 0
 
     def locator(self, selector: str) -> _LocatorStub:
         return self._selectors.setdefault(selector, _LocatorStub())
+
+    def evaluate(self, expression: str) -> object:
+        if self._evaluate_idx < len(self._evaluate_results):
+            result = self._evaluate_results[self._evaluate_idx]
+            self._evaluate_idx += 1
+            return result
+        return None
 
 
 class _PageStub:
@@ -378,15 +397,87 @@ def test_wait_for_terminal_surface_progressive_timeout(monkeypatch: pytest.Monke
     assert fake_time[0] > 0.0
 
 
-def test_focus_terminal_input_clicks_first_textarea() -> None:
-    text_area = _LocatorStub(count=1, wait_ok=True)
-    frame = _FrameStub({"textarea.xterm-helper-textarea": text_area})
+def test_verify_terminal_focus_true() -> None:
+    frame = _FrameStub({}, evaluate_results=["textarea", "xterm-helper-textarea"])
+    assert _verify_terminal_focus(frame) is True
+
+
+def test_verify_terminal_focus_wrong_tag() -> None:
+    frame = _FrameStub({}, evaluate_results=["div", "xterm-helper-textarea"])
+    assert _verify_terminal_focus(frame) is False
+
+
+def test_verify_terminal_focus_wrong_class() -> None:
+    frame = _FrameStub({}, evaluate_results=["textarea", "some-other-class"])
+    assert _verify_terminal_focus(frame) is False
+
+
+def test_verify_terminal_focus_exception() -> None:
+    class _BrokenFrame:
+        def evaluate(self, _expr: str) -> object:
+            raise RuntimeError("frame detached")
+
+    assert _verify_terminal_focus(_BrokenFrame()) is False
+
+
+def test_focus_terminal_input_succeeds_via_xterm_container() -> None:
+    """Focus via .xterm container click when it's visible and focus verifies."""
+    xterm = _LocatorStub(count=1, visible=True)
+    # evaluate returns: tagName="textarea", className="xterm-helper-textarea"
+    frame = _FrameStub(
+        {".xterm": xterm},
+        evaluate_results=["textarea", "xterm-helper-textarea"],
+    )
     page = _PageStub()
 
     assert _focus_terminal_input(frame, page) is True
-    assert len(text_area.click_calls) == 1
-    assert text_area.click_calls[0] > 0
+    assert len(xterm.click_calls) == 1
     assert 40 in page.wait_calls
+
+
+def test_focus_terminal_input_succeeds_via_force_click_textarea() -> None:
+    """When .xterm click doesn't verify focus, atomic JS focus path succeeds."""
+    # .xterm verify fails (2 evaluates), then atomic JS returns True (1 evaluate).
+    frame = _FrameStub(
+        {".xterm": _LocatorStub(count=1)},
+        evaluate_results=["div", "", True],
+    )
+    page = _PageStub()
+
+    assert _focus_terminal_input(frame, page) is True
+
+
+def test_focus_terminal_input_returns_false_when_focus_never_verifies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Returns False when both focus strategies fail on all passes."""
+    monkeypatch.setattr(rtunnel_module, "_click_terminal_tab", lambda *_a, **_kw: False)
+
+    # Per pass: .xterm verify consumes 2 evaluates, atomic JS consumes 1.
+    # "div", "" → verify fails; False → atomic JS returns falsy.
+    frame = _FrameStub(
+        {".xterm": _LocatorStub(count=1)},
+        evaluate_results=["div", "", False] * 5,
+    )
+    page = _PageStub()
+
+    assert _focus_terminal_input(frame, page) is False
+
+
+def test_focus_terminal_input_succeeds_via_atomic_js_focus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Atomic JS focus succeeds when .xterm click path fails."""
+    monkeypatch.setattr(rtunnel_module, "_click_terminal_tab", lambda *_a, **_kw: False)
+
+    # .xterm count=0 (Try 1 skipped), atomic JS returns True
+    frame = _FrameStub(
+        {".xterm": _LocatorStub(count=0)},
+        evaluate_results=[True],
+    )
+    page = _PageStub()
+
+    assert _focus_terminal_input(frame, page) is True
 
 
 def test_focus_terminal_input_returns_false_when_unavailable() -> None:
