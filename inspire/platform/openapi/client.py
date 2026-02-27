@@ -45,6 +45,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_SHM_ENV_VAR = "INSPIRE_SHM_SIZE"
 
 
+def _env_enabled(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in ("1", "true", "yes")
+
+
 def _get_default_shm_size(fallback: int = 200) -> int:
     """Read default shared memory size from env, falling back to a sane default."""
     env_value = os.getenv(DEFAULT_SHM_ENV_VAR)
@@ -90,7 +94,6 @@ class InspireAPI:
     )
     DEFAULT_IMAGE = "docker.example.com/inspire-studio/ngc-cuda12.8-base:1.0"
     DEFAULT_IMAGE_PATH = "inspire-studio/ngc-cuda12.8-base:1.0"
-    DEFAULT_DOCKER_REGISTRY = "docker.example.com"
     ERROR_BODY_PREVIEW_LIMIT = 4000
 
     def _get_default_image(self) -> str:
@@ -109,7 +112,7 @@ class InspireAPI:
         self.config = config or InspireConfig()
 
         # Check for SSL verification override via environment variable
-        if os.getenv("INSPIRE_SKIP_SSL_VERIFY", "").lower() in ("1", "true", "yes"):
+        if _env_enabled("INSPIRE_SKIP_SSL_VERIFY"):
             self.config.verify_ssl = False
 
         self.base_url = self.config.base_url.rstrip("/")
@@ -132,7 +135,7 @@ class InspireAPI:
 
         # Optional override: force using proxy even if no_proxy would normally bypass it.
         # This preserves the previous WSL corporate-proxy workaround when needed.
-        if os.getenv("INSPIRE_FORCE_PROXY", "").lower() in ("1", "true", "yes"):
+        if self.config.force_proxy or _env_enabled("INSPIRE_FORCE_PROXY"):
             http_proxy = os.environ.get("http_proxy") or os.environ.get("HTTP_PROXY")
             https_proxy = os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY")
             if http_proxy or https_proxy:
@@ -141,7 +144,8 @@ class InspireAPI:
                     "https": https_proxy or http_proxy,
                 }
                 logger.debug(
-                    f"INSPIRE_FORCE_PROXY enabled, using explicit proxy configuration: {self.session.proxies}"
+                    "Force-proxy enabled, using explicit proxy configuration: %s",
+                    self.session.proxies,
                 )
 
     def _validate_required_params(self, **kwargs) -> None:

@@ -759,6 +759,55 @@ def test_bridge_exec_json_exit_255_is_not_retried_when_tunnel_is_healthy(
     assert calls["rebuild"] == 0
 
 
+def test_bridge_exec_exit_255_probe_exception_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_sync_config(tmp_path)
+    config.tunnel_retries = 2
+    config.tunnel_retry_pause = 0.0
+    calls: Dict[str, int] = {"availability": 0, "rebuild": 0}
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+
+    tunnel_config = TunnelConfig()
+    tunnel_config.add_bridge(
+        BridgeProfile(
+            name="gpu-main",
+            proxy_url="https://proxy.example.com/proxy/31337/",
+            notebook_id="notebook-1",
+        )
+    )
+    monkeypatch.setattr(exec_cmd_module, "load_tunnel_config", lambda: tunnel_config)
+
+    def fake_is_tunnel_available(*args: Any, **kwargs: Any) -> bool:
+        calls["availability"] += 1
+        if calls["availability"] == 1:
+            return True
+        raise RuntimeError("probe failed")
+
+    def fake_rebuild(*args: Any, **kwargs: Any) -> BridgeProfile:
+        calls["rebuild"] += 1
+        return tunnel_config.bridges["gpu-main"]
+
+    monkeypatch.setattr(exec_cmd_module, "is_tunnel_available", fake_is_tunnel_available)
+    monkeypatch.setattr(exec_cmd_module, "run_ssh_command_streaming", lambda *args, **kwargs: 255)
+    monkeypatch.setattr(exec_cmd_module, "rebuild_notebook_bridge_profile", fake_rebuild)
+    monkeypatch.setattr(exec_cmd_module, "require_web_session", lambda ctx, hint: object())
+    monkeypatch.setattr(exec_cmd_module, "load_ssh_public_key_material", lambda: "ssh-ed25519 AAA")
+    monkeypatch.setattr(exec_cmd_module, "resolve_ssh_runtime_config", lambda: object())
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--bridge", "gpu-main"])
+
+    assert result.exit_code == EXIT_GENERAL_ERROR
+    assert "Command failed with exit code 255" in result.output
+    assert calls["rebuild"] == 0
+
+
 def test_bridge_exec_rebuild_failure_errors_after_retry_exhausted(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

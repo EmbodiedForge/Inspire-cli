@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import logging
 import os
 import re
 import shlex
@@ -10,11 +12,12 @@ import tempfile
 from typing import Optional
 
 from .config import load_tunnel_config
-from .models import TunnelConfig
+from .models import TunnelConfig, TunnelError
 from .scp import run_scp_transfer
 from .ssh_exec import run_ssh_command
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+logger = logging.getLogger(__name__)
 
 
 def _extract_sha(stdout: str) -> Optional[str]:
@@ -35,7 +38,8 @@ def _git_command_success(args: list[str]) -> bool:
             text=True,
         )
         return result.returncode == 0
-    except Exception:
+    except (subprocess.SubprocessError, OSError) as error:
+        logger.debug("Local git command failed for %s: %s", args, error)
         return False
 
 
@@ -51,7 +55,8 @@ def _git_rev_count(revision_range: str) -> Optional[int]:
         if result.returncode != 0:
             return None
         return int((result.stdout or "").strip())
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError) as error:
+        logger.debug("Unable to count revisions for %s: %s", revision_range, error)
         return None
 
 
@@ -100,7 +105,8 @@ git rev-parse --verify "refs/heads/$branch" 2>/dev/null || true
             capture_output=True,
             check=False,
         )
-    except Exception:
+    except (subprocess.SubprocessError, OSError, TunnelError) as error:
+        logger.debug("Failed to probe remote branch tip for %s/%s: %s", target_dir, branch, error)
         return None
 
     if probe.returncode != 0:
@@ -202,7 +208,7 @@ printf '%s\\n' "$actual_sha"
             "synced_sha": None,
             "error": f"Sync command timed out after {timeout}s",
         }
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, TunnelError, ValueError) as e:
         return {
             "success": False,
             "synced_sha": None,
@@ -380,7 +386,7 @@ printf '%s\\n' "$actual_sha"
             "synced_sha": None,
             "error": f"Offline sync command timed out after {timeout}s",
         }
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, TunnelError, ValueError) as e:
         return {
             "success": False,
             "synced_sha": None,
@@ -388,7 +394,5 @@ printf '%s\\n' "$actual_sha"
         }
     finally:
         if bundle_file:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(bundle_file)
-            except OSError:
-                pass

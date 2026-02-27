@@ -3,20 +3,24 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Optional
 
 from .models import BridgeProfile, TunnelConfig, DEFAULT_SSH_USER
 
+logger = logging.getLogger(__name__)
+
 
 def _resolve_username_from_config() -> Optional[str]:
     """Resolve the configured Inspire username using normal config precedence."""
     try:
-        from inspire.config import Config
+        from inspire.config import Config, ConfigError
 
         config, _ = Config.from_files_and_env(require_credentials=False)
-    except Exception:
+    except (ImportError, ConfigError, OSError, ValueError, TypeError) as error:
+        logger.debug("Unable to resolve username from layered config: %s", error)
         return None
 
     username = str(getattr(config, "username", "") or "").strip()

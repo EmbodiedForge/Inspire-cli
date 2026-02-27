@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import logging
 import subprocess
 import sys
 import time
@@ -29,6 +30,7 @@ from inspire.bridge.forge import (
     fetch_bridge_output_log,
 )
 from inspire.bridge.tunnel import (
+    BridgeProfile,
     TunnelNotAvailableError,
     is_tunnel_available,
     run_ssh_command,
@@ -50,6 +52,8 @@ from inspire.cli.utils.tunnel_reconnect import (
     should_attempt_ssh_reconnect,
 )
 from inspire.config.ssh_runtime import resolve_ssh_runtime_config
+
+logger = logging.getLogger(__name__)
 
 
 def split_denylist(items: tuple[str, ...]) -> list[str]:
@@ -109,14 +113,14 @@ def try_exec_via_ssh_tunnel(
     )
 
     def _require_rebuild(
-        bridge: object,
+        bridge: BridgeProfile,
         tunnel_config: object,
         *,
         reason: str,
     ) -> Optional[int]:
         nonlocal force_rebuild
 
-        if not str(getattr(bridge, "notebook_id", "") or "").strip():
+        if not str(bridge.notebook_id or "").strip():
             hint = (
                 "Run 'inspire tunnel status' to troubleshoot. "
                 "If needed, re-create the bridge via "
@@ -126,7 +130,7 @@ def try_exec_via_ssh_tunnel(
                 ctx,
                 "TunnelError",
                 "SSH tunnel not available. "
-                f"Bridge '{getattr(bridge, 'name', 'unknown')}' is not responding "
+                f"Bridge '{bridge.name}' is not responding "
                 "(notebook may be stopped).",
                 hint=hint,
             )
@@ -153,7 +157,7 @@ def try_exec_via_ssh_tunnel(
 
         result = attempt_notebook_bridge_rebuild(
             state=reconnect_state,
-            bridge_name=str(getattr(bridge, "name")),
+            bridge_name=bridge.name,
             bridge=bridge,
             tunnel_config=tunnel_config,
             session_loader=lambda: require_web_session(
@@ -166,7 +170,7 @@ def try_exec_via_ssh_tunnel(
             ),
             runtime_loader=resolve_ssh_runtime_config,
             rebuild_fn=rebuild_notebook_bridge_profile,
-            key_loader=lambda path=None: load_ssh_public_key_material(),
+            key_loader=lambda _path=None: load_ssh_public_key_material(),
         )
 
         if result.status is NotebookBridgeReconnectStatus.REBUILT:
@@ -225,9 +229,9 @@ def try_exec_via_ssh_tunnel(
                 retry_pause=0.0,
                 progressive=False,
             )
-        except Exception:
-            # Conservatively treat probe errors as connectivity issues.
-            return True
+        except Exception as probe_error:  # noqa: BLE001
+            logger.debug("Skipping auto-retry after SSH 255: tunnel probe failed: %s", probe_error)
+            return False
 
         return not tunnel_still_ready
 
@@ -250,7 +254,7 @@ def try_exec_via_ssh_tunnel(
                     hint="Use 'inspire notebook ssh <notebook-id>' or 'inspire tunnel add' first.",
                 )
 
-            resolved_bridge_name = str(getattr(bridge, "name"))
+            resolved_bridge_name = bridge.name
             availability_retries = 0 if force_rebuild else int(config.tunnel_retries)
             availability_pause = 0.0 if force_rebuild else float(config.tunnel_retry_pause)
             tunnel_ready = is_tunnel_available_fn(

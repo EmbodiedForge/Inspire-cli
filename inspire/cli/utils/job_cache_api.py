@@ -147,35 +147,6 @@ class JobCache:
         """Clear all jobs from cache."""
         self._save({})
 
-    def prune(self, max_age_days: int = 30) -> int:
-        """Remove old jobs from cache.
-
-        Returns:
-            Number of jobs removed
-        """
-        jobs = self._load()
-        now = datetime.now()
-        removed = 0
-
-        to_remove = []
-        for job_id, job_data in jobs.items():
-            try:
-                created = datetime.fromisoformat(job_data.get("created_at", ""))
-                age_days = (now - created).days
-                if age_days > max_age_days:
-                    to_remove.append(job_id)
-            except (ValueError, TypeError):
-                continue
-
-        for job_id in to_remove:
-            del jobs[job_id]
-            removed += 1
-
-        if removed > 0:
-            self._save(jobs)
-
-        return removed
-
     def get_log_offset(self, job_id: str) -> int:
         """Get the cached byte offset for a job's log."""
         jobs = self._load()

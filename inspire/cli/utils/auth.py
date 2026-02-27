@@ -47,6 +47,8 @@ class AuthManager:
             timeout=config.timeout,
             max_retries=config.max_retries,
             retry_delay=config.retry_delay,
+            verify_ssl=not config.skip_ssl_verify,
+            force_proxy=config.force_proxy,
             openapi_prefix=config.openapi_prefix,
             auth_endpoint=config.auth_endpoint,
             docker_registry=config.docker_registry,

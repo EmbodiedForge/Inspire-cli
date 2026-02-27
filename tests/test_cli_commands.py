@@ -803,7 +803,7 @@ def test_job_logs_legacy_filename_is_migrated(monkeypatch: pytest.MonkeyPatch, t
 
 
 def test_job_logs_missing_file_sets_exit_code(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    # Config.from_env will succeed but LogReader will return no file
+    # Config.from_env will succeed but cache has no log_path for this job.
     patch_config_and_auth(monkeypatch, tmp_path)
 
     # Add job to cache WITHOUT log_path to test the "log not found" path

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 
 from inspire.platform.openapi import _validate_job_id_format
@@ -14,13 +15,7 @@ from inspire.cli.utils.id_resolver import (
     resolve_partial_id,
 )
 
-
-def ensure_valid_job_id(ctx: Context, job_id: str) -> bool:
-    format_error = _validate_job_id_format(job_id)
-    if format_error:
-        exit_with_error(ctx, "InvalidJobID", format_error, EXIT_JOB_NOT_FOUND)
-        return False
-    return True
+logger = logging.getLogger(__name__)
 
 
 def resolve_job_id(ctx: Context, job_id: str) -> str:
@@ -74,12 +69,15 @@ def resolve_job_id(ctx: Context, job_id: str) -> str:
 def _search_job_cache(partial: str) -> list[tuple[str, str]]:
     """Search local job cache for IDs starting with *partial*."""
     from inspire.cli.utils.job_cache_api import JobCache
-    from inspire.config import Config
+    from inspire.config import Config, ConfigError
 
     try:
         config = Config.from_env(require_target_dir=False)
         cache_path = config.get_expanded_cache_path()
-    except Exception:
+    except (ConfigError, OSError, ValueError, TypeError) as error:
+        logger.debug(
+            "Falling back to INSPIRE_JOB_CACHE for partial lookup (%s): %s", partial, error
+        )
         cache_path = os.getenv("INSPIRE_JOB_CACHE")
 
     if not cache_path:
@@ -88,7 +86,8 @@ def _search_job_cache(partial: str) -> list[tuple[str, str]]:
     try:
         cache = JobCache(cache_path)
         jobs = cache.list_jobs(limit=0)
-    except Exception:
+    except (OSError, ValueError, TypeError) as error:
+        logger.debug("Unable to read local job cache %s: %s", cache_path, error)
         return []
 
     matches: list[tuple[str, str]] = []
@@ -116,5 +115,6 @@ def _search_job_api(partial: str) -> list[tuple[str, str]]:
                 label = job.name or job.status or ""
                 matches.append((jid, label))
         return matches
-    except Exception:
+    except Exception as error:  # noqa: BLE001 - graceful fallback by design for resolver UX
+        logger.debug("Web job lookup fallback for partial %s failed: %s", partial, error)
         return []

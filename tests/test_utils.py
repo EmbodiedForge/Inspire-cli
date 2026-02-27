@@ -799,6 +799,48 @@ class TestTunnelConfigPersistence:
         assert "legacy-only" in loaded.bridges
         assert loaded.bridges["shared"].proxy_url == "https://primary-wins.example.com"
 
+    def test_load_tunnel_config_falls_back_to_env_username_on_config_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "bridges-env-user.json").write_text(
+            """
+{
+  "default": "env-bridge",
+  "bridges": [
+    {"name": "env-bridge", "proxy_url": "https://env.example.com"}
+  ]
+}
+""".strip()
+        )
+        (tmp_path / "bridges.json").write_text(
+            """
+{
+  "default": "legacy",
+  "bridges": [
+    {"name": "legacy", "proxy_url": "https://legacy.example.com"}
+  ]
+}
+""".strip()
+        )
+
+        monkeypatch.setenv("INSPIRE_USERNAME", "env-user")
+        monkeypatch.setattr(
+            Config,
+            "from_files_and_env",
+            classmethod(
+                lambda cls, require_target_dir=False, require_credentials=True: (
+                    _ for _ in ()
+                ).throw(ConfigError("broken config"))
+            ),
+        )
+
+        loaded = load_tunnel_config(tmp_path)
+
+        assert loaded.account == "env-user"
+        assert loaded.default_bridge == "env-bridge"
+        assert "env-bridge" in loaded.bridges
+        assert "legacy" in loaded.bridges
+
 
 class TestProxyCommand:
     """Tests for SSH proxy command building."""

@@ -6,7 +6,6 @@ import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from inspire.platform.web.browser_api.core import _get_base_url
 from inspire.platform.web.browser_api.notebooks import (
     _get_session_and_workspace_id,
     _request_notebooks_data,
@@ -32,15 +31,6 @@ class CustomImageInfo:
     status: str  # READY / BUILDING / FAILED
     description: str
     created_at: str
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _images_referer() -> str:
-    return f"{_get_base_url()}/jobs/aiImages"
 
 
 def _image_from_api(item: dict[str, Any]) -> CustomImageInfo:
