@@ -53,6 +53,8 @@ from inspire.cli.utils.output import (
     emit_success as emit_output_success,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def get_current_branch() -> str:
     """Get the current git branch name."""
@@ -125,7 +127,7 @@ def push_to_remote(branch: str, remote: str, *, show_progress: bool = False) -> 
             text=True,
         )
         if result.stderr:
-            logging.debug(result.stderr)
+            logger.debug("git push stderr: %s", result.stderr)
     except subprocess.CalledProcessError as e:
         error_msg = e.stderr or e.stdout or str(e)
         raise click.ClickException(f"Failed to push to {remote}: {error_msg}")

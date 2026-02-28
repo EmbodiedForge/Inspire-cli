@@ -14,6 +14,27 @@ from inspire.platform.openapi.errors import InspireAPIError
 logger = logging.getLogger(__name__)
 
 
+def _is_sensitive_key(key: str) -> bool:
+    lowered = key.strip().lower()
+    if lowered in {"authorization", "cookie", "set-cookie"}:
+        return True
+    return any(
+        token in lowered
+        for token in ("password", "passwd", "token", "secret", "api_key", "apikey", "auth")
+    )
+
+
+def _sanitize_for_log(value: Any, *, key_hint: str | None = None) -> Any:
+    if key_hint and _is_sensitive_key(key_hint):
+        return "<redacted>"
+
+    if isinstance(value, dict):
+        return {k: _sanitize_for_log(v, key_hint=str(k)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_for_log(item) for item in value]
+    return value
+
+
 def make_request_with_retry(
     api, method: str, url: str, **kwargs
 ) -> requests.Response:  # noqa: ANN001
@@ -98,9 +119,9 @@ def make_request(
 
     # Log request details
     logger.debug("API Request: %s %s", method, url)
-    logger.debug("Headers: %s", json.dumps(headers, ensure_ascii=False))
+    logger.debug("Headers: %s", json.dumps(_sanitize_for_log(headers), ensure_ascii=False))
     if payload:
-        logger.debug("Payload: %s", json.dumps(payload, ensure_ascii=False))
+        logger.debug("Payload: %s", json.dumps(_sanitize_for_log(payload), ensure_ascii=False))
 
     try:
         if method.upper() == "POST":

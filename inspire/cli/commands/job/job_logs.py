@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Protocol
@@ -22,7 +23,13 @@ from inspire.bridge.forge import (
     GiteaError,
     fetch_remote_log_incremental,
 )
-from inspire.bridge.tunnel import TunnelNotAvailableError, is_tunnel_available, run_ssh_command
+from inspire.bridge.tunnel import (
+    TunnelNotAvailableError,
+    _test_ssh_connection,
+    is_tunnel_available,
+    load_tunnel_config,
+    run_ssh_command,
+)
 from . import job_deps
 from inspire.cli.context import (
     Context,
@@ -248,6 +255,7 @@ def _fetch_log_via_ssh(
     remote_log_path: str,
     tail: Optional[int] = None,
     head: Optional[int] = None,
+    bridge_name: Optional[str] = None,
 ) -> str:
     if tail:
         command = f"tail -n {tail} '{remote_log_path}'"
@@ -256,7 +264,7 @@ def _fetch_log_via_ssh(
     else:
         command = f"cat '{remote_log_path}'"
 
-    result = run_ssh_command(command=command, capture_output=True)
+    result = run_ssh_command(command=command, capture_output=True, bridge_name=bridge_name)
 
     if result.returncode != 0:
         raise IOError(f"Failed to read log file: {result.stderr}")
@@ -270,6 +278,7 @@ def _follow_logs_via_ssh(
     remote_log_path: str,
     tail_lines: int = 50,
     wait_timeout: int = 300,
+    bridge_name: Optional[str] = None,
 ) -> Optional[str]:
     import select
     import subprocess
@@ -301,7 +310,7 @@ def _follow_logs_via_ssh(
 
     while time.time() - start_time < wait_timeout:
         try:
-            result = run_ssh_command(check_cmd, timeout=10)
+            result = run_ssh_command(check_cmd, timeout=10, bridge_name=bridge_name)
             if "exists" in result.stdout:
                 file_exists = True
                 break
@@ -322,7 +331,7 @@ def _follow_logs_via_ssh(
     click.echo("Press Ctrl+C to stop\n")
 
     command = f"tail -n {tail_lines} -f '{remote_log_path}'"
-    ssh_args = get_ssh_command_args(remote_command=command)
+    ssh_args = get_ssh_command_args(bridge_name=bridge_name, remote_command=command)
 
     process = None
     try:
@@ -381,6 +390,64 @@ def _follow_logs_via_ssh(
     return final_status
 
 
+def _find_connected_tunnel_bridges(
+    *,
+    exclude: Optional[str] = None,
+    timeout: int = 5,
+) -> list[str]:
+    """Best-effort probe for connected tunnel profiles."""
+    try:
+        config = load_tunnel_config()
+    except Exception:
+        return []
+
+    excluded = (exclude or "").strip()
+    candidates = [bridge for bridge in config.list_bridges() if bridge.name != excluded]
+    if not candidates:
+        return []
+
+    connected: list[str] = []
+    max_workers = min(len(candidates), 8)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(_test_ssh_connection, bridge, config, timeout): bridge.name
+            for bridge in candidates
+        }
+        for future in as_completed(futures):
+            name = futures[future]
+            try:
+                if future.result():
+                    connected.append(name)
+            except Exception:
+                continue
+
+    return sorted(connected)
+
+
+def _emit_tunnel_fallback_hint(ctx: Context, *, bridge_name: Optional[str]) -> None:
+    if ctx.json_output:
+        return
+
+    target_label = f"bridge '{bridge_name}'" if bridge_name else "default bridge"
+    click.echo(f"Tunnel {target_label} not available, using Gitea workflow...", err=True)
+
+    connected = _find_connected_tunnel_bridges(exclude=bridge_name)
+    if connected:
+        preview = connected[:5]
+        preview_text = ", ".join(preview)
+        remaining = len(connected) - len(preview)
+        if remaining > 0:
+            preview_text = f"{preview_text}, +{remaining} more"
+        click.echo(
+            f"Connected tunnel profile(s): {preview_text}. Use --bridge <name> to target one explicitly.",
+            err=True,
+        )
+        click.echo(
+            "Note: bridge profiles may not share the same remote directory/log path.",
+            err=True,
+        )
+
+
 def _try_get_ssh_exit_code(
     ctx: Context,
     *,
@@ -391,52 +458,63 @@ def _try_get_ssh_exit_code(
     head: int | None,
     path: bool,
     follow: bool,
+    bridge_name: Optional[str] = None,
 ) -> int | None:
     try:
-        if is_tunnel_available():
-            if follow and ctx.json_output:
-                # JSON follow mode must stay machine-readable.
-                # Skip SSH tail -f output and use workflow follow path instead.
-                return None
-            if follow:
-                if not ctx.json_output:
-                    click.echo("Using SSH tunnel (fast path)")
+        if not is_tunnel_available(bridge_name=bridge_name):
+            _emit_tunnel_fallback_hint(ctx, bridge_name=bridge_name)
+            return None
 
-                final_status = _follow_logs_via_ssh(
-                    job_id=job_id,
-                    config=config,
-                    remote_log_path=remote_log_path,
-                    tail_lines=tail or 50,
-                )
-
-                if final_status in {"SUCCEEDED", "job_succeeded"}:
-                    return EXIT_SUCCESS
-                if final_status in {"FAILED", "CANCELLED", "job_failed", "job_cancelled"}:
-                    return EXIT_GENERAL_ERROR
-                return EXIT_SUCCESS
-
+        if follow and ctx.json_output:
+            # JSON follow mode must stay machine-readable.
+            # Skip SSH tail -f output and use workflow follow path instead.
+            return None
+        if follow:
             if not ctx.json_output:
-                click.echo("Using SSH tunnel (fast path)")
+                label = f", bridge: {bridge_name}" if bridge_name else ""
+                click.echo(f"Using SSH tunnel (fast path{label})")
 
-            content = _fetch_log_via_ssh(remote_log_path=remote_log_path, tail=tail, head=head)
+            final_status = _follow_logs_via_ssh(
+                job_id=job_id,
+                config=config,
+                remote_log_path=remote_log_path,
+                tail_lines=tail or 50,
+                bridge_name=bridge_name,
+            )
 
-            if path:
-                _echo_log_path(ctx, job_id=job_id, remote_log_path=remote_log_path)
-            else:
-                _echo_ssh_content(
-                    ctx,
-                    job_id=job_id,
-                    remote_log_path=remote_log_path,
-                    content=content,
-                    tail=tail,
-                    head=head,
-                )
-
+            if final_status in {"SUCCEEDED", "job_succeeded"}:
+                return EXIT_SUCCESS
+            if final_status in {"FAILED", "CANCELLED", "job_failed", "job_cancelled"}:
+                return EXIT_GENERAL_ERROR
             return EXIT_SUCCESS
 
-    except TunnelNotAvailableError:
         if not ctx.json_output:
-            click.echo("Tunnel not available, using Gitea workflow...", err=True)
+            label = f", bridge: {bridge_name}" if bridge_name else ""
+            click.echo(f"Using SSH tunnel (fast path{label})")
+
+        content = _fetch_log_via_ssh(
+            remote_log_path=remote_log_path,
+            tail=tail,
+            head=head,
+            bridge_name=bridge_name,
+        )
+
+        if path:
+            _echo_log_path(ctx, job_id=job_id, remote_log_path=remote_log_path)
+        else:
+            _echo_ssh_content(
+                ctx,
+                job_id=job_id,
+                remote_log_path=remote_log_path,
+                content=content,
+                tail=tail,
+                head=head,
+            )
+
+        return EXIT_SUCCESS
+
+    except TunnelNotAvailableError:
+        _emit_tunnel_fallback_hint(ctx, bridge_name=bridge_name)
     except IOError as e:
         if not ctx.json_output:
             click.echo(f"SSH log fetch failed: {e}", err=True)
@@ -751,6 +829,7 @@ def _run_job_logs_single_job(
     refresh: bool,
     follow: bool,
     interval: int,
+    bridge: Optional[str] = None,
 ) -> None:
     try:
         config = Config.from_env(require_target_dir=False)
@@ -783,6 +862,7 @@ def _run_job_logs_single_job(
             head=head,
             path=path,
             follow=follow,
+            bridge_name=bridge,
         )
         if ssh_exit_code is not None:
             sys.exit(ssh_exit_code)
@@ -931,6 +1011,11 @@ def _run_job_logs_single_job(
     default=0,
     help="Max cached jobs to process in bulk mode (0 = all).",
 )
+@click.option(
+    "--bridge",
+    "-b",
+    help="Bridge profile to use for SSH tunnel fast path",
+)
 @pass_context
 def logs(
     ctx: Context,
@@ -943,6 +1028,7 @@ def logs(
     interval: int,
     status: tuple,
     limit: int,
+    bridge: Optional[str],
 ) -> None:
     """View logs for a training job.
 
@@ -968,15 +1054,16 @@ def logs(
         inspire job logs job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf --follow --interval 10
         inspire job logs job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf --path
         inspire job logs job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf --refresh
+        inspire job logs job-c4eb3ac3-6d83-405c-aa29-059bc945c4bf --bridge my-profile
         inspire job logs --status RUNNING --status SUCCEEDED
         inspire job logs --refresh --status RUNNING
     """
     if not job_id:
-        if tail or head or path or follow:
+        if tail or head or path or follow or bridge:
             _handle_error(
                 ctx,
                 "InvalidUsage",
-                "--tail, --head, --path and --follow require a JOB_ID",
+                "--tail, --head, --path, --follow and --bridge require a JOB_ID",
                 EXIT_VALIDATION_ERROR,
             )
             return
@@ -994,6 +1081,7 @@ def logs(
         refresh=refresh,
         follow=follow,
         interval=interval,
+        bridge=bridge,
     )
 
 

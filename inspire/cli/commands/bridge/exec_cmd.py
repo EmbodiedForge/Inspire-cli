@@ -414,6 +414,13 @@ def exec_via_workflow(
             click.echo(f"Artifact paths: {artifact_paths_list}")
 
     try:
+        logger.debug(
+            "bridge_exec workflow trigger request_id=%s wait=%s timeout=%s command=%s",
+            request_id,
+            wait,
+            timeout_s,
+            command,
+        )
         trigger_bridge_action_workflow_fn(
             config=config,
             raw_command=workflow_command,
@@ -452,6 +459,7 @@ def exec_via_workflow(
             request_id=request_id,
             timeout=timeout_s,
         )
+        logger.debug("bridge_exec workflow result request_id=%s result=%s", request_id, result)
     except TimeoutError as e:
         emit_output_error(
             ctx,
@@ -476,6 +484,8 @@ def exec_via_workflow(
         output_log = fetch_bridge_output_log_fn(config, request_id)
     except GiteaError:
         pass
+    if output_log:
+        logger.debug("bridge_exec workflow output request_id=%s\n%s", request_id, output_log)
 
     if output_log and not ctx.json_output:
         if _verbose_output(ctx):

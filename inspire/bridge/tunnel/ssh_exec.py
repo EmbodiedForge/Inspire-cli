@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import select
 import subprocess
@@ -17,6 +18,8 @@ from .models import (
 )
 from .rtunnel import _ensure_rtunnel_binary
 from .ssh import _get_proxy_command
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +115,16 @@ def run_ssh_command(
     ssh_cmd = _build_ssh_base_args(bridge=bridge, proxy_cmd=proxy_cmd)
     ssh_cmd.append("bash -l")
 
-    return subprocess.run(
+    logger.debug(
+        "run_ssh_command bridge=%s timeout=%s capture_output=%s quiet_proxy=%s command=%s",
+        bridge.name,
+        timeout,
+        capture_output,
+        quiet_proxy,
+        command,
+    )
+
+    result = subprocess.run(
         ssh_cmd,
         input=_build_stdin_script(command),
         capture_output=capture_output,
@@ -121,6 +133,25 @@ def run_ssh_command(
         check=check,
         env=_build_ssh_process_env(),
     )
+    logger.debug(
+        "run_ssh_command completed bridge=%s returncode=%s",
+        bridge.name,
+        result.returncode,
+    )
+    if capture_output:
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+        logger.debug(
+            "run_ssh_command output bridge=%s stdout_chars=%s stderr_chars=%s",
+            bridge.name,
+            len(stdout),
+            len(stderr),
+        )
+        if stdout:
+            logger.debug("run_ssh_command stdout:\n%s", stdout)
+        if stderr:
+            logger.debug("run_ssh_command stderr:\n%s", stderr)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +191,13 @@ def run_ssh_command_streaming(
     ssh_cmd = _build_ssh_base_args(bridge=bridge, proxy_cmd=proxy_cmd)
     ssh_cmd.append("bash -l")
 
+    logger.debug(
+        "run_ssh_command_streaming bridge=%s timeout=%s command=%s",
+        bridge.name,
+        timeout,
+        command,
+    )
+
     # Default callback: print to stdout
     if output_callback is None:
 
@@ -191,6 +229,12 @@ def run_ssh_command_streaming(
             if timeout is not None:
                 elapsed = time.time() - start_time
                 if elapsed >= timeout:
+                    logger.debug(
+                        "run_ssh_command_streaming timeout bridge=%s elapsed=%.2fs limit=%ss",
+                        bridge.name,
+                        elapsed,
+                        timeout,
+                    )
                     process.terminate()
                     process.wait()
                     raise subprocess.TimeoutExpired(ssh_cmd, timeout)
@@ -205,15 +249,22 @@ def run_ssh_command_streaming(
                 line = process.stdout.readline()
 
             if line:
+                logger.debug("run_ssh_command_streaming line=%s", line.rstrip("\n"))
                 output_callback(line)
                 continue
 
             if process.poll() is not None:
                 break
 
+        logger.debug(
+            "run_ssh_command_streaming completed bridge=%s returncode=%s",
+            bridge.name,
+            process.returncode,
+        )
         return process.returncode
 
     except KeyboardInterrupt:
+        logger.debug("run_ssh_command_streaming interrupted bridge=%s", bridge.name)
         process.terminate()
         process.wait()
         raise

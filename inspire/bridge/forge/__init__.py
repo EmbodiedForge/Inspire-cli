@@ -64,6 +64,8 @@ from .workflows import (
     wait_for_workflow_completion,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def wait_for_bridge_action_completion(
     config: Config,
@@ -84,7 +86,7 @@ def wait_for_bridge_action_completion(
             return None
         status = run.get("status")
         conclusion = run.get("conclusion")
-        logging.debug(
+        logger.debug(
             "Found matching run: status=%s, conclusion=%s",
             status,
             conclusion,

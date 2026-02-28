@@ -27,6 +27,7 @@ class Context:
     def __init__(self) -> None:
         self.json_output: bool = False
         self.debug: bool = False
+        self.debug_report_path: str | None = None
 
 
 # Click decorator to pass the shared Context instance into commands

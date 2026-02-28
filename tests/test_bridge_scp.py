@@ -256,6 +256,7 @@ def test_bridge_scp_scp_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 
     class FakeResult:
         returncode = 1
+        stderr = "scp: /tmp/test.txt: Permission denied\n"
 
     monkeypatch.setattr(scp_cmd_module, "run_scp_transfer", lambda **kw: FakeResult())
 
@@ -264,6 +265,7 @@ def test_bridge_scp_scp_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 
     assert result.exit_code == EXIT_GENERAL_ERROR
     assert "SCP upload failed" in result.output
+    assert "Permission denied" in result.output
 
 
 def test_bridge_scp_bridge_option(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

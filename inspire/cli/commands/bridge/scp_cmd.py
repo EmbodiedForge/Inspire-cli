@@ -25,6 +25,18 @@ from inspire.cli.formatters import json_formatter
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 
 
+def _scp_failure_details(result: object) -> str | None:
+    for attr in ("stderr", "stdout"):
+        value = getattr(result, attr, None)
+        text = str(value or "").strip()
+        if not text:
+            continue
+        line = text.splitlines()[-1].strip()
+        if line:
+            return line[:400]
+    return None
+
+
 @click.command("scp")
 @click.argument("source")
 @click.argument("destination")
@@ -106,10 +118,14 @@ def bridge_scp(
         )
 
         if result.returncode != 0:
+            detail = _scp_failure_details(result)
+            message = f"SCP {direction} failed with exit code {result.returncode}"
+            if detail:
+                message = f"{message}: {detail}"
             _handle_error(
                 ctx,
                 "SCPFailed",
-                f"SCP {direction} failed with exit code {result.returncode}",
+                message,
                 EXIT_GENERAL_ERROR,
             )
 

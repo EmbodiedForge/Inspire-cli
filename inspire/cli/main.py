@@ -7,11 +7,13 @@ Usage:
     inspire resources list
 """
 
+import logging
 import sys
 import click
 
 from inspire import __version__
 from inspire.cli.utils.profile import apply_env_profile
+from inspire.cli.logging_setup import clear_debug_logging, configure_debug_logging
 from inspire.cli.context import (
     Context,
     pass_context,
@@ -78,9 +80,9 @@ def main(ctx: Context, json_output: bool, debug: bool) -> None:
     ctx.debug = debug
 
     if debug:
-        import logging
-
-        logging.basicConfig(level=logging.DEBUG)
+        ctx.debug_report_path = configure_debug_logging(argv=sys.argv)
+    else:
+        clear_debug_logging()
 
 
 # Register command groups
@@ -102,6 +104,7 @@ def cli() -> None:
     try:
         main()
     except Exception as e:  # pragma: no cover - top-level safety net
+        logging.getLogger(__name__).exception("Unhandled exception in inspire CLI")
         click.echo(f"Error: {e}", err=True)
         sys.exit(EXIT_GENERAL_ERROR)
 

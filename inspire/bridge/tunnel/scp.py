@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from typing import Optional
 
 from .models import BridgeProfile
 from .ssh_exec import _resolve_bridge_and_proxy
+
+logger = logging.getLogger(__name__)
 
 
 def _build_scp_base_args(
@@ -74,11 +77,31 @@ def run_scp_transfer(
     else:
         args.extend([local_path, remote_spec])
 
-    return subprocess.run(
+    logger.debug(
+        "run_scp_transfer bridge=%s download=%s recursive=%s timeout=%s",
+        bridge.name,
+        download,
+        recursive,
+        timeout,
+    )
+    result = subprocess.run(
         args,
-        capture_output=False,
+        capture_output=True,
+        text=True,
         timeout=timeout,
     )
+    logger.debug(
+        "run_scp_transfer completed bridge=%s returncode=%s stdout_chars=%s stderr_chars=%s",
+        bridge.name,
+        result.returncode,
+        len(result.stdout or ""),
+        len(result.stderr or ""),
+    )
+    if result.stdout:
+        logger.debug("run_scp_transfer stdout:\n%s", result.stdout)
+    if result.stderr:
+        logger.debug("run_scp_transfer stderr:\n%s", result.stderr)
+    return result
 
 
 __all__ = [

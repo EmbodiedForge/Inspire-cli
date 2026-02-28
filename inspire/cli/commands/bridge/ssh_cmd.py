@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import sys
 import time
@@ -25,6 +26,8 @@ from inspire.cli.utils.tunnel_reconnect import (
 )
 from inspire.config import Config, ConfigError, build_env_exports
 from inspire.config.ssh_runtime import resolve_ssh_runtime_config
+
+logger = logging.getLogger(__name__)
 
 
 @click.command("ssh")
@@ -63,6 +66,7 @@ def bridge_ssh(ctx: Context, bridge: Optional[str]) -> None:
         )
 
     bridge_name = selected_bridge.name
+    logger.debug("bridge_ssh start bridge=%s", bridge_name)
 
     # Build interactive SSH command with env exports and cd to target dir
     env_exports = build_env_exports(config.remote_env)
@@ -197,8 +201,10 @@ def bridge_ssh(ctx: Context, bridge: Optional[str]) -> None:
         try:
             returncode = subprocess.call(ssh_args)
         except KeyboardInterrupt:
+            logger.debug("bridge_ssh interrupted bridge=%s", bridge_name)
             raise SystemExit(130) from None
 
+        logger.debug("bridge_ssh returncode bridge=%s code=%s", bridge_name, returncode)
         if returncode == 0:
             sys.exit(0)
         if should_attempt_ssh_reconnect(returncode, interactive=True):

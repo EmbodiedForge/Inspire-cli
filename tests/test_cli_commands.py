@@ -16,6 +16,7 @@ from inspire.cli.context import (
     EXIT_TIMEOUT,
     EXIT_LOG_NOT_FOUND,
     EXIT_JOB_NOT_FOUND,
+    EXIT_VALIDATION_ERROR,
 )
 
 from inspire import config as config_module
@@ -849,7 +850,7 @@ def test_job_logs_follow_json_skips_ssh_follow_path(
     job_logs_module = import_module("inspire.cli.commands.job.job_logs")
 
     called = {"workflow_follow": False}
-    monkeypatch.setattr(job_logs_module, "is_tunnel_available", lambda: True)
+    monkeypatch.setattr(job_logs_module, "is_tunnel_available", lambda *args, **kwargs: True)
     monkeypatch.setattr(
         job_logs_module,
         "_follow_logs_via_ssh",
@@ -889,13 +890,184 @@ def test_job_logs_follow_returns_follow_exit_code(
 
     job_logs_module = import_module("inspire.cli.commands.job.job_logs")
 
-    monkeypatch.setattr(job_logs_module, "is_tunnel_available", lambda: False)
+    monkeypatch.setattr(job_logs_module, "is_tunnel_available", lambda *args, **kwargs: False)
     monkeypatch.setattr(job_logs_module, "_follow_logs", lambda *args, **kwargs: EXIT_GENERAL_ERROR)
 
     runner = CliRunner()
     result = runner.invoke(cli_main, ["job", "logs", TEST_JOB_ID, "--follow"])
 
     assert result.exit_code == EXIT_GENERAL_ERROR
+
+
+def test_job_logs_bridge_option_uses_named_tunnel(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    patch_config_and_auth(monkeypatch, tmp_path)
+
+    config = make_test_config(tmp_path)
+    cache = JobCache(config.get_expanded_cache_path())
+    remote_log_path = f"/train/logs/.inspire/training_master_{TEST_JOB_ID}.log"
+    cache.add_job(
+        job_id=TEST_JOB_ID,
+        name="test-job",
+        resource="H200",
+        command="echo test",
+        status="RUNNING",
+        log_path=remote_log_path,
+    )
+
+    from importlib import import_module
+
+    job_logs_module = import_module("inspire.cli.commands.job.job_logs")
+    observed: dict[str, str | None] = {"checked": None, "fetched": None}
+
+    def fake_tunnel_available(*args, **kwargs):  # noqa: ANN002, ANN003
+        observed["checked"] = kwargs.get("bridge_name")
+        return True
+
+    def fake_fetch_log(*args, **kwargs):  # noqa: ANN002, ANN003
+        observed["fetched"] = kwargs.get("bridge_name")
+        return "ssh fast path content"
+
+    monkeypatch.setattr(job_logs_module, "is_tunnel_available", fake_tunnel_available)
+    monkeypatch.setattr(job_logs_module, "_fetch_log_via_ssh", fake_fetch_log)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["job", "logs", TEST_JOB_ID, "--bridge", "gpu-main"])
+
+    assert result.exit_code == EXIT_SUCCESS
+    assert observed["checked"] == "gpu-main"
+    assert observed["fetched"] == "gpu-main"
+    assert "ssh fast path content" in result.output
+
+
+def test_job_logs_bridge_requires_job_id(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    patch_config_and_auth(monkeypatch, tmp_path)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["job", "logs", "--bridge", "gpu-main"])
+
+    assert result.exit_code == EXIT_VALIDATION_ERROR
+    assert "--bridge require a JOB_ID" in result.output
+
+
+def test_job_logs_fallback_mentions_connected_bridge_candidates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    patch_config_and_auth(monkeypatch, tmp_path)
+
+    config = make_test_config(tmp_path)
+    cache = JobCache(config.get_expanded_cache_path())
+    remote_log_path = f"/train/logs/.inspire/training_master_{TEST_JOB_ID}.log"
+    cache.add_job(
+        job_id=TEST_JOB_ID,
+        name="test-job",
+        resource="H200",
+        command="echo test",
+        status="RUNNING",
+        log_path=remote_log_path,
+    )
+
+    local_cache_dir = Path(config.log_cache_dir)
+    local_cache_dir.mkdir(parents=True, exist_ok=True)
+    local_log_path = local_cache_dir / f"{TEST_JOB_ID}.log"
+    local_log_path.write_text("cached log content\n", encoding="utf-8")
+
+    from importlib import import_module
+
+    job_logs_module = import_module("inspire.cli.commands.job.job_logs")
+    monkeypatch.setattr(job_logs_module, "is_tunnel_available", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        job_logs_module,
+        "_find_connected_tunnel_bridges",
+        lambda exclude=None, timeout=5: ["gpu-main"],  # noqa: ARG005
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["job", "logs", TEST_JOB_ID])
+
+    assert result.exit_code == EXIT_SUCCESS
+    assert "Tunnel default bridge not available" in result.output
+    assert "Connected tunnel profile(s): gpu-main" in result.output
+    assert "may not share the same remote directory/log path" in result.output
+
+
+def test_tunnel_list_places_connected_bridges_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    from importlib import import_module
+
+    list_cmd_module = import_module("inspire.cli.commands.tunnel.list_cmd")
+
+    config = tunnel_module.TunnelConfig(
+        bridges={
+            "zeta": tunnel_module.BridgeProfile(name="zeta", proxy_url="https://zeta.example.com"),
+            "alpha": tunnel_module.BridgeProfile(
+                name="alpha", proxy_url="https://alpha.example.com"
+            ),
+            "beta": tunnel_module.BridgeProfile(name="beta", proxy_url="https://beta.example.com"),
+        },
+        default_bridge="beta",
+    )
+
+    monkeypatch.setattr(list_cmd_module, "load_tunnel_config", lambda: config)
+    monkeypatch.setattr(
+        list_cmd_module,
+        "_check_bridges",
+        lambda bridges, config, timeout=5: {  # noqa: ARG005
+            "zeta": False,
+            "alpha": True,
+            "beta": False,
+        },
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["tunnel", "list"])
+
+    assert result.exit_code == EXIT_SUCCESS
+    alpha_pos = result.output.find("  alpha:")
+    beta_pos = result.output.find("* beta:")
+    zeta_pos = result.output.find("  zeta:")
+    assert alpha_pos != -1 and beta_pos != -1 and zeta_pos != -1
+    assert alpha_pos < beta_pos
+    assert alpha_pos < zeta_pos
+
+
+def test_tunnel_list_json_places_connected_bridges_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    from importlib import import_module
+
+    list_cmd_module = import_module("inspire.cli.commands.tunnel.list_cmd")
+
+    config = tunnel_module.TunnelConfig(
+        bridges={
+            "zeta": tunnel_module.BridgeProfile(name="zeta", proxy_url="https://zeta.example.com"),
+            "alpha": tunnel_module.BridgeProfile(
+                name="alpha", proxy_url="https://alpha.example.com"
+            ),
+            "beta": tunnel_module.BridgeProfile(name="beta", proxy_url="https://beta.example.com"),
+        },
+        default_bridge="beta",
+    )
+
+    monkeypatch.setattr(list_cmd_module, "load_tunnel_config", lambda: config)
+    monkeypatch.setattr(
+        list_cmd_module,
+        "_check_bridges",
+        lambda bridges, config, timeout=5: {  # noqa: ARG005
+            "zeta": False,
+            "alpha": True,
+            "beta": False,
+        },
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["--json", "tunnel", "list"])
+
+    assert result.exit_code == EXIT_SUCCESS
+    payload = json.loads(result.output)
+    bridges = payload.get("bridges")
+    if bridges is None:
+        bridges = payload.get("data", {}).get("bridges", [])
+    names = [item["name"] for item in bridges]
+    assert names == ["alpha", "beta", "zeta"]
 
 
 # ---------------------------------------------------------------------------

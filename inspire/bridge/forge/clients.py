@@ -16,6 +16,8 @@ from inspire.config import Config
 from .config import _get_active_server, _get_active_token, _resolve_platform
 from .models import ForgeError, GitPlatform
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class ForgeClient(ABC):
@@ -107,7 +109,7 @@ class ForgeClient(ABC):
 
         for attempt in range(max_retries + 1):
             try:
-                logging.debug(
+                logger.debug(
                     "Forge request_bytes %s %s (attempt %d)",
                     method,
                     url,
@@ -124,7 +126,7 @@ class ForgeClient(ABC):
                         debug_body = raw.decode("utf-8", "replace")[:500]
                 except Exception:
                     pass
-                logging.debug(
+                logger.debug(
                     "Forge HTTPError %s for %s, body=%r",
                     e.code,
                     url,
@@ -136,7 +138,7 @@ class ForgeClient(ABC):
                     continue
                 raise ForgeError(msg)
             except urlerror.URLError as e:
-                logging.debug(
+                logger.debug(
                     "Forge URLError for %s: %s (attempt %d)",
                     url,
                     e,

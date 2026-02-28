@@ -29,6 +29,23 @@ def _check_bridges(bridges, config, timeout=5):
     return results
 
 
+def _sort_bridges_for_display(bridges, *, ssh_status: dict[str, bool], no_check: bool):
+    """Sort bridges for output.
+
+    When live checks are enabled, connected bridges are listed first, then the
+    remaining bridges alphabetically.
+    """
+    if no_check:
+        return sorted(bridges, key=lambda b: b.name)
+    return sorted(
+        bridges,
+        key=lambda b: (
+            0 if ssh_status.get(b.name, False) else 1,
+            b.name,
+        ),
+    )
+
+
 @click.command("list")
 @click.option(
     "--no-check",
@@ -62,9 +79,11 @@ def tunnel_list(ctx: Context, no_check: bool) -> None:
     if not no_check:
         ssh_status = _check_bridges(bridges, config)
 
+    ordered_bridges = _sort_bridges_for_display(bridges, ssh_status=ssh_status, no_check=no_check)
+
     if ctx.json_output:
         bridge_dicts = []
-        for b in bridges:
+        for b in ordered_bridges:
             d = b.to_dict()
             if not no_check:
                 d["ssh_works"] = ssh_status.get(b.name, False)
@@ -81,7 +100,7 @@ def tunnel_list(ctx: Context, no_check: bool) -> None:
 
     click.echo("Configured bridges:")
     click.echo("=" * 50)
-    for bridge in sorted(bridges, key=lambda b: b.name):
+    for bridge in ordered_bridges:
         is_default = bridge.name == config.default_bridge
         default_mark = "* " if is_default else "  "
         no_internet_mark = " [no internet]" if not bridge.has_internet else ""

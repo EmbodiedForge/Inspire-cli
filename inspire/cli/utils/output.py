@@ -10,6 +10,14 @@ from inspire.cli.context import Context
 from inspire.cli.formatters import json_formatter
 
 
+def _emit_debug_report_hint(ctx: Context) -> None:
+    if not ctx.debug:
+        return
+    if not ctx.debug_report_path:
+        return
+    click.echo(f"Debug report: {ctx.debug_report_path}", err=True)
+
+
 def emit_success(ctx: Context, *, payload: dict[str, Any], text: str | None = None) -> None:
     """Emit a success payload for JSON users or plain text for humans."""
     if ctx.json_output:
@@ -39,8 +47,10 @@ def emit_error(
     if human_lines is not None:
         for line in human_lines:
             click.echo(line, err=True)
+        _emit_debug_report_hint(ctx)
         return
 
     click.echo(message, err=True)
     if hint:
         click.echo(f"Hint: {hint}", err=True)
+    _emit_debug_report_hint(ctx)
