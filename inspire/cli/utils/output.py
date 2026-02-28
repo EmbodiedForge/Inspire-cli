@@ -11,11 +11,12 @@ from inspire.cli.formatters import json_formatter
 
 
 def _emit_debug_report_hint(ctx: Context) -> None:
-    if not ctx.debug:
+    if not getattr(ctx, "debug", False):
         return
-    if not ctx.debug_report_path:
+    debug_report_path = getattr(ctx, "debug_report_path", None)
+    if not debug_report_path:
         return
-    click.echo(f"Debug report: {ctx.debug_report_path}", err=True)
+    click.echo(f"Debug report: {debug_report_path}", err=True)
 
 
 def emit_success(ctx: Context, *, payload: dict[str, Any], text: str | None = None) -> None:

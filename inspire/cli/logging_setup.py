@@ -112,7 +112,7 @@ def clear_debug_logging() -> None:
     _restore_logger_state(inspire_logger)
 
 
-def _prune_old_debug_logs(log_dir: Path, *, keep: int) -> None:
+def _prune_old_debug_logs(log_dir: Path, *, keep: int, preserve: Path | None = None) -> None:
     if keep < 1:
         keep = 1
 
@@ -121,6 +121,11 @@ def _prune_old_debug_logs(log_dir: Path, *, keep: int) -> None:
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
+    if preserve is not None:
+        preserved = next((path for path in files if path == preserve), None)
+        if preserved is not None:
+            files = [preserved] + [path for path in files if path != preserved]
+
     for stale in files[keep:]:
         try:
             stale.unlink()
@@ -183,7 +188,7 @@ def configure_debug_logging(
         for line in _session_header(argv):
             header_logger.debug(line)
         header_logger.debug("debug_report=%s", log_path)
-        _prune_old_debug_logs(log_dir, keep=keep_logs)
+        _prune_old_debug_logs(log_dir, keep=keep_logs, preserve=log_path)
         return str(log_path)
     except Exception:
         return None
