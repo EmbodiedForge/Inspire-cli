@@ -404,11 +404,12 @@ def _apply_global_layer(
 ) -> tuple[Path | None, dict[str, dict[str, Any]]]:
     global_config_path: Path | None = None
     global_account_catalogs: dict[str, dict[str, Any]] = {}
-    if not Config.GLOBAL_CONFIG_PATH.exists():
+    resolved_global_path = Config.resolve_global_config_path()
+    if not resolved_global_path.exists():
         return global_config_path, global_account_catalogs
 
-    global_config_path = Config.GLOBAL_CONFIG_PATH
-    global_raw = _load_toml(Config.GLOBAL_CONFIG_PATH)
+    global_config_path = resolved_global_path
+    global_raw = _load_toml(resolved_global_path)
     global_compute_groups = global_raw.pop("compute_groups", [])
     global_remote_env = {str(k): str(v) for k, v in global_raw.pop("remote_env", {}).items()}
     global_accounts, global_account_catalogs = _parse_global_accounts(
@@ -858,6 +859,7 @@ def config_from_files_and_env(
 
 
 def get_config_paths() -> tuple[Path | None, Path | None]:
-    global_path = Config.GLOBAL_CONFIG_PATH if Config.GLOBAL_CONFIG_PATH.exists() else None
+    resolved_global_path = Config.resolve_global_config_path()
+    global_path = resolved_global_path if resolved_global_path.exists() else None
     project_path = _find_project_config()
     return global_path, project_path

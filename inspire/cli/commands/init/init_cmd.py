@@ -26,7 +26,7 @@ from .templates import _init_smart_mode, _init_template_mode
 
 
 def _get_config_paths() -> tuple[Path, Path]:
-    global_path = Config.GLOBAL_CONFIG_PATH
+    global_path = Config.resolve_global_config_path()
     project_path = Path.cwd() / PROJECT_CONFIG_DIR / CONFIG_FILENAME
     return global_path, project_path
 

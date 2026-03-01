@@ -151,7 +151,16 @@ class Config:
     prefer_source: str = "env"
 
     # Class-level config paths
+    GLOBAL_CONFIG_PATH_ENV_VAR = "INSPIRE_GLOBAL_CONFIG_PATH"
     GLOBAL_CONFIG_PATH = Path.home() / ".config" / "inspire" / CONFIG_FILENAME
+
+    @classmethod
+    def resolve_global_config_path(cls) -> Path:
+        """Return the effective global config path, honoring env override."""
+        override = str(os.getenv(cls.GLOBAL_CONFIG_PATH_ENV_VAR) or "").strip()
+        if override:
+            return Path(override).expanduser()
+        return cls.GLOBAL_CONFIG_PATH
 
     def get_expanded_cache_path(self) -> str:
         """Get the job cache path with ~ expanded."""

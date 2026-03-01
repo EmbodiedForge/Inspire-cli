@@ -501,6 +501,46 @@ HF_TOKEN = "hf-token"
         assert global_path == global_config
         assert project_path == project_config
 
+    def test_get_config_paths_respects_global_config_path_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Test env override for global config path is honored."""
+        default_global = tmp_path / "default-global" / "config.toml"
+        default_global.parent.mkdir(parents=True)
+        default_global.write_text("[api]\ntimeout = 1")
+
+        isolated_global = tmp_path / "isolated-global" / "config.toml"
+        isolated_global.parent.mkdir(parents=True)
+        isolated_global.write_text("[api]\ntimeout = 2")
+
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", default_global)
+        monkeypatch.setenv("INSPIRE_GLOBAL_CONFIG_PATH", str(isolated_global))
+        monkeypatch.chdir(tmp_path)
+
+        global_path, project_path = Config.get_config_paths()
+
+        assert global_path == isolated_global
+        assert project_path is None
+
+    def test_from_files_and_env_respects_global_config_path_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Test loader reads global config from env-overridden path."""
+        default_global = tmp_path / "default-global" / "config.toml"
+        default_global.parent.mkdir(parents=True)
+        default_global.write_text("[api]\ntimeout = 1")
+
+        isolated_global = tmp_path / "isolated-global" / "config.toml"
+        isolated_global.parent.mkdir(parents=True)
+        isolated_global.write_text("[api]\ntimeout = 77")
+
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", default_global)
+        monkeypatch.setenv("INSPIRE_GLOBAL_CONFIG_PATH", str(isolated_global))
+        monkeypatch.chdir(tmp_path)
+
+        cfg, _ = Config.from_files_and_env(require_credentials=False)
+        assert cfg.timeout == 77
+
 
 # ===========================================================================
 # Init command tests
@@ -936,6 +976,86 @@ class TestInitCommand:
         assert project_data["context"]["workspace_cpu"] == "cpu"
         assert project_data["context"]["workspace_gpu"] == "gpu"
         assert project_data["context"]["workspace_internet"] == "internet"
+
+    def test_init_discover_collects_projects_across_discovered_workspaces(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        global_config = tmp_path / ".config" / "inspire" / "config.toml"
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+        ws_main = "ws-11111111-1111-1111-1111-111111111111"
+        ws_extra = "ws-22222222-2222-2222-2222-222222222222"
+        monkeypatch.setenv("INSPIRE_USERNAME", "testuser")
+        monkeypatch.setenv("INSPIRE_BASE_URL", "https://example.invalid")
+        monkeypatch.setenv("INSPIRE_TARGET_DIR", "/shared/test")
+
+        from inspire.platform.web.session.models import WebSession
+        from inspire.platform.web.browser_api.projects import ProjectInfo
+        import inspire.platform.web.session as web_session_module
+        import inspire.platform.web.browser_api as browser_api_module
+        import inspire.platform.web.browser_api.workspaces as workspaces_module
+
+        session = WebSession(
+            storage_state={"cookies": [], "origins": []},
+            created_at=0.0,
+            workspace_id=ws_main,
+            login_username="testuser",
+            all_workspace_ids=[ws_main, ws_extra],
+        )
+        monkeypatch.setattr(web_session_module, "get_web_session", lambda **_: session)
+        monkeypatch.setattr(workspaces_module, "try_enumerate_workspaces", lambda *_a, **_k: [])
+
+        projects_by_workspace = {
+            ws_main: [
+                ProjectInfo(
+                    project_id="project-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                    name="Main Project",
+                    workspace_id=ws_main,
+                )
+            ],
+            ws_extra: [
+                ProjectInfo(
+                    project_id="project-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                    name="Extra Project",
+                    workspace_id=ws_extra,
+                )
+            ],
+        }
+        list_calls: list[str] = []
+
+        def fake_list_projects(*, workspace_id=None, session=None):  # type: ignore[no-untyped-def]
+            ws = str(workspace_id or "").strip()
+            if ws:
+                list_calls.append(ws)
+            return projects_by_workspace.get(ws, [])
+
+        monkeypatch.setattr(browser_api_module, "list_projects", fake_list_projects)
+        monkeypatch.setattr(browser_api_module, "list_compute_groups", lambda **_: [])
+        monkeypatch.setattr(browser_api_module, "get_accurate_gpu_availability", lambda **_: [])
+        monkeypatch.setattr(
+            browser_api_module,
+            "get_train_job_workdir",
+            lambda *, project_id, workspace_id, session=None: f"/inspire/hdd/project/{project_id}",
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(init, ["--discover", "--force"])
+
+        assert result.exit_code == 0
+        assert sorted(list_calls) == [ws_main, ws_extra]
+
+        global_data = Config._load_toml(global_config)
+        account = global_data["accounts"]["testuser"]
+        discovered_ids = set(account["projects"].values())
+        assert discovered_ids == {
+            "project-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "project-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        }
+        project_catalog = account["project_catalog"]
+        assert "project-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" in project_catalog
+        assert "project-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" in project_catalog
 
     # ------------------------------------------------------------------
     # Helper to set up discover mocks shared across credential tests
