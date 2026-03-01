@@ -1537,6 +1537,41 @@ def test_notebook_list_all_workspaces_combines_results(
     assert calls == [ws_cpu, ws_gpu]
 
 
+def test_notebook_create_accepts_priority_10(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run_notebook_create(ctx: Context, **kwargs: Any) -> None:
+        assert ctx is not None
+        captured.update(kwargs)
+
+    monkeypatch.setattr(notebook_cmd_module, "run_notebook_create", fake_run_notebook_create)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["notebook", "create", "--priority", "10"])
+
+    assert result.exit_code == EXIT_SUCCESS
+    assert captured["priority"] == 10
+
+
+def test_notebook_create_rejects_priority_11(monkeypatch: pytest.MonkeyPatch) -> None:
+    called = False
+
+    def fake_run_notebook_create(ctx: Context, **kwargs: Any) -> None:
+        nonlocal called
+        assert ctx is not None
+        assert kwargs is not None
+        called = True
+
+    monkeypatch.setattr(notebook_cmd_module, "run_notebook_create", fake_run_notebook_create)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["notebook", "create", "--priority", "11"])
+
+    assert result.exit_code != EXIT_SUCCESS
+    assert "1<=x<=10" in result.output
+    assert called is False
+
+
 def test_notebook_start_accepts_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     ws_cpu = "ws-6e6ba362-e98e-45b2-9c5a-311998e93d65"
     ws_gpu = "ws-9dcc0e1f-80a4-4af2-bc2f-0e352e7b17e6"

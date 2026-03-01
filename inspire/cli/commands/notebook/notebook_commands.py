@@ -570,9 +570,9 @@ def _resolve_notebook_id(
 )
 @click.option(
     "--priority",
-    type=click.IntRange(1, 9),
+    type=click.IntRange(1, 10),
     default=None,
-    help="Task priority (1-9, default from config [job].priority or 6)",
+    help="Task priority (1-10, default from config [job].priority or 6)",
 )
 @pass_context
 def create_notebook_cmd(
