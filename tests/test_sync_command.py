@@ -407,7 +407,7 @@ def test_sync_source_bundle_force_passes_hard_reset_flag(
     assert bundle_kwargs["force"] is True
 
 
-def test_sync_resolves_commit_and_message_from_selected_branch(
+def test_sync_resolves_commit_and_message_from_current_branch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     config = make_sync_config(tmp_path)
@@ -441,12 +441,20 @@ def test_sync_resolves_commit_and_message_from_selected_branch(
     monkeypatch.setattr(sync_cmd_module, "sync_via_ssh", fake_sync_via_ssh)
 
     runner = CliRunner()
-    result = runner.invoke(cli_main, ["sync", "--no-push", "--branch", "feature/test"])
+    result = runner.invoke(cli_main, ["sync", "--no-push"])
 
     assert result.exit_code == EXIT_SUCCESS
-    assert called["sha_revision"] == "feature/test"
-    assert called["msg_revision"] == "feature/test"
+    assert called["sha_revision"] == "main"
+    assert called["msg_revision"] == "main"
     assert captured["commit_sha"] == "a" * 40
+
+
+def test_sync_rejects_removed_branch_option() -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["sync", "--branch", "feature/test"])
+
+    assert result.exit_code != EXIT_SUCCESS
+    assert "No such option: --branch" in result.output
 
 
 def test_sync_default_bundle_mode_uses_best_effort_push(
