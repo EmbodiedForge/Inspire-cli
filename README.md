@@ -127,6 +127,8 @@ Account password lookup follows the same layered model:
 2. `[accounts."<username>"].password` from project config (overrides global for same username)
 3. `INSPIRE_PASSWORD` (fallback only if no account password was found)
 
+Legacy `[auth].password` is still supported, but account passwords take precedence when both are present.
+
 Run `inspire init --discover` to auto-configure, or `inspire config show` to inspect the merged result.
 
 `inspire init` probe-only options are effective only with `--discover --probe-shared-path`:

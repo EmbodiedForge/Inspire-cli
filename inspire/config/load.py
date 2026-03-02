@@ -729,18 +729,17 @@ def _apply_password_and_token_fallbacks(
     project_accounts: dict[str, str],
     env_password: str | None,
 ) -> None:
-    # Password fallback is intentionally layered:
-    # 1) explicit config.password if already set
-    # 2) account-password lookup keyed by resolved username
+    # Password precedence is intentionally layered:
+    # 1) account-password lookup keyed by resolved username
+    # 2) explicit config.password (for legacy [auth].password usage)
     # 3) INSPIRE_PASSWORD environment fallback
-    if not config_dict.get("password"):
-        resolved_username = str(config_dict.get("username") or "").strip()
-        account_password = config_dict.get("accounts", {}).get(resolved_username)
-        if account_password:
-            config_dict["password"] = account_password
-            sources["password"] = (
-                SOURCE_PROJECT if resolved_username in project_accounts else SOURCE_GLOBAL
-            )
+    resolved_username = str(config_dict.get("username") or "").strip()
+    account_password = config_dict.get("accounts", {}).get(resolved_username)
+    if account_password:
+        config_dict["password"] = account_password
+        sources["password"] = (
+            SOURCE_PROJECT if resolved_username in project_accounts else SOURCE_GLOBAL
+        )
 
     if not config_dict.get("password") and env_password:
         config_dict["password"] = env_password

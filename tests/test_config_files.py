@@ -2021,6 +2021,33 @@ password = "project-pass"
         assert sources["password"] == SOURCE_PROJECT
         assert sources["accounts"] == SOURCE_PROJECT
 
+    def test_password_accounts_override_auth_password(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Account password should take precedence over legacy [auth].password."""
+        project_dir = tmp_path / ".inspire"
+        project_dir.mkdir()
+        project_config = project_dir / "config.toml"
+        project_config.write_text(
+            """
+[auth]
+username = "toml-user"
+password = "auth-pass"
+
+[accounts."toml-user"]
+password = "account-pass"
+"""
+        )
+
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "missing" / "config.toml")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("INSPIRE_PASSWORD", "env-pass")
+
+        cfg, sources = Config.from_files_and_env(require_credentials=False)
+
+        assert cfg.password == "account-pass"
+        assert sources["password"] == SOURCE_PROJECT
+
     def test_project_account_catalog_merges_with_global(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
     ) -> None:
