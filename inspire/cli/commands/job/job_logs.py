@@ -448,6 +448,29 @@ def _emit_tunnel_fallback_hint(ctx: Context, *, bridge_name: Optional[str]) -> N
         )
 
 
+def _resolve_tunnel_preflight_target(
+    bridge_name: Optional[str],
+) -> tuple[Optional[str], object | None, bool]:
+    """Resolve the bridge/config tuple used by SSH availability preflight.
+
+    Returns:
+        (effective_bridge_name, tunnel_config_or_none, has_configured_bridge)
+    """
+    try:
+        tunnel_config = load_tunnel_config()
+    except Exception:
+        return bridge_name, None, bool(bridge_name)
+
+    if bridge_name:
+        return bridge_name, tunnel_config, tunnel_config.get_bridge(bridge_name) is not None
+
+    bridge = tunnel_config.get_bridge()
+    if bridge is None:
+        return None, tunnel_config, False
+
+    return bridge.name, tunnel_config, True
+
+
 def _try_get_ssh_exit_code(
     ctx: Context,
     *,
@@ -458,10 +481,53 @@ def _try_get_ssh_exit_code(
     head: int | None,
     path: bool,
     follow: bool,
+    refresh: bool,
+    cache_exists: bool,
+    current_offset: int,
     bridge_name: Optional[str] = None,
 ) -> int | None:
+    effective_bridge_name, tunnel_config, bridge_configured = _resolve_tunnel_preflight_target(
+        bridge_name
+    )
+    bridge_name_for_checks = effective_bridge_name or bridge_name
+
+    requires_remote_fetch = (not path) and (
+        follow or refresh or (not cache_exists) or current_offset > 0
+    )
+
     try:
-        if not is_tunnel_available(bridge_name=bridge_name):
+        if not is_tunnel_available(
+            bridge_name=bridge_name_for_checks,
+            config=tunnel_config,
+            retries=0,
+            retry_pause=0.0,
+            progressive=False,
+        ):
+            if bridge_name and tunnel_config is not None and not bridge_configured:
+                _handle_error(
+                    ctx,
+                    "BridgeNotFound",
+                    f"Bridge '{bridge_name}' not found.",
+                    EXIT_GENERAL_ERROR,
+                    hint="Run 'inspire tunnel list' to see available bridge profiles.",
+                )
+            if bridge_configured and requires_remote_fetch:
+                bridge_label = (
+                    f"bridge '{bridge_name_for_checks}'"
+                    if bridge_name_for_checks
+                    else "default bridge"
+                )
+                _handle_error(
+                    ctx,
+                    "TunnelError",
+                    f"SSH tunnel not available for {bridge_label}.",
+                    EXIT_GENERAL_ERROR,
+                    hint=(
+                        "Run 'inspire tunnel status' to troubleshoot. "
+                        "If needed, re-create the bridge via "
+                        "'inspire notebook ssh <notebook-id> --save-as <name>'."
+                    ),
+                )
             _emit_tunnel_fallback_hint(ctx, bridge_name=bridge_name)
             return None
 
@@ -852,6 +918,13 @@ def _run_job_logs_single_job(
 
         cache_paths = _build_log_cache_paths(config, job_id)
         cache_path = _migrate_legacy_log_filename(cache_paths)
+        cache_exists = cache_path.exists()
+        current_offset = _get_current_log_offset(
+            cache,
+            job_id=job_id,
+            cache_path=cache_path,
+            refresh=refresh,
+        )
 
         ssh_exit_code = _try_get_ssh_exit_code(
             ctx,
@@ -862,6 +935,9 @@ def _run_job_logs_single_job(
             head=head,
             path=path,
             follow=follow,
+            refresh=refresh,
+            cache_exists=cache_exists,
+            current_offset=current_offset,
             bridge_name=bridge,
         )
         if ssh_exit_code is not None:
@@ -884,14 +960,7 @@ def _run_job_logs_single_job(
             )
             sys.exit(follow_exit_code)
 
-        current_offset = _get_current_log_offset(
-            cache,
-            job_id=job_id,
-            cache_path=cache_path,
-            refresh=refresh,
-        )
-
-        if current_offset > 0 and cache_path.exists():
+        if current_offset > 0 and cache_exists:
             if not ctx.json_output:
                 click.echo(f"Fetching new log content from offset {current_offset}...")
 

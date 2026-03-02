@@ -992,6 +992,55 @@ def test_job_logs_fallback_mentions_connected_bridge_candidates(
     assert "may not share the same remote directory/log path" in result.output
 
 
+def test_job_logs_fail_fast_when_default_bridge_stopped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    patch_config_and_auth(monkeypatch, tmp_path)
+
+    config = make_test_config(tmp_path)
+    cache = JobCache(config.get_expanded_cache_path())
+    remote_log_path = f"/train/logs/.inspire/training_master_{TEST_JOB_ID}.log"
+    cache.add_job(
+        job_id=TEST_JOB_ID,
+        name="test-job",
+        resource="H200",
+        command="echo test",
+        status="RUNNING",
+        log_path=remote_log_path,
+    )
+
+    from importlib import import_module
+
+    job_deps = import_module("inspire.cli.commands.job.job_deps")
+    job_logs_module = import_module("inspire.cli.commands.job.job_logs")
+
+    fake_tunnel_config = tunnel_module.TunnelConfig(
+        bridges={
+            "gpu-main": tunnel_module.BridgeProfile(
+                name="gpu-main",
+                proxy_url="https://proxy.example.invalid",
+            )
+        },
+        default_bridge="gpu-main",
+    )
+
+    called = {"fetch_remote_log": False}
+
+    def fake_fetch(*args, **kwargs):  # noqa: ANN002, ANN003
+        called["fetch_remote_log"] = True
+
+    monkeypatch.setattr(job_logs_module, "load_tunnel_config", lambda: fake_tunnel_config)
+    monkeypatch.setattr(job_logs_module, "is_tunnel_available", lambda *args, **kwargs: False)
+    monkeypatch.setattr(job_deps, "fetch_remote_log_via_bridge", fake_fetch)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["job", "logs", TEST_JOB_ID, "--tail", "80"])
+
+    assert result.exit_code == EXIT_GENERAL_ERROR
+    assert "SSH tunnel not available for bridge 'gpu-main'" in result.output
+    assert called["fetch_remote_log"] is False
+
+
 def test_tunnel_list_places_connected_bridges_first(monkeypatch: pytest.MonkeyPatch) -> None:
     from importlib import import_module
 
