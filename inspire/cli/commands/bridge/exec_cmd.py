@@ -52,8 +52,10 @@ from inspire.cli.utils.tunnel_reconnect import (
     should_attempt_ssh_reconnect,
 )
 from inspire.config.ssh_runtime import resolve_ssh_runtime_config
+from inspire.platform.web import browser_api as browser_api_module
 
 logger = logging.getLogger(__name__)
+_TERMINAL_NOTEBOOK_STATUSES = frozenset({"FAILED", "ERROR", "STOPPED", "DELETED"})
 
 
 def split_denylist(items: tuple[str, ...]) -> list[str]:
@@ -145,6 +147,42 @@ def try_exec_via_ssh_tunnel(
                     "retry 'inspire notebook ssh <notebook-id> --save-as <name>'."
                 ),
             )
+
+        notebook_id = str(bridge.notebook_id or "").strip()
+        if notebook_id:
+            try:
+                if reconnect_state.web_session is None:
+                    reconnect_state.web_session = require_web_session(
+                        ctx,
+                        hint=(
+                            "Automatic tunnel rebuild needs web authentication. "
+                            "Set [auth].username and configure password via INSPIRE_PASSWORD "
+                            'or [accounts."<username>"].password.'
+                        ),
+                    )
+                notebook_detail = browser_api_module.get_notebook_detail(
+                    notebook_id=notebook_id,
+                    session=reconnect_state.web_session,
+                )
+                notebook_status = str((notebook_detail or {}).get("status") or "").strip().upper()
+                if notebook_status in _TERMINAL_NOTEBOOK_STATUSES:
+                    return _emit_error(
+                        ctx,
+                        "TunnelError",
+                        (
+                            "SSH tunnel not available. "
+                            f"Bridge '{bridge.name}' notebook '{notebook_id}' "
+                            f"is {notebook_status}."
+                        ),
+                        hint=f"Start it with 'inspire notebook start {notebook_id}' and retry.",
+                    )
+            except Exception as status_error:  # noqa: BLE001
+                logger.debug(
+                    "Skipping notebook status preflight bridge=%s notebook_id=%s error=%s",
+                    bridge.name,
+                    notebook_id,
+                    status_error,
+                )
 
         if not ctx.json_output:
             click.echo(

@@ -457,6 +457,105 @@ def test_bridge_exec_json_errors_when_bridge_configured_but_not_responding(
     assert payload["error"]["type"] == "TunnelError"
 
 
+def test_bridge_exec_fails_fast_when_notebook_is_stopped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_sync_config(tmp_path)
+    config.tunnel_retries = 3
+    config.tunnel_retry_pause = 0.0
+    calls: Dict[str, int] = {"rebuild": 0}
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+
+    tunnel_config = TunnelConfig()
+    tunnel_config.add_bridge(
+        BridgeProfile(
+            name="gpu-main",
+            proxy_url="https://proxy.example.com/proxy/31337/",
+            notebook_id="notebook-1",
+        )
+    )
+
+    monkeypatch.setattr(exec_cmd_module, "is_tunnel_available", lambda *args, **kwargs: False)
+    monkeypatch.setattr(exec_cmd_module, "load_tunnel_config", lambda: tunnel_config)
+    monkeypatch.setattr(exec_cmd_module, "require_web_session", lambda ctx, hint: object())
+    monkeypatch.setattr(
+        exec_cmd_module.browser_api_module,
+        "get_notebook_detail",
+        lambda notebook_id, session=None: {"notebook_id": notebook_id, "status": "STOPPED"},
+    )
+
+    def fake_rebuild(*args: Any, **kwargs: Any) -> BridgeProfile:
+        calls["rebuild"] += 1
+        return tunnel_config.bridges["gpu-main"]
+
+    monkeypatch.setattr(exec_cmd_module, "rebuild_notebook_bridge_profile", fake_rebuild)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["bridge", "exec", "echo hi", "--bridge", "gpu-main"])
+
+    assert result.exit_code == EXIT_GENERAL_ERROR
+    assert "notebook 'notebook-1' is STOPPED" in result.output
+    assert "inspire notebook start notebook-1" in result.output
+    assert calls["rebuild"] == 0
+
+
+def test_bridge_exec_json_fails_fast_when_notebook_is_stopped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_sync_config(tmp_path)
+    config.tunnel_retries = 3
+    config.tunnel_retry_pause = 0.0
+    calls: Dict[str, int] = {"rebuild": 0}
+
+    monkeypatch.setattr(
+        Config,
+        "from_files_and_env",
+        classmethod(lambda cls, require_target_dir=False, require_credentials=True: (config, {})),
+    )
+
+    tunnel_config = TunnelConfig()
+    tunnel_config.add_bridge(
+        BridgeProfile(
+            name="gpu-main",
+            proxy_url="https://proxy.example.com/proxy/31337/",
+            notebook_id="notebook-1",
+        )
+    )
+
+    monkeypatch.setattr(exec_cmd_module, "is_tunnel_available", lambda *args, **kwargs: False)
+    monkeypatch.setattr(exec_cmd_module, "load_tunnel_config", lambda: tunnel_config)
+    monkeypatch.setattr(exec_cmd_module, "require_web_session", lambda ctx, hint: object())
+    monkeypatch.setattr(
+        exec_cmd_module.browser_api_module,
+        "get_notebook_detail",
+        lambda notebook_id, session=None: {"notebook_id": notebook_id, "status": "STOPPED"},
+    )
+
+    def fake_rebuild(*args: Any, **kwargs: Any) -> BridgeProfile:
+        calls["rebuild"] += 1
+        return tunnel_config.bridges["gpu-main"]
+
+    monkeypatch.setattr(exec_cmd_module, "rebuild_notebook_bridge_profile", fake_rebuild)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_main,
+        ["--json", "bridge", "exec", "echo hi", "--bridge", "gpu-main"],
+    )
+
+    assert result.exit_code == EXIT_GENERAL_ERROR
+    payload = json.loads(result.output)
+    assert payload["success"] is False
+    assert payload["error"]["type"] == "TunnelError"
+    assert "notebook 'notebook-1' is STOPPED" in payload["error"]["message"]
+    assert calls["rebuild"] == 0
+
+
 def test_bridge_exec_errors_when_no_bridge_configured(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
