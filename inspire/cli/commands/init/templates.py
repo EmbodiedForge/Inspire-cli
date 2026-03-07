@@ -81,6 +81,7 @@ denylist = ["*.tmp", ".git/*"]
 [notebook]
 resource = "1xH200"
 # image = "pytorch:latest"
+# post_start = "keepalive"  # keepalive | none | shell command
 
 [remote_env]
 # Environment variables exported before remote commands run.

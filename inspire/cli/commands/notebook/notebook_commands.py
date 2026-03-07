@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import time
+from pathlib import Path
 from typing import Optional
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
@@ -13,7 +14,7 @@ from urllib import request as urllib_request
 
 import click
 
-from .notebook_create_flow import maybe_start_keepalive, run_notebook_create
+from .notebook_create_flow import maybe_run_post_start, run_notebook_create
 from inspire.cli.context import (
     Context,
     EXIT_API_ERROR,
@@ -29,6 +30,7 @@ from inspire.cli.utils.notebook_cli import (
     require_web_session,
     resolve_json_output,
 )
+from inspire.cli.utils.notebook_post_start import resolve_notebook_post_start_spec
 from inspire.cli.utils.tunnel_reconnect import (
     NotebookBridgeReconnectState,
     NotebookBridgeReconnectStatus,
@@ -558,9 +560,29 @@ def _resolve_notebook_id(
     help="Wait for notebook to reach RUNNING status (default: enabled)",
 )
 @click.option(
-    "--keepalive/--no-keepalive",
-    default=True,
-    help="Run a GPU keepalive script to maintain utilization above 40% (default: enabled)",
+    "--post-start",
+    type=str,
+    default=None,
+    help="Post-start action after RUNNING: keepalive, none, or a shell command",
+)
+@click.option(
+    "--post-start-script",
+    type=click.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
+    default=None,
+    help="Local shell script to upload and run in the notebook after RUNNING",
+)
+@click.option(
+    "--keepalive",
+    "keepalive",
+    flag_value=True,
+    default=None,
+    help="Compatibility shortcut for '--post-start keepalive'",
+)
+@click.option(
+    "--no-keepalive",
+    "keepalive",
+    flag_value=False,
+    help="Compatibility shortcut for '--post-start none'",
 )
 @click.option(
     "--json",
@@ -587,7 +609,9 @@ def create_notebook_cmd(
     auto_stop: bool,
     auto: bool,
     wait: bool,
-    keepalive: bool,
+    post_start: Optional[str],
+    post_start_script: Optional[Path],
+    keepalive: Optional[bool],
     json_output: bool,
     priority: Optional[int],
 ) -> None:
@@ -603,10 +627,15 @@ def create_notebook_cmd(
         inspire notebook create -r 4CPU             # 4 CPUs
         inspire notebook create -r 1xH100 --shm-size 64  # With 64GB shared memory
         inspire notebook create --no-auto -r 1xH200 # Disable auto-select
-        inspire notebook create --no-keepalive      # Disable GPU keepalive script
-        inspire notebook create --no-keepalive --no-wait  # Old behavior (return immediately)
+        inspire notebook create --post-start keepalive
+        inspire notebook create --post-start 'bash /workspace/bootstrap.sh'
+        inspire notebook create --post-start-script scripts/notebook_bootstrap.sh
+        inspire notebook create --no-keepalive --no-wait  # Disable any post-start action
         inspire notebook create --priority 5        # Set task priority to 5
     """
+    if post_start and post_start_script:
+        raise click.UsageError("Use either --post-start or --post-start-script, not both.")
+
     project_explicit = bool(project)
 
     run_notebook_create(
@@ -622,6 +651,8 @@ def create_notebook_cmd(
         auto=auto,
         wait=wait,
         keepalive=keepalive,
+        post_start=post_start,
+        post_start_script=post_start_script,
         json_output=json_output,
         priority=priority,
         project_explicit=project_explicit,
@@ -700,9 +731,29 @@ def stop_notebook_cmd(
     help="Wait for notebook to reach RUNNING status",
 )
 @click.option(
-    "--keepalive/--no-keepalive",
-    default=True,
-    help="Run a GPU keepalive script after notebook reaches RUNNING (default: enabled)",
+    "--post-start",
+    type=str,
+    default=None,
+    help="Post-start action after RUNNING: keepalive, none, or a shell command",
+)
+@click.option(
+    "--post-start-script",
+    type=click.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
+    default=None,
+    help="Local shell script to upload and run in the notebook after RUNNING",
+)
+@click.option(
+    "--keepalive",
+    "keepalive",
+    flag_value=True,
+    default=None,
+    help="Compatibility shortcut for '--post-start keepalive'",
+)
+@click.option(
+    "--no-keepalive",
+    "keepalive",
+    flag_value=False,
+    help="Compatibility shortcut for '--post-start none'",
 )
 @click.option(
     "--json",
@@ -715,7 +766,9 @@ def start_notebook_cmd(
     ctx: Context,
     notebook: str,
     wait: bool,
-    keepalive: bool,
+    post_start: Optional[str],
+    post_start_script: Optional[Path],
+    keepalive: Optional[bool],
     json_output: bool,
 ) -> None:
     """Start a stopped notebook instance.
@@ -725,8 +778,14 @@ def start_notebook_cmd(
         inspire notebook start 78822a57-3830-44e7-8d45-e8b0d674fc44
         inspire notebook start ring-8h100-test
         inspire notebook start ring-8h100-test --wait
+        inspire notebook start ring-8h100-test --post-start keepalive
+        inspire notebook start ring-8h100-test --post-start 'bash /workspace/bootstrap.sh'
+        inspire notebook start ring-8h100-test --post-start-script scripts/notebook_bootstrap.sh
         inspire notebook start ring-8h100-test --no-keepalive
     """
+    if post_start and post_start_script:
+        raise click.UsageError("Use either --post-start or --post-start-script, not both.")
+
     json_output = resolve_json_output(ctx, json_output)
 
     session = require_web_session(
@@ -740,6 +799,17 @@ def start_notebook_cmd(
 
     base_url = get_base_url()
     config = load_config(ctx)
+    try:
+        post_start_spec = resolve_notebook_post_start_spec(
+            config=config,
+            post_start=post_start,
+            post_start_script=post_start_script,
+            keepalive=keepalive,
+        )
+    except ValueError as e:
+        _handle_error(ctx, "ValidationError", str(e), EXIT_CONFIG_ERROR)
+        return
+
     notebook_id, _ = _resolve_notebook_id(
         ctx,
         session=session,
@@ -759,7 +829,7 @@ def start_notebook_cmd(
         click.echo(f"Notebook '{notebook_id}' is being started.")
 
     notebook_detail = None
-    if wait or keepalive:
+    if wait or post_start_spec is not None:
         if not json_output:
             click.echo("Waiting for notebook to reach RUNNING status...")
         try:
@@ -786,14 +856,14 @@ def start_notebook_cmd(
             )
             return
 
-    if notebook_detail and keepalive:
+    if notebook_detail and post_start_spec is not None:
         quota = notebook_detail.get("quota") or {}
         gpu_count = quota.get("gpu_count", 0) or 0
-        maybe_start_keepalive(
+        maybe_run_post_start(
             ctx,
             notebook_id=notebook_id,
             session=session,
-            keepalive=True,
+            post_start_spec=post_start_spec,
             gpu_count=gpu_count,
             json_output=json_output,
         )

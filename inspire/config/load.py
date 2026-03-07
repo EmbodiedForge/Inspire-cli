@@ -67,6 +67,7 @@ _DEFAULTS_FIELD_MAP = {
     "image": "job_image",
     "notebook_image": "notebook_image",
     "notebook_resource": "notebook_resource",
+    "notebook_post_start": "notebook_post_start",
     "priority": "job_priority",
     "shm_size": "shm_size",
     "target_dir": "target_dir",
@@ -145,6 +146,7 @@ def _default_config_values() -> dict[str, Any]:
         "context_account": None,
         "notebook_resource": "1xH200",
         "notebook_image": None,
+        "notebook_post_start": "keepalive",
         "rtunnel_bin": None,
         "sshd_deb_dir": None,
         "dropbear_deb_dir": None,
@@ -273,6 +275,7 @@ def _coerce_project_default(field_name: str, raw_value: Any) -> Any:
         "job_image",
         "notebook_image",
         "notebook_resource",
+        "notebook_post_start",
         "log_pattern",
     }:
         return str(raw_value)

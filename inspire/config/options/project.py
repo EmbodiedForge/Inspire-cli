@@ -73,6 +73,15 @@ NOTEBOOK_OPTIONS: list[ConfigOption] = [
         category="Notebook",
         scope="project",
     ),
+    ConfigOption(
+        env_var="INSPIRE_NOTEBOOK_POST_START",
+        toml_key="notebook.post_start",
+        field_name="notebook_post_start",
+        description="Post-start notebook action: keepalive, none, or a shell command",
+        default="keepalive",
+        category="Notebook",
+        scope="project",
+    ),
 ]
 
 SYNC_OPTIONS: list[ConfigOption] = [

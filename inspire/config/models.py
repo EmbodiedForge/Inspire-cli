@@ -116,6 +116,7 @@ class Config:
     # Notebook settings
     notebook_resource: str = "1xH200"
     notebook_image: Optional[str] = None
+    notebook_post_start: str = "keepalive"
 
     # SSH settings
     rtunnel_bin: Optional[str] = None

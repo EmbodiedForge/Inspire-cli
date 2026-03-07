@@ -1621,6 +1621,57 @@ def test_notebook_create_rejects_priority_11(monkeypatch: pytest.MonkeyPatch) ->
     assert called is False
 
 
+def test_notebook_create_accepts_post_start_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run_notebook_create(ctx: Context, **kwargs: Any) -> None:
+        assert ctx is not None
+        captured.update(kwargs)
+
+    monkeypatch.setattr(notebook_cmd_module, "run_notebook_create", fake_run_notebook_create)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["notebook", "create", "--post-start", "echo hi"])
+
+    assert result.exit_code == EXIT_SUCCESS
+    assert captured["post_start"] == "echo hi"
+    assert captured["post_start_script"] is None
+
+
+def test_notebook_create_rejects_post_start_and_script_together(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    called = False
+
+    def fake_run_notebook_create(ctx: Context, **kwargs: Any) -> None:
+        nonlocal called
+        assert ctx is not None
+        assert kwargs is not None
+        called = True
+
+    monkeypatch.setattr(notebook_cmd_module, "run_notebook_create", fake_run_notebook_create)
+
+    script_path = tmp_path / "bootstrap.sh"
+    script_path.write_text("#!/usr/bin/env bash\necho hi\n", encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_main,
+        [
+            "notebook",
+            "create",
+            "--post-start",
+            "echo hi",
+            "--post-start-script",
+            str(script_path),
+        ],
+    )
+
+    assert result.exit_code != EXIT_SUCCESS
+    assert "Use either --post-start or --post-start-script" in result.output
+    assert called is False
+
+
 def test_notebook_start_accepts_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     ws_cpu = "ws-6e6ba362-e98e-45b2-9c5a-311998e93d65"
     ws_gpu = "ws-9dcc0e1f-80a4-4af2-bc2f-0e352e7b17e6"
