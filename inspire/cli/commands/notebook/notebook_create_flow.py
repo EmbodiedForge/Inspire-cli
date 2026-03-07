@@ -831,20 +831,31 @@ def maybe_start_keepalive(
     if not (keepalive and gpu_count > 0):
         return
 
-    from inspire.cli.utils.keepalive import get_keepalive_command
+    from inspire.cli.utils.keepalive import (
+        KEEPALIVE_LOG,
+        KEEPALIVE_STARTED_MARKER,
+        get_keepalive_command,
+    )
 
     if not json_output:
         click.echo("Starting GPU keepalive script...")
 
     try:
-        browser_api_module.run_command_in_notebook(
+        started = browser_api_module.run_command_in_notebook(
             notebook_id=notebook_id,
-            command=get_keepalive_command(),
+            command=get_keepalive_command(completion_marker=KEEPALIVE_STARTED_MARKER),
             session=session,
+            timeout=20,
+            completion_marker=KEEPALIVE_STARTED_MARKER,
         )
-        if not json_output:
+        if not json_output and started:
             click.echo("GPU keepalive script started (log: /tmp/keepalive.log)")
             click.echo('  To stop: inspire bridge exec "kill $(cat /tmp/keepalive.pid)"')
+        if not json_output and not started:
+            click.echo(
+                f"Warning: Failed to confirm keepalive startup; check {KEEPALIVE_LOG} inside the notebook.",
+                err=True,
+            )
     except Exception as e:
         if not json_output:
             click.echo(f"Warning: Failed to start keepalive script: {e}", err=True)

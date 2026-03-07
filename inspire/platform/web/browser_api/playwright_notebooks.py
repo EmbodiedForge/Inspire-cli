@@ -146,13 +146,46 @@ def build_jupyter_proxy_url(lab_url: str, *, port: int) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _send_command_via_terminal_ws(
+    *,
+    context,
+    lab_frame,
+    command: str,
+    timeout_ms: int,
+    completion_marker: str | None = None,
+) -> bool:
+    from inspire.platform.web.browser_api.rtunnel import (
+        _build_terminal_websocket_url,
+        _create_terminal_via_api,
+        _delete_terminal_via_api,
+        _send_terminal_command_via_websocket,
+    )
+
+    term_name = _create_terminal_via_api(context, lab_frame.url)
+    if not term_name:
+        return False
+
+    try:
+        ws_url = _build_terminal_websocket_url(lab_frame.url, term_name)
+        return _send_terminal_command_via_websocket(
+            lab_frame,
+            ws_url=ws_url,
+            command=command,
+            timeout_ms=timeout_ms,
+            completion_marker=completion_marker,
+        )
+    finally:
+        _delete_terminal_via_api(context, lab_url=lab_frame.url, term_name=term_name)
+
+
 def run_command_in_notebook(
     notebook_id: str,
     command: str,
     session: Optional[WebSession] = None,
     headless: bool = True,
     timeout: int = 60,
-) -> None:
+    completion_marker: str | None = None,
+) -> bool:
     """Run a command in a notebook's Jupyter terminal."""
     if _in_asyncio_loop():
         return _run_in_thread(
@@ -162,6 +195,7 @@ def run_command_in_notebook(
             session=session,
             headless=headless,
             timeout=timeout,
+            completion_marker=completion_marker,
         )
     return _run_command_in_notebook_sync(
         notebook_id=notebook_id,
@@ -169,6 +203,7 @@ def run_command_in_notebook(
         session=session,
         headless=headless,
         timeout=timeout,
+        completion_marker=completion_marker,
     )
 
 
@@ -178,11 +213,17 @@ def _run_command_in_notebook_sync(
     session: Optional[WebSession] = None,
     headless: bool = True,
     timeout: int = 60,
-) -> None:
+    completion_marker: str | None = None,
+) -> bool:
     """Sync implementation for run_command_in_notebook."""
     import sys as _sys
 
     from playwright.sync_api import sync_playwright
+
+    from inspire.platform.web.browser_api.rtunnel import (
+        _focus_terminal_input,
+        _open_or_create_terminal,
+    )
 
     if session is None:
         session = get_web_session()
@@ -197,79 +238,33 @@ def _run_command_in_notebook_sync(
 
         try:
             lab_frame = open_notebook_lab(page, notebook_id=notebook_id)
+            timeout_ms = max(int(timeout * 1000), 1000)
 
             try:
                 lab_frame.locator("text=加载中").first.wait_for(state="hidden", timeout=30000)
             except Exception:
                 pass
 
-            terminal_opened = False
+            if _send_command_via_terminal_ws(
+                context=context,
+                lab_frame=lab_frame,
+                command=command,
+                timeout_ms=timeout_ms,
+                completion_marker=completion_marker,
+            ):
+                return True
 
-            # Strategy 1: REST API
-            try:
-                from inspire.platform.web.browser_api.rtunnel import (
-                    _create_terminal_via_api,
-                    _jupyter_server_base,
-                )
-
-                term_name = _create_terminal_via_api(context, lab_frame.url)
-                if term_name:
-                    server_base = _jupyter_server_base(lab_frame.url)
-                    term_url = f"{server_base}lab/terminals/{term_name}?reset"
-                    lab_frame.goto(term_url, timeout=15000, wait_until="domcontentloaded")
-                    lab_frame.locator(".xterm").first.wait_for(state="attached", timeout=10000)
-                    terminal_opened = True
-            except Exception:
-                pass
-
-            # Strategy 2: launcher card
-            if not terminal_opened:
-                terminal_card = lab_frame.locator(
-                    "div.jp-LauncherCard:has-text('Terminal'), "
-                    "div.jp-LauncherCard:has-text('终端')"
-                )
-                try:
-                    terminal_card.first.wait_for(state="visible", timeout=20000)
-                    terminal_card.first.click(timeout=8000)
-                    terminal_opened = True
-                except Exception:
-                    pass
-
-            # Strategy 3: launcher button → launcher card
-            if not terminal_opened:
-                try:
-                    launcher_btn = lab_frame.locator(
-                        "button[title*='Launcher'], button[aria-label*='Launcher']"
-                    ).first
-                    if launcher_btn.count() > 0:
-                        launcher_btn.click(timeout=2000)
-                        page.wait_for_timeout(500)
-                    terminal_card = lab_frame.locator(
-                        "div.jp-LauncherCard:has-text('Terminal'), "
-                        "div.jp-LauncherCard:has-text('终端')"
-                    )
-                    terminal_card.first.wait_for(state="visible", timeout=20000)
-                    terminal_card.first.click(timeout=8000)
-                    terminal_opened = True
-                except Exception:
-                    pass
-
+            terminal_opened, _term_name = _open_or_create_terminal(context, page, lab_frame)
             if not terminal_opened:
                 raise ValueError("Failed to open Jupyter terminal")
 
-            try:
-                term_focus = lab_frame.locator(
-                    "textarea.xterm-helper-textarea, " "div.xterm-helper-textarea textarea"
-                ).first
-                if term_focus.count() > 0:
-                    term_focus.click(timeout=2000)
-            except Exception:
-                pass
+            if not _focus_terminal_input(lab_frame, page):
+                raise ValueError("Failed to focus Jupyter terminal input")
 
-            page.keyboard.type(command, delay=2)
+            page.keyboard.insert_text(command)
             page.keyboard.press("Enter")
-
-            page.wait_for_timeout(int(timeout * 1000))
+            page.wait_for_timeout(min(timeout_ms, 1000))
+            return True
 
         finally:
             try:

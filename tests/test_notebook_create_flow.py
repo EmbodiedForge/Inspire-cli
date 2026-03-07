@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from inspire.cli.utils.keepalive import KEEPALIVE_STARTED_MARKER
 from inspire.cli.commands.notebook import notebook_create_flow as flow_module
 from inspire.cli.commands.notebook.notebook_create_flow import resolve_notebook_resource_spec_price
 from inspire.cli.context import Context
@@ -260,3 +261,34 @@ def test_run_notebook_create_skips_keepalive_when_wait_fails(monkeypatch) -> Non
 
     assert calls["wait_called"] is True
     assert "keepalive_called" not in calls
+
+
+def test_maybe_start_keepalive_warns_when_start_is_not_confirmed(
+    monkeypatch, capsys
+) -> None:  # noqa: ANN001
+    calls: dict[str, object] = {}
+
+    def fake_run_command_in_notebook(**kwargs):  # noqa: ANN003, ANN201
+        calls.update(kwargs)
+        return False
+
+    monkeypatch.setattr(
+        flow_module.browser_api_module,
+        "run_command_in_notebook",
+        fake_run_command_in_notebook,
+    )
+
+    flow_module.maybe_start_keepalive(
+        Context(),
+        notebook_id="nb-123",
+        session=object(),
+        keepalive=True,
+        gpu_count=1,
+        json_output=False,
+    )
+
+    captured = capsys.readouterr()
+    assert "Starting GPU keepalive script..." in captured.out
+    assert "Failed to confirm keepalive startup" in captured.err
+    assert calls["completion_marker"] == KEEPALIVE_STARTED_MARKER
+    assert KEEPALIVE_STARTED_MARKER in str(calls["command"])

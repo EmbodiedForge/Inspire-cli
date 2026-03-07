@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import shlex
 
 # Smart keepalive script that:
@@ -136,8 +137,12 @@ if __name__ == "__main__":
     main()
 '''
 
+PID_FILE = "/tmp/keepalive.pid"
+KEEPALIVE_LOG = "/tmp/keepalive.log"
+KEEPALIVE_STARTED_MARKER = "INSPIRE_KEEPALIVE_STARTED"
 
-def get_keepalive_command() -> str:
+
+def get_keepalive_command(*, completion_marker: str | None = None) -> str:
     """Return shell command to run smart keepalive script in background.
 
     The script monitors GPU utilization and only generates fake workload
@@ -147,4 +152,37 @@ def get_keepalive_command() -> str:
     Returns:
         Shell command string that runs the keepalive script via nohup.
     """
-    return f"nohup python -u -c {shlex.quote(KEEPALIVE_SCRIPT)} > /tmp/keepalive.log 2>&1 &"
+    encoded_script = base64.b64encode(KEEPALIVE_SCRIPT.encode("utf-8")).decode("ascii")
+    python_cmd = "import base64; " f"exec(base64.b64decode({encoded_script!r}).decode('utf-8'))"
+    marker = shlex.quote(completion_marker) if completion_marker else ""
+
+    command_parts = [
+        f'if [ -f {PID_FILE} ] && kill -0 "$(cat {PID_FILE})" 2>/dev/null; then',
+    ]
+    if marker:
+        command_parts.append(f"echo {marker};")
+    command_parts.extend(
+        [
+            "exit 0;",
+            "fi;",
+            f"rm -f {PID_FILE};",
+            'PYTHON_BIN="$(command -v python3 || command -v python || true)";',
+            f'if [ -z "$PYTHON_BIN" ]; then echo "[keepalive] python interpreter not found" > {KEEPALIVE_LOG}; exit 127; fi;',
+            f'nohup "$PYTHON_BIN" -u -c {shlex.quote(python_cmd)} > {KEEPALIVE_LOG} 2>&1 < /dev/null &',
+            "KEEPALIVE_STARTED=0;",
+            "for _ in 1 2 3 4 5; do",
+            f'if [ -f {PID_FILE} ] && kill -0 "$(cat {PID_FILE})" 2>/dev/null; then KEEPALIVE_STARTED=1;',
+        ]
+    )
+    if marker:
+        command_parts.append(f"echo {marker};")
+    command_parts.extend(
+        [
+            "break;",
+            "fi;",
+            "sleep 1;",
+            "done;",
+            '[ "$KEEPALIVE_STARTED" -eq 1 ]',
+        ]
+    )
+    return " ".join(command_parts)
