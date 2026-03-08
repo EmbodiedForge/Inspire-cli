@@ -16,6 +16,7 @@ from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.notebook_cli import load_config, require_web_session, resolve_json_output
 from inspire.cli.utils.notebook_post_start import (
     NotebookPostStartSpec,
+    NO_WAIT_POST_START_WARNING,
     resolve_notebook_post_start_spec,
 )
 from inspire.config import Config, ConfigError
@@ -785,6 +786,9 @@ def maybe_wait_for_running(
 ) -> bool:
     if not (wait or needs_post_start):
         return True
+
+    if needs_post_start and not wait and not json_output:
+        click.echo(NO_WAIT_POST_START_WARNING, err=True)
 
     if not json_output:
         click.echo("Waiting for notebook to reach RUNNING status...")

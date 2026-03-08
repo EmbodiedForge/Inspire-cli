@@ -20,6 +20,11 @@ POST_START_PID_FILE = "/tmp/inspire-notebook-post-start.pid"
 POST_START_SCRIPT_PATH = "/tmp/inspire-notebook-post-start.sh"
 POST_START_STARTED_MARKER = "INSPIRE_NOTEBOOK_POST_START_STARTED"
 POST_START_PRESET_KEEPALIVE = "keepalive"
+NO_WAIT_POST_START_WARNING = (
+    "Note: --no-wait requested, but a notebook post-start action is configured. "
+    "Waiting anyway so the post-start action can run. "
+    "Use --no-keepalive --no-wait or set notebook_post_start=none to return immediately."
+)
 _POST_START_DISABLED_VALUES = {"0", "disable", "disabled", "false", "none", "off"}
 
 
@@ -177,6 +182,7 @@ def resolve_notebook_post_start_spec(
 
 __all__ = [
     "NotebookPostStartSpec",
+    "NO_WAIT_POST_START_WARNING",
     "POST_START_LOG",
     "POST_START_PID_FILE",
     "POST_START_PRESET_KEEPALIVE",

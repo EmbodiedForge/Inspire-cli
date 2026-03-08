@@ -32,7 +32,10 @@ from inspire.cli.utils.notebook_cli import (
     require_web_session,
     resolve_json_output,
 )
-from inspire.cli.utils.notebook_post_start import resolve_notebook_post_start_spec
+from inspire.cli.utils.notebook_post_start import (
+    NO_WAIT_POST_START_WARNING,
+    resolve_notebook_post_start_spec,
+)
 from inspire.config import ConfigError
 from inspire.config.workspaces import select_workspace_id
 from inspire.platform.web import browser_api as browser_api_module
@@ -94,7 +97,10 @@ from inspire.platform.web.browser_api import NotebookFailedError
 @click.option(
     "--wait/--no-wait",
     default=True,
-    help="Wait for notebook to reach RUNNING status (default: enabled)",
+    help=(
+        "Wait for notebook to reach RUNNING status "
+        "(default: enabled; still required when a post-start action is configured)"
+    ),
 )
 @click.option(
     "--post-start",
@@ -265,7 +271,7 @@ def stop_notebook_cmd(
 @click.option(
     "--wait/--no-wait",
     default=False,
-    help="Wait for notebook to reach RUNNING status",
+    help="Wait for notebook to reach RUNNING status (still required for post-start actions)",
 )
 @click.option(
     "--post-start",
@@ -367,6 +373,8 @@ def start_notebook_cmd(
 
     notebook_detail = None
     if wait or post_start_spec is not None:
+        if not wait and post_start_spec is not None and not json_output:
+            click.echo(NO_WAIT_POST_START_WARNING, err=True)
         if not json_output:
             click.echo("Waiting for notebook to reach RUNNING status...")
         try:

@@ -307,3 +307,38 @@ def test_maybe_run_post_start_warns_when_start_is_not_confirmed(
     assert "Failed to confirm gpu keepalive script startup" in captured.err
     assert calls["completion_marker"] == KEEPALIVE_STARTED_MARKER
     assert calls["command"] == "echo keepalive"
+
+
+def test_maybe_wait_for_running_warns_when_no_wait_conflicts_with_post_start(
+    monkeypatch, capsys
+) -> None:  # noqa: ANN001
+    calls: dict[str, object] = {}
+
+    def fake_wait_for_notebook_running(**kwargs):  # noqa: ANN003, ANN201
+        calls.update(kwargs)
+        return {"status": "RUNNING"}
+
+    monkeypatch.setattr(
+        flow_module.browser_api_module,
+        "wait_for_notebook_running",
+        fake_wait_for_notebook_running,
+    )
+
+    ok = flow_module.maybe_wait_for_running(
+        Context(),
+        notebook_id="nb-123",
+        session=object(),
+        wait=False,
+        needs_post_start=True,
+        json_output=False,
+        timeout=10,
+    )
+
+    captured = capsys.readouterr()
+    assert ok is True
+    assert "--no-wait requested" in captured.err
+    assert "--no-keepalive --no-wait" in captured.err
+    assert "Waiting for notebook to reach RUNNING status..." in captured.out
+    assert "Notebook is now RUNNING." in captured.out
+    assert calls["notebook_id"] == "nb-123"
+    assert calls["timeout"] == 10
