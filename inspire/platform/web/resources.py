@@ -88,10 +88,21 @@ def fetch_resource_availability(
     """
     global _availability_cache, _cache_time, KNOWN_COMPUTE_GROUPS
 
+    resolved_config = config
+
+    if resolved_config is None:
+        try:
+            resolved_config, _ = Config.from_files_and_env(
+                require_credentials=False,
+                require_target_dir=False,
+            )
+        except Exception:
+            resolved_config = None
+
     # Load known compute groups from config
     known_groups_map: dict[str, str] = {}
-    if config is not None and hasattr(config, "compute_groups"):
-        compute_groups_tuples = load_compute_groups_from_config(config.compute_groups)
+    if resolved_config is not None and hasattr(resolved_config, "compute_groups"):
+        compute_groups_tuples = load_compute_groups_from_config(resolved_config.compute_groups)
         known_groups_map = compute_group_name_map(compute_groups_tuples)
     # Update global for backward compatibility
     KNOWN_COMPUTE_GROUPS = known_groups_map
@@ -103,17 +114,10 @@ def fetch_resource_availability(
             return _availability_cache[cache_key]
 
     base_url = None
-    if config is not None:
-        base_url = getattr(config, "base_url", None)
+    if resolved_config is not None:
+        base_url = getattr(resolved_config, "base_url", None)
     if not base_url:
-        try:
-            resolved_config, _ = Config.from_files_and_env(
-                require_credentials=False,
-                require_target_dir=False,
-            )
-            base_url = resolved_config.base_url
-        except Exception:
-            base_url = os.environ.get("INSPIRE_BASE_URL", "https://api.example.com")
+        base_url = os.environ.get("INSPIRE_BASE_URL", "https://api.example.com")
 
     session = get_web_session(require_workspace=True)
     nodes = fetch_workspace_availability(session, base_url=base_url)
@@ -176,7 +180,15 @@ def fetch_resource_availability(
             groups[group_id]["ready_nodes"] += 1
 
             task_list = node.get("task_list", [])
-            if not task_list or len(task_list) == 0:
+            cordon_type = str(node.get("cordon_type", "")).strip()
+            is_maint = node.get("is_maint", False)
+            is_truly_free = (
+                (not task_list or len(task_list) == 0)
+                and not cordon_type  # no cordon (hardware-fault, software-fault, etc.)
+                and not is_maint  # not in maintenance
+                and resource_pool != "fault"  # not in fault pool
+            )
+            if is_truly_free:
                 groups[group_id]["free_nodes"] += 1
 
     # Convert to ComputeGroupAvailability objects

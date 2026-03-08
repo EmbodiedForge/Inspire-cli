@@ -82,10 +82,44 @@ def find_best_compute_group_accurate(
     if not availability:
         return None
 
+    def actual_available(group: GPUAvailability) -> int:
+        return max(int(group.available_gpus), 0)
+
     def effective_available(group: GPUAvailability) -> int:
         if include_preemptible:
-            return group.available_gpus + group.low_priority_gpus
-        return group.available_gpus
+            return actual_available(group) + max(int(group.low_priority_gpus), 0)
+        return actual_available(group)
+
+    def _pick_best(
+        candidates: list[GPUAvailability], *, allow_preemptible: bool
+    ) -> GPUAvailability | None:
+        if not candidates:
+            return None
+
+        if allow_preemptible:
+            candidates = [group for group in candidates if effective_available(group) >= min_gpus]
+            sort_key = lambda group: (  # noqa: E731
+                effective_available(group),
+                actual_available(group),
+            )
+        else:
+            candidates = [group for group in candidates if actual_available(group) >= min_gpus]
+            sort_key = lambda group: (  # noqa: E731
+                actual_available(group),
+                effective_available(group),
+            )
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=sort_key, reverse=True)
+
+        if preferred_groups:
+            for group in candidates:
+                if group.group_id in preferred_groups:
+                    return group
+
+        return candidates[0]
 
     if gpu_type and gpu_type.upper() != "ANY":
         gpu_type_upper = gpu_type.upper()
@@ -93,16 +127,14 @@ def find_best_compute_group_accurate(
     else:
         filtered = list(availability)
 
-    filtered.sort(key=effective_available, reverse=True)
+    selected = _pick_best(filtered, allow_preemptible=False)
+    if selected is not None:
+        return selected
 
-    if preferred_groups:
-        for group in filtered:
-            if group.group_id in preferred_groups and effective_available(group) >= min_gpus:
-                return group
-
-    for group in filtered:
-        if effective_available(group) >= min_gpus:
-            return group
+    if include_preemptible:
+        selected = _pick_best(filtered, allow_preemptible=True)
+        if selected is not None:
+            return selected
 
     return None
 
