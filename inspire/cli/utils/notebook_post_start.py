@@ -7,25 +7,19 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
-from inspire.cli.utils.keepalive import (
-    KEEPALIVE_LOG,
-    KEEPALIVE_STARTED_MARKER,
-    PID_FILE as KEEPALIVE_PID_FILE,
-    get_keepalive_command,
-)
 from inspire.config.models import Config
 
 POST_START_LOG = "/tmp/inspire-notebook-post-start.log"
 POST_START_PID_FILE = "/tmp/inspire-notebook-post-start.pid"
 POST_START_SCRIPT_PATH = "/tmp/inspire-notebook-post-start.sh"
 POST_START_STARTED_MARKER = "INSPIRE_NOTEBOOK_POST_START_STARTED"
-POST_START_PRESET_KEEPALIVE = "keepalive"
 NO_WAIT_POST_START_WARNING = (
     "Note: --no-wait requested, but a notebook post-start action is configured. "
     "Waiting anyway so the post-start action can run. "
-    "Use --no-keepalive --no-wait or set notebook_post_start=none to return immediately."
+    "Remove the post-start action or set notebook_post_start=none to return immediately."
 )
 _POST_START_DISABLED_VALUES = {"0", "disable", "disabled", "false", "none", "off"}
+_REMOVED_POST_START_VALUES = {"keepalive"}
 
 
 @dataclass(frozen=True)
@@ -48,9 +42,9 @@ def _is_disabled_post_start(value: str | None) -> bool:
     return bool(text and text.lower() in _POST_START_DISABLED_VALUES)
 
 
-def _is_keepalive_post_start(value: str | None) -> bool:
+def _is_removed_post_start_value(value: str | None) -> bool:
     text = _normalize_post_start_value(value)
-    return bool(text and text.lower() == POST_START_PRESET_KEEPALIVE)
+    return bool(text and text.lower() in _REMOVED_POST_START_VALUES)
 
 
 def _build_background_command(
@@ -106,17 +100,6 @@ def _build_script_command(
     )
 
 
-def _build_keepalive_spec() -> NotebookPostStartSpec:
-    return NotebookPostStartSpec(
-        label="GPU keepalive script",
-        command=get_keepalive_command(completion_marker=KEEPALIVE_STARTED_MARKER),
-        log_path=KEEPALIVE_LOG,
-        pid_file=KEEPALIVE_PID_FILE,
-        completion_marker=KEEPALIVE_STARTED_MARKER,
-        requires_gpu=True,
-    )
-
-
 def _build_command_spec(command_text: str) -> NotebookPostStartSpec:
     return NotebookPostStartSpec(
         label="notebook post-start command",
@@ -160,21 +143,30 @@ def resolve_notebook_post_start_spec(
     config: Config,
     post_start: str | None,
     post_start_script: Path | None,
-    keepalive: bool | None,
+    keepalive: bool | None = None,
 ) -> NotebookPostStartSpec | None:
+    if keepalive is not None:
+        raise ValueError(
+            "The keepalive notebook post-start preset has been removed. "
+            "Use post_start='none', --post-start '<shell command>', "
+            "or --post-start-script PATH."
+        )
+
     if post_start_script is not None:
         return _build_script_spec(post_start_script)
 
     resolved_value = _normalize_post_start_value(post_start)
-    if resolved_value is None and keepalive is not None:
-        resolved_value = POST_START_PRESET_KEEPALIVE if keepalive else "none"
     if resolved_value is None:
         resolved_value = _normalize_post_start_value(getattr(config, "notebook_post_start", None))
 
     if _is_disabled_post_start(resolved_value):
         return None
-    if _is_keepalive_post_start(resolved_value):
-        return _build_keepalive_spec()
+    if _is_removed_post_start_value(resolved_value):
+        raise ValueError(
+            "The 'keepalive' notebook post-start preset has been removed. "
+            "Use notebook_post_start=none, --post-start '<shell command>', "
+            "or --post-start-script PATH."
+        )
     if resolved_value is None:
         return None
     return _build_command_spec(resolved_value)
@@ -185,7 +177,6 @@ __all__ = [
     "NO_WAIT_POST_START_WARNING",
     "POST_START_LOG",
     "POST_START_PID_FILE",
-    "POST_START_PRESET_KEEPALIVE",
     "POST_START_SCRIPT_PATH",
     "POST_START_STARTED_MARKER",
     "resolve_notebook_post_start_spec",

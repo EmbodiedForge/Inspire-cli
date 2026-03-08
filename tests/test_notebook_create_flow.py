@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from inspire.cli.utils.keepalive import KEEPALIVE_STARTED_MARKER
 from inspire.cli.utils.notebook_post_start import NotebookPostStartSpec
 from inspire.cli.commands.notebook import notebook_create_flow as flow_module
 from inspire.cli.commands.notebook.notebook_create_flow import resolve_notebook_resource_spec_price
@@ -118,7 +117,7 @@ def test_gpu_resource_spec_prefers_matching_resource_prices() -> None:
 
 
 def _configure_create_happy_path(
-    monkeypatch, *, wait_result: bool
+    monkeypatch, *, wait_result: bool, post_start_value: str | None = "echo from config"
 ) -> tuple[Context, dict[str, object]]:  # noqa: ANN001
     ctx = Context()
     calls: dict[str, object] = {}
@@ -128,7 +127,7 @@ def _configure_create_happy_path(
         project_order=None,
         job_project_id="project-1111",
         notebook_image=None,
-        notebook_post_start="keepalive",
+        notebook_post_start=post_start_value,
         job_image="img-default",
         shm_size=32,
         job_priority=9,
@@ -198,12 +197,19 @@ def _configure_create_happy_path(
     monkeypatch.setattr(flow_module, "create_notebook_and_report", fake_create_notebook_and_report)
 
     def fake_wait_for_running(*_args, **_kwargs):  # noqa: ANN001
-        calls["wait_called"] = True
+        calls["wait_args"] = {
+            "wait": _kwargs["wait"],
+            "needs_post_start": _kwargs["needs_post_start"],
+        }
+        if _kwargs["wait"] or _kwargs["needs_post_start"]:
+            calls["wait_called"] = True
         return wait_result
 
     monkeypatch.setattr(flow_module, "maybe_wait_for_running", fake_wait_for_running)
 
     def fake_post_start(*_args, **kwargs):  # noqa: ANN001
+        if kwargs["post_start_spec"] is None:
+            return
         calls["post_start_called"] = True
         calls["post_start_gpu_count"] = kwargs["gpu_count"]
 
@@ -226,7 +232,6 @@ def test_run_notebook_create_orchestrates_happy_path(monkeypatch) -> None:  # no
         auto_stop=True,
         auto=False,
         wait=True,
-        keepalive=True,
         post_start=None,
         post_start_script=None,
         json_output=False,
@@ -242,7 +247,33 @@ def test_run_notebook_create_orchestrates_happy_path(monkeypatch) -> None:  # no
     assert calls["post_start_gpu_count"] == 1
 
 
-def test_run_notebook_create_skips_keepalive_when_wait_fails(monkeypatch) -> None:  # noqa: ANN001
+def test_run_notebook_create_skips_wait_without_post_start(monkeypatch) -> None:  # noqa: ANN001
+    ctx, calls = _configure_create_happy_path(monkeypatch, wait_result=True, post_start_value=None)
+
+    flow_module.run_notebook_create(
+        ctx,
+        name=None,
+        workspace=None,
+        workspace_id=None,
+        resource=None,
+        project=None,
+        image=None,
+        shm_size=None,
+        auto_stop=True,
+        auto=False,
+        wait=False,
+        post_start=None,
+        post_start_script=None,
+        json_output=False,
+        priority=None,
+        project_explicit=False,
+    )
+
+    assert "wait_called" not in calls
+    assert "post_start_called" not in calls
+
+
+def test_run_notebook_create_skips_post_start_when_wait_fails(monkeypatch) -> None:  # noqa: ANN001
     ctx, calls = _configure_create_happy_path(monkeypatch, wait_result=False)
 
     flow_module.run_notebook_create(
@@ -257,7 +288,6 @@ def test_run_notebook_create_skips_keepalive_when_wait_fails(monkeypatch) -> Non
         auto_stop=True,
         auto=False,
         wait=True,
-        keepalive=True,
         post_start=None,
         post_start_script=None,
         json_output=False,
@@ -285,12 +315,11 @@ def test_maybe_run_post_start_warns_when_start_is_not_confirmed(
     )
 
     spec = NotebookPostStartSpec(
-        label="GPU keepalive script",
-        command="echo keepalive",
-        log_path="/tmp/keepalive.log",
-        pid_file="/tmp/keepalive.pid",
-        completion_marker=KEEPALIVE_STARTED_MARKER,
-        requires_gpu=True,
+        label="notebook post-start command",
+        command="echo post-start",
+        log_path="/tmp/post-start.log",
+        pid_file="/tmp/post-start.pid",
+        completion_marker="POST_START_READY",
     )
 
     flow_module.maybe_run_post_start(
@@ -303,10 +332,10 @@ def test_maybe_run_post_start_warns_when_start_is_not_confirmed(
     )
 
     captured = capsys.readouterr()
-    assert "Starting GPU keepalive script..." in captured.out
-    assert "Failed to confirm gpu keepalive script startup" in captured.err
-    assert calls["completion_marker"] == KEEPALIVE_STARTED_MARKER
-    assert calls["command"] == "echo keepalive"
+    assert "Starting notebook post-start command..." in captured.out
+    assert "Failed to confirm notebook post-start command startup" in captured.err
+    assert calls["completion_marker"] == "POST_START_READY"
+    assert calls["command"] == "echo post-start"
 
 
 def test_maybe_wait_for_running_warns_when_no_wait_conflicts_with_post_start(
@@ -337,7 +366,7 @@ def test_maybe_wait_for_running_warns_when_no_wait_conflicts_with_post_start(
     captured = capsys.readouterr()
     assert ok is True
     assert "--no-wait requested" in captured.err
-    assert "--no-keepalive --no-wait" in captured.err
+    assert "set notebook_post_start=none" in captured.err
     assert "Waiting for notebook to reach RUNNING status..." in captured.out
     assert "Notebook is now RUNNING." in captured.out
     assert calls["notebook_id"] == "nb-123"

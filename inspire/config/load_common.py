@@ -131,7 +131,7 @@ def _default_config_values() -> dict[str, Any]:
         "context_account": None,
         "notebook_resource": "1xH200",
         "notebook_image": None,
-        "notebook_post_start": "keepalive",
+        "notebook_post_start": None,
         "rtunnel_bin": None,
         "sshd_deb_dir": None,
         "dropbear_deb_dir": None,

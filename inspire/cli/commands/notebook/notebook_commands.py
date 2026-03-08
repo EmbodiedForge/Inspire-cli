@@ -106,26 +106,13 @@ from inspire.platform.web.browser_api import NotebookFailedError
     "--post-start",
     type=str,
     default=None,
-    help="Post-start action after RUNNING: keepalive, none, or a shell command",
+    help="Post-start action after RUNNING: none or a shell command",
 )
 @click.option(
     "--post-start-script",
     type=click.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
     default=None,
     help="Local shell script to upload and run in the notebook after RUNNING",
-)
-@click.option(
-    "--keepalive",
-    "keepalive",
-    flag_value=True,
-    default=None,
-    help="Compatibility shortcut for '--post-start keepalive'",
-)
-@click.option(
-    "--no-keepalive",
-    "keepalive",
-    flag_value=False,
-    help="Compatibility shortcut for '--post-start none'",
 )
 @click.option(
     "--json",
@@ -154,7 +141,6 @@ def create_notebook_cmd(
     wait: bool,
     post_start: Optional[str],
     post_start_script: Optional[Path],
-    keepalive: Optional[bool],
     json_output: bool,
     priority: Optional[int],
 ) -> None:
@@ -170,10 +156,9 @@ def create_notebook_cmd(
         inspire notebook create -r 4CPU             # 4 CPUs
         inspire notebook create -r 1xH100 --shm-size 64  # With 64GB shared memory
         inspire notebook create --no-auto -r 1xH200 # Disable auto-select
-        inspire notebook create --post-start keepalive
         inspire notebook create --post-start 'bash /workspace/bootstrap.sh'
         inspire notebook create --post-start-script scripts/notebook_bootstrap.sh
-        inspire notebook create --no-keepalive --no-wait  # Disable any post-start action
+        inspire notebook create --post-start none --no-wait
         inspire notebook create --priority 5        # Set task priority to 5
     """
     if post_start and post_start_script:
@@ -193,7 +178,6 @@ def create_notebook_cmd(
         auto_stop=auto_stop,
         auto=auto,
         wait=wait,
-        keepalive=keepalive,
         post_start=post_start,
         post_start_script=post_start_script,
         json_output=json_output,
@@ -277,26 +261,13 @@ def stop_notebook_cmd(
     "--post-start",
     type=str,
     default=None,
-    help="Post-start action after RUNNING: keepalive, none, or a shell command",
+    help="Post-start action after RUNNING: none or a shell command",
 )
 @click.option(
     "--post-start-script",
     type=click.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
     default=None,
     help="Local shell script to upload and run in the notebook after RUNNING",
-)
-@click.option(
-    "--keepalive",
-    "keepalive",
-    flag_value=True,
-    default=None,
-    help="Compatibility shortcut for '--post-start keepalive'",
-)
-@click.option(
-    "--no-keepalive",
-    "keepalive",
-    flag_value=False,
-    help="Compatibility shortcut for '--post-start none'",
 )
 @click.option(
     "--json",
@@ -311,7 +282,6 @@ def start_notebook_cmd(
     wait: bool,
     post_start: Optional[str],
     post_start_script: Optional[Path],
-    keepalive: Optional[bool],
     json_output: bool,
 ) -> None:
     """Start a stopped notebook instance.
@@ -321,10 +291,9 @@ def start_notebook_cmd(
         inspire notebook start 78822a57-3830-44e7-8d45-e8b0d674fc44
         inspire notebook start ring-8h100-test
         inspire notebook start ring-8h100-test --wait
-        inspire notebook start ring-8h100-test --post-start keepalive
         inspire notebook start ring-8h100-test --post-start 'bash /workspace/bootstrap.sh'
         inspire notebook start ring-8h100-test --post-start-script scripts/notebook_bootstrap.sh
-        inspire notebook start ring-8h100-test --no-keepalive
+        inspire notebook start ring-8h100-test --post-start none
     """
     if post_start and post_start_script:
         raise click.UsageError("Use either --post-start or --post-start-script, not both.")
@@ -347,7 +316,6 @@ def start_notebook_cmd(
             config=config,
             post_start=post_start,
             post_start_script=post_start_script,
-            keepalive=keepalive,
         )
     except ValueError as e:
         _handle_error(ctx, "ValidationError", str(e), EXIT_CONFIG_ERROR)

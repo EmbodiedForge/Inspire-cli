@@ -218,7 +218,7 @@ def test_notebook_start_accepts_name(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     )
 
     runner = CliRunner()
-    result = runner.invoke(cli_main, ["notebook", "start", "ring-8h100-test", "--no-keepalive"])
+    result = runner.invoke(cli_main, ["notebook", "start", "ring-8h100-test"])
 
     assert result.exit_code == EXIT_SUCCESS
     assert started["notebook_id"] == item["id"]
@@ -326,7 +326,7 @@ def test_notebook_start_name_conflict_prompts_selection(
     runner = CliRunner()
     result = runner.invoke(
         cli_main,
-        ["notebook", "start", "ring-8h100-test", "--no-keepalive"],
+        ["notebook", "start", "ring-8h100-test"],
         input="2\n",
     )
 
@@ -334,7 +334,7 @@ def test_notebook_start_name_conflict_prompts_selection(
     assert started["notebook_id"] == "nb-gpu"
 
 
-def test_notebook_start_warns_when_no_wait_conflicts_with_default_keepalive(
+def test_notebook_start_warns_when_no_wait_conflicts_with_configured_post_start(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     ws_cpu = "ws-6e6ba362-e98e-45b2-9c5a-311998e93d65"
@@ -351,6 +351,7 @@ def test_notebook_start_warns_when_no_wait_conflicts_with_default_keepalive(
         workspace_cpu_id=ws_cpu,
         workspace_gpu_id=ws_gpu,
         workspace_internet_id=None,
+        notebook_post_start="echo from config",
         timeout=5,
         max_retries=0,
         retry_delay=0.0,
@@ -433,7 +434,7 @@ def test_notebook_start_warns_when_no_wait_conflicts_with_default_keepalive(
     assert result.exit_code == EXIT_SUCCESS
     assert started["notebook_id"] == item["id"]
     assert "--no-wait requested" in result.output
-    assert "--no-keepalive --no-wait" in result.output
+    assert "set notebook_post_start=none" in result.output
     assert "Waiting for notebook to reach RUNNING status..." in result.output
 
 

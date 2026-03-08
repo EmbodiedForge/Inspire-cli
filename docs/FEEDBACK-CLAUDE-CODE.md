@@ -150,7 +150,7 @@ templates:
 | Feature | Notes |
 |---------|-------|
 | `inspire sync` | Reliable SSH tunnel path, good uncommitted changes warning |
-| `inspire notebook create` | Clean flow: create, wait for RUNNING, auto-keepalive |
+| `inspire notebook create` | Clean flow: create, wait for RUNNING, optional post-start action |
 | `inspire notebook ssh --save-as` | Tunnel naming makes multi-notebook management practical |
 | `inspire bridge exec` | Fast SSH path, good working dir default |
 | `inspire job wait` | Handles connection errors gracefully, clean progress display |

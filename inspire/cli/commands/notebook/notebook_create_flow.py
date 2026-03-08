@@ -1027,12 +1027,12 @@ def run_notebook_create(
     auto_stop: bool,
     auto: bool,
     wait: bool,
-    keepalive: bool | None,
     post_start: str | None,
     post_start_script: Path | None,
     json_output: bool,
     priority: Optional[int] = None,
     project_explicit: bool = False,
+    keepalive: bool | None = None,
 ) -> None:
     del project_explicit  # Reserved for future behavior; currently inferred from value presence.
     json_output = resolve_json_output(ctx, json_output)
