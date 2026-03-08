@@ -57,8 +57,10 @@ def test_dropbear_without_setup_script_uses_dpkg() -> None:
     assert "DROPBEAR_DEB_DIR=" in joined
     # Should contain dpkg -i fallback for raw .deb packages
     assert "dpkg -i" in joined
-    # Should download rtunnel binary (ensure_rtunnel_cmd)
-    assert "curl -fsSL" in joined
+    # Should NOT curl rtunnel binary (offline notebook with dropbear config)
+    assert "curl -fsSL" not in joined
+    # Should emit error message when rtunnel binary not found
+    assert "no curl fallback for offline notebooks" in joined
     # Should NOT contain SETUP_SCRIPT (no external script)
     assert "SETUP_SCRIPT=" not in joined
 

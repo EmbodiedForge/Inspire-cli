@@ -106,6 +106,24 @@ def build_rtunnel_setup_commands(
     if apt_mirror_url:
         cmd_lines.append(f"APT_MIRROR_URL={shlex.quote(apt_mirror_url)}")
 
+    # Skip curl fallback when rtunnel was delivered via Contents API or when
+    # the notebook is known to have no internet (dropbear/apt-mirror config).
+    skip_curl = bool(contents_api_filename or dropbear_deb_dir or apt_mirror_url)
+
+    if skip_curl:
+        curl_rtunnel_block = (
+            'if [ ! -x "$RTUNNEL_BIN" ]; then '
+            'echo "ERROR: rtunnel binary not found at /tmp/rtunnel '
+            '(no curl fallback for offline notebooks)" >&2; fi'
+        )
+    else:
+        curl_rtunnel_block = (
+            'if [ ! -x "$RTUNNEL_BIN" ]; then curl -fsSL '
+            f"'{rtunnel_download_url}' -o /tmp/rtunnel.tgz && "
+            "tar -xzf /tmp/rtunnel.tgz -C /tmp && chmod +x /tmp/rtunnel "
+            "2>/dev/null; fi"
+        )
+
     openssh_bootstrap_cmd = (
         'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x /tmp/rtunnel ] '
         "|| [ ! -x /usr/sbin/sshd ]; then "
@@ -118,10 +136,7 @@ def build_rtunnel_setup_commands(
         "RTUNNEL_BIN=/tmp/rtunnel; "
         'if [ -n "${RTUNNEL_BIN_PATH:-}" ] && [ -x "$RTUNNEL_BIN_PATH" ]; then '
         'cp "$RTUNNEL_BIN_PATH" /tmp/rtunnel && chmod +x /tmp/rtunnel; fi; '
-        'if [ ! -x "$RTUNNEL_BIN" ]; then curl -fsSL '
-        f"'{rtunnel_download_url}' -o /tmp/rtunnel.tgz && "
-        "tar -xzf /tmp/rtunnel.tgz -C /tmp && chmod +x /tmp/rtunnel "
-        "2>/dev/null; fi; "
+        f"{curl_rtunnel_block}; "
         'if [ -x /usr/sbin/sshd ] && [ -x "$RTUNNEL_BIN" ]; then '
         'touch "$BOOTSTRAP_SENTINEL"; else rm -f "$BOOTSTRAP_SENTINEL"; fi; fi'
     )
@@ -130,10 +145,7 @@ def build_rtunnel_setup_commands(
         'if [ ! -x "$RTUNNEL_BIN" ] && [ -n "${RTUNNEL_BIN_PATH:-}" ] '
         '&& [ -x "$RTUNNEL_BIN_PATH" ]; then '
         'cp "$RTUNNEL_BIN_PATH" /tmp/rtunnel && chmod +x /tmp/rtunnel; fi; '
-        'if [ ! -x "$RTUNNEL_BIN" ]; then curl -fsSL '
-        f"'{rtunnel_download_url}' -o /tmp/rtunnel.tgz && "
-        "tar -xzf /tmp/rtunnel.tgz -C /tmp && chmod +x /tmp/rtunnel "
-        "2>/dev/null; fi"
+        f"{curl_rtunnel_block}"
     )
     start_sshd_cmd = (
         'if [ -x /usr/sbin/sshd ] && ! ps -ef | grep -q "[s]shd -p $SSH_PORT"; then '
@@ -1983,11 +1995,19 @@ def _setup_notebook_rtunnel_sync(
                     )
                     if _download_rtunnel_locally(download_url, local_rtunnel):
                         _sys.stderr.write("  Downloaded rtunnel binary locally.\n")
+                    else:
+                        _sys.stderr.write("  WARNING: Failed to download rtunnel binary locally.\n")
 
             if local_rtunnel.is_file():
                 if _upload_rtunnel_via_contents_api(context, lab_frame.url, local_rtunnel):
                     contents_api_filename = _CONTENTS_API_RTUNNEL_FILENAME
                     _sys.stderr.write("  Uploaded rtunnel binary via Jupyter Contents API.\n")
+                else:
+                    _sys.stderr.write(
+                        "  WARNING: Failed to upload rtunnel binary via Jupyter Contents API.\n"
+                    )
+            else:
+                _sys.stderr.write(f"  WARNING: rtunnel binary not found at {local_rtunnel}\n")
 
             cmd_lines = build_rtunnel_setup_commands(
                 port=port,
