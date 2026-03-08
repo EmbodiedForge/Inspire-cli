@@ -874,7 +874,7 @@ def _delete_terminal_via_api(
         return False
 
 
-_CONTENTS_API_RTUNNEL_FILENAME = ".inspire_rtunnel_bin"
+_CONTENTS_API_RTUNNEL_FILENAME = "inspire_rtunnel_bin"
 
 
 def _upload_rtunnel_via_contents_api(
@@ -918,6 +918,12 @@ def _upload_rtunnel_via_contents_api(
             timeout=30000,
         )
         _log.debug("Contents API upload response: %d", resp.status)
+        if resp.status not in (200, 201):
+            try:
+                body = resp.text()[:500]
+            except Exception:
+                body = "(unable to read body)"
+            _log.debug("Contents API upload error body: %s", body)
         return resp.status in (200, 201)
     except (
         PlaywrightError,
