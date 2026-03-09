@@ -87,8 +87,8 @@ git checkout -b public-sync github-public/main
 git rm -r --quiet .          # Wipe ALL tracked files (removes stale leftovers)
 git checkout main -- .        # Copy ALL files from main
 # Remove private-only files
-git rm -r --cached .claude/skills/check-ci .claude/skills/playwright-cli 2>/dev/null
-rm -rf .claude/skills/check-ci .claude/skills/playwright-cli
+git rm -r --cached .claude/skills/check-ci .claude/skills/playwright-cli CLAUDE.md docs/ 2>/dev/null
+rm -rf .claude/skills/check-ci .claude/skills/playwright-cli CLAUDE.md docs/
 git add -A
 git commit -m "v1.x - Description"
 git push github-public public-sync:main
@@ -126,5 +126,7 @@ git checkout main && git branch -D public-sync
 
 ### Private-Only Files (tracked on origin, excluded from github-public)
 
+- `CLAUDE.md` — Project instructions (this file)
+- `docs/` — Internal documentation (e.g. `FEEDBACK-CLAUDE-CODE.md`)
 - `.claude/skills/check-ci/` — CI skill for Codeberg Forgejo Actions
 - `.claude/skills/playwright-cli/` — Internal browser automation skill
