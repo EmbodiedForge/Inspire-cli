@@ -61,6 +61,10 @@ def default_rtunnel_download_url() -> str:
     return f"{RTUNNEL_RELEASE_BASE_URL}/rtunnel-{os_name}-{arch}.tar.gz"
 
 
+#: Cached result of ``default_rtunnel_download_url()`` for the current platform.
+DEFAULT_RTUNNEL_DOWNLOAD_URL = default_rtunnel_download_url()
+
+
 def rtunnel_download_url_shell_snippet() -> str:
     """Return a shell snippet that sets ``$RTUNNEL_DOWNLOAD_URL`` based on uname.
 
@@ -78,6 +82,7 @@ def rtunnel_download_url_shell_snippet() -> str:
 
 
 __all__ = [
+    "DEFAULT_RTUNNEL_DOWNLOAD_URL",
     "RTUNNEL_RELEASE_BASE_URL",
     "default_rtunnel_download_url",
     "rtunnel_download_url_shell_snippet",

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from inspire.config.rtunnel_defaults import default_rtunnel_download_url
+from inspire.config.rtunnel_defaults import DEFAULT_RTUNNEL_DOWNLOAD_URL
 from inspire.config.schema_models import (
     ConfigOption,
     _parse_float,
@@ -53,7 +53,7 @@ SSH_OPTIONS: list[ConfigOption] = [
         toml_key="ssh.rtunnel_download_url",
         field_name="rtunnel_download_url",
         description="Download URL for rtunnel binary",
-        default=default_rtunnel_download_url(),
+        default=DEFAULT_RTUNNEL_DOWNLOAD_URL,
         category="SSH",
         scope="global",
     ),

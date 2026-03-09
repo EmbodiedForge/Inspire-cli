@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib
+import sys
 from pathlib import Path
 
 import pytest
@@ -155,3 +157,21 @@ def test_rtunnel_download_url_is_reachable():
     req = urllib.request.Request(url, method="HEAD")
     resp = urllib.request.urlopen(req, timeout=10)
     assert resp.status == 200
+
+
+def test_importing_config_models_does_not_resolve_rtunnel_url(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Importing config models should not fail on unsupported hosts."""
+    monkeypatch.setattr("platform.system", lambda: "Windows")
+    monkeypatch.setattr("platform.machine", lambda: "x86_64")
+
+    for module_name in ("inspire.config.models", "inspire.config.rtunnel_defaults"):
+        sys.modules.pop(module_name, None)
+
+    try:
+        module = importlib.import_module("inspire.config.models")
+        assert hasattr(module, "Config")
+    finally:
+        for module_name in ("inspire.config.models", "inspire.config.rtunnel_defaults"):
+            sys.modules.pop(module_name, None)

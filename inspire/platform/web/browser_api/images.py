@@ -81,23 +81,14 @@ def list_images_by_source(
 
     session, workspace_id = _get_session_and_workspace_id(workspace_id=None, session=session)
 
-    if api_source == "SOURCE_PUBLIC":
+    if api_source in ("SOURCE_PUBLIC", "SOURCE_PERSONAL_VISIBLE"):
+        visibility = "VISIBILITY_PUBLIC" if api_source == "SOURCE_PUBLIC" else "VISIBILITY_PRIVATE"
         body: dict[str, Any] = {
             "page": 0,
             "page_size": -1,
             "filter": {
                 "source_list": ["SOURCE_PRIVATE", "SOURCE_PUBLIC"],
-                "visibility": "VISIBILITY_PUBLIC",
-                "registry_hint": {"workspace_id": workspace_id},
-            },
-        }
-    elif api_source == "SOURCE_PERSONAL_VISIBLE":
-        body = {
-            "page": 0,
-            "page_size": -1,
-            "filter": {
-                "source_list": ["SOURCE_PRIVATE", "SOURCE_PUBLIC"],
-                "visibility": "VISIBILITY_PRIVATE",
+                "visibility": visibility,
                 "registry_hint": {"workspace_id": workspace_id},
             },
         }

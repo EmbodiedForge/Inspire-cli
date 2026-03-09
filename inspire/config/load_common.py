@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from inspire.config.models import SOURCE_DEFAULT
-from inspire.config.rtunnel_defaults import default_rtunnel_download_url
 
 _ACCOUNT_OVERRIDE_FIELDS = {
     "base_url",
@@ -81,6 +80,8 @@ class _ProjectLayerState:
 
 
 def _default_config_values() -> dict[str, Any]:
+    from inspire.config.rtunnel_defaults import default_rtunnel_download_url
+
     return {
         "username": "",
         "password": "",

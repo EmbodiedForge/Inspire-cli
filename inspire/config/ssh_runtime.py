@@ -6,9 +6,7 @@ from dataclasses import dataclass
 from typing import Mapping, Optional
 
 from inspire.config.models import Config
-from inspire.config.rtunnel_defaults import default_rtunnel_download_url
-
-DEFAULT_RTUNNEL_DOWNLOAD_URL = default_rtunnel_download_url()
+from inspire.config.rtunnel_defaults import DEFAULT_RTUNNEL_DOWNLOAD_URL
 
 
 @dataclass(frozen=True)

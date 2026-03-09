@@ -7,8 +7,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from inspire.config.rtunnel_defaults import default_rtunnel_download_url
-
 # Config file paths
 CONFIG_FILENAME = "config.toml"
 PROJECT_CONFIG_DIR = ".inspire"  # ./.inspire/config.toml
@@ -23,6 +21,12 @@ SOURCE_DEFAULT = "default"
 SOURCE_GLOBAL = "global"
 SOURCE_PROJECT = "project"
 SOURCE_ENV = "env"
+
+
+def _default_rtunnel_download_url() -> str:
+    from inspire.config.rtunnel_defaults import default_rtunnel_download_url
+
+    return default_rtunnel_download_url()
 
 
 @dataclass
@@ -125,7 +129,7 @@ class Config:
     sshd_deb_dir: Optional[str] = None
     dropbear_deb_dir: Optional[str] = None
     setup_script: Optional[str] = None
-    rtunnel_download_url: str = field(default_factory=default_rtunnel_download_url)
+    rtunnel_download_url: str = field(default_factory=_default_rtunnel_download_url)
     apt_mirror_url: Optional[str] = None
 
     # Tunnel retry settings
