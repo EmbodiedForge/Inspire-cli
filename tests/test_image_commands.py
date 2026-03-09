@@ -241,6 +241,68 @@ def test_list_images_by_source_public(monkeypatch: pytest.MonkeyPatch):
     assert "SOURCE_PUBLIC" in captured["body"]["filter"]["source_list"]
 
 
+def test_list_images_by_source_personal_visible(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, Any] = {}
+
+    def fake_request_notebooks_data(
+        session,
+        method: str,
+        endpoint_path: str,
+        *,
+        body: Optional[dict] = None,
+        timeout: int = 30,
+        default_data: Any = None,
+    ) -> Any:
+        captured["body"] = body
+        return {"images": []}
+
+    from inspire.platform.web.browser_api import images as images_module
+
+    monkeypatch.setattr(images_module, "_request_notebooks_data", fake_request_notebooks_data)
+    monkeypatch.setattr(
+        images_module,
+        "_get_session_and_workspace_id",
+        lambda workspace_id, session: (FakeWebSession(), "ws-test"),
+    )
+
+    results = list_images_by_source(source="personal-visible")
+    assert results == []
+    # personal-visible uses source_list + VISIBILITY_PRIVATE
+    assert captured["body"]["filter"]["visibility"] == "VISIBILITY_PRIVATE"
+    assert "SOURCE_PRIVATE" in captured["body"]["filter"]["source_list"]
+    assert "SOURCE_PUBLIC" in captured["body"]["filter"]["source_list"]
+
+
+def test_list_images_by_source_private_regression(monkeypatch: pytest.MonkeyPatch):
+    """Ensure --source private still sends SOURCE_PRIVATE (no accidental change)."""
+    captured: dict[str, Any] = {}
+
+    def fake_request_notebooks_data(
+        session,
+        method: str,
+        endpoint_path: str,
+        *,
+        body: Optional[dict] = None,
+        timeout: int = 30,
+        default_data: Any = None,
+    ) -> Any:
+        captured["body"] = body
+        return {"images": []}
+
+    from inspire.platform.web.browser_api import images as images_module
+
+    monkeypatch.setattr(images_module, "_request_notebooks_data", fake_request_notebooks_data)
+    monkeypatch.setattr(
+        images_module,
+        "_get_session_and_workspace_id",
+        lambda workspace_id, session: (FakeWebSession(), "ws-test"),
+    )
+
+    list_images_by_source(source="private")
+    assert captured["body"]["filter"]["source"] == "SOURCE_PRIVATE"
+    assert captured["body"]["filter"]["source_list"] == []
+
+
 # ---------------------------------------------------------------------------
 # CLI smoke tests
 # ---------------------------------------------------------------------------

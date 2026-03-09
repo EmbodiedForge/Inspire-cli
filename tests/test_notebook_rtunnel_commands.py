@@ -30,11 +30,14 @@ def test_build_commands_uses_explicit_runtime_config(monkeypatch: pytest.MonkeyP
 
     assert "RTUNNEL_BIN_PATH=/project/rtunnel" in joined
     assert "SSHD_DEB_DIR=/project/sshd" in joined
-    assert "https://project.example/rtunnel.tgz" in joined
     assert "/env/rtunnel" not in joined
     assert "/env/sshd" not in joined
     # With sshd_deb_dir set, dpkg -i should be used for .deb installation
     assert "dpkg -i" in joined
+    # Shell snippet sets RTUNNEL_DOWNLOAD_URL dynamically
+    assert "RTUNNEL_DOWNLOAD_URL=" in joined
+    # RTUNNEL_URL compat alias references RTUNNEL_DOWNLOAD_URL
+    assert 'RTUNNEL_URL="$RTUNNEL_DOWNLOAD_URL"' in joined
 
 
 def test_dropbear_without_setup_script_uses_dpkg() -> None:
@@ -138,6 +141,7 @@ def test_dropbear_command_contains_setup_script_and_args() -> None:
     assert any(line.startswith("SETUP_SCRIPT=/project/setup_ssh.sh") for line in commands)
     assert "falling back to openssh bootstrap" in joined
     assert "RTUNNEL_URL=" in joined
+    assert 'RTUNNEL_URL="$RTUNNEL_DOWNLOAD_URL"' in joined
     assert 'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x /tmp/rtunnel ]; then ' in joined
     assert 'bash "$SETUP_SCRIPT" "$DROPBEAR_DEB_DIR" "$RTUNNEL_BIN_PATH"' in joined
     assert "apt-get install -y -qq openssh-server" in joined
@@ -172,6 +176,12 @@ def test_non_dropbear_uses_bootstrap_sentinel_and_start_only_commands() -> None:
     assert 'pkill -f "rtunnel.*:$PORT"' not in joined
     assert 'grep -q "[s]shd -p ' in joined
     assert 'grep -Eq "[r]tunnel .*([[:space:]]|:)$PORT([[:space:]]|$)"' in joined
+    # Shell snippet sets RTUNNEL_DOWNLOAD_URL dynamically
+    assert "RTUNNEL_DOWNLOAD_URL=" in joined
+    # RTUNNEL_URL compat alias
+    assert 'RTUNNEL_URL="$RTUNNEL_DOWNLOAD_URL"' in joined
+    # Curl block uses $RTUNNEL_DOWNLOAD_URL (not a literal URL)
+    assert '"$RTUNNEL_DOWNLOAD_URL" -o /tmp/rtunnel.tgz' in joined
 
 
 # ---------------------------------------------------------------------------

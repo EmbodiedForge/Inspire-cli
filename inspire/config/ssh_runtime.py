@@ -6,10 +6,9 @@ from dataclasses import dataclass
 from typing import Mapping, Optional
 
 from inspire.config.models import Config
+from inspire.config.rtunnel_defaults import default_rtunnel_download_url
 
-DEFAULT_RTUNNEL_DOWNLOAD_URL = (
-    "https://github.com/Sarfflow/rtunnel/releases/download/nightly/rtunnel-linux-amd64.tar.gz"
-)
+DEFAULT_RTUNNEL_DOWNLOAD_URL = default_rtunnel_download_url()
 
 
 @dataclass(frozen=True)

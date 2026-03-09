@@ -21,6 +21,10 @@ except ImportError:  # pragma: no cover - Playwright may be unavailable in some 
         pass
 
 
+from inspire.config.rtunnel_defaults import (
+    default_rtunnel_download_url,
+    rtunnel_download_url_shell_snippet,
+)
 from inspire.config.ssh_runtime import (
     DEFAULT_RTUNNEL_DOWNLOAD_URL,
     SshRuntimeConfig,
@@ -85,6 +89,17 @@ def build_rtunnel_setup_commands(
         f"BOOTSTRAP_SENTINEL={BOOTSTRAP_SENTINEL}",
     ]
 
+    # Set $RTUNNEL_DOWNLOAD_URL via uname for the remote container
+    cmd_lines.append(rtunnel_download_url_shell_snippet())
+
+    # If user explicitly configured a URL, override the dynamic detection
+    try:
+        auto_url = default_rtunnel_download_url()
+    except ValueError:
+        auto_url = None
+    if auto_url is not None and rtunnel_download_url != auto_url:
+        cmd_lines.append(f"RTUNNEL_DOWNLOAD_URL={shlex.quote(rtunnel_download_url)}")
+
     # Always set RTUNNEL_BIN_PATH (empty string if not configured)
     cmd_lines.append(f"RTUNNEL_BIN_PATH={shlex.quote(rtunnel_bin or '')}")
     if rtunnel_bin:
@@ -123,7 +138,7 @@ def build_rtunnel_setup_commands(
     else:
         curl_rtunnel_block = (
             'if [ ! -x "$RTUNNEL_BIN" ]; then curl -fsSL '
-            f"'{rtunnel_download_url}' -o /tmp/rtunnel.tgz && "
+            '"$RTUNNEL_DOWNLOAD_URL" -o /tmp/rtunnel.tgz && '
             "tar -xzf /tmp/rtunnel.tgz -C /tmp && chmod +x /tmp/rtunnel "
             "2>/dev/null; fi"
         )
@@ -227,7 +242,7 @@ def build_rtunnel_setup_commands(
         setup_script = ssh_runtime.setup_script
         if setup_script:
             cmd_lines.append(f"SETUP_SCRIPT={shlex.quote(setup_script)}")
-            cmd_lines.append(f"RTUNNEL_URL={rtunnel_download_url!r}")
+            cmd_lines.append('RTUNNEL_URL="$RTUNNEL_DOWNLOAD_URL"')
             cmd_lines.append(
                 '[ -f "$SETUP_SCRIPT" ] || echo "WARN: setup script not found: $SETUP_SCRIPT '
                 '(falling back to openssh bootstrap)"'
@@ -245,7 +260,7 @@ def build_rtunnel_setup_commands(
         else:
             # No external setup_script: use internal dpkg-based bootstrap.
             # The start_dropbear_cmd handles dpkg -i when .deb files are found.
-            cmd_lines.append(f"RTUNNEL_URL={rtunnel_download_url!r}")
+            cmd_lines.append('RTUNNEL_URL="$RTUNNEL_DOWNLOAD_URL"')
             cmd_lines.append(ensure_rtunnel_cmd)
         cmd_lines.append(start_dropbear_cmd)
         cmd_lines.append(start_sshd_cmd)
@@ -253,7 +268,7 @@ def build_rtunnel_setup_commands(
     else:
         cmd_lines.extend(
             [
-                f"RTUNNEL_URL={rtunnel_download_url!r}",
+                'RTUNNEL_URL="$RTUNNEL_DOWNLOAD_URL"',
                 openssh_bootstrap_cmd,
                 start_sshd_cmd,
                 start_rtunnel_cmd,

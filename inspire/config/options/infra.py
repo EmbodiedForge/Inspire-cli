@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from inspire.config.rtunnel_defaults import default_rtunnel_download_url
 from inspire.config.schema_models import (
     ConfigOption,
     _parse_float,
@@ -52,10 +53,7 @@ SSH_OPTIONS: list[ConfigOption] = [
         toml_key="ssh.rtunnel_download_url",
         field_name="rtunnel_download_url",
         description="Download URL for rtunnel binary",
-        default=(
-            "https://github.com/Sarfflow/rtunnel/releases/download/nightly/"
-            "rtunnel-linux-amd64.tar.gz"
-        ),
+        default=default_rtunnel_download_url(),
         category="SSH",
         scope="global",
     ),

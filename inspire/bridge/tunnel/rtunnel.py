@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -33,10 +34,32 @@ def _get_rtunnel_download_url() -> str:
     return DEFAULT_RTUNNEL_DOWNLOAD_URL
 
 
+def _is_rtunnel_binary_usable(path: Path) -> bool:
+    """Check if an rtunnel binary exists, is executable, and runs successfully.
+
+    Uses ``rtunnel --help`` (exits 0) as the smoke test.
+    """
+    if not path.exists() or not os.access(path, os.X_OK):
+        return False
+    try:
+        result = subprocess.run(
+            [str(path), "--help"],
+            capture_output=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 def _ensure_rtunnel_binary(config: TunnelConfig) -> Path:
     """Ensure rtunnel binary exists, download if needed."""
-    if config.rtunnel_bin.exists() and os.access(config.rtunnel_bin, os.X_OK):
+    if _is_rtunnel_binary_usable(config.rtunnel_bin):
         return config.rtunnel_bin
+
+    # Delete stale binary before re-download
+    if config.rtunnel_bin.exists():
+        config.rtunnel_bin.unlink(missing_ok=True)
 
     # Download rtunnel
     config.rtunnel_bin.parent.mkdir(parents=True, exist_ok=True)

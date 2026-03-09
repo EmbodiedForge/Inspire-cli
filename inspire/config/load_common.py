@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from inspire.config.models import SOURCE_DEFAULT
+from inspire.config.rtunnel_defaults import default_rtunnel_download_url
 
 _ACCOUNT_OVERRIDE_FIELDS = {
     "base_url",
@@ -136,10 +137,7 @@ def _default_config_values() -> dict[str, Any]:
         "sshd_deb_dir": None,
         "dropbear_deb_dir": None,
         "setup_script": None,
-        "rtunnel_download_url": (
-            "https://github.com/Sarfflow/rtunnel/releases/download/nightly/"
-            "rtunnel-linux-amd64.tar.gz"
-        ),
+        "rtunnel_download_url": default_rtunnel_download_url(),
         "apt_mirror_url": None,
         "tunnel_retries": 3,
         "tunnel_retry_pause": 2.0,

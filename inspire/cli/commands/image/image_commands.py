@@ -33,7 +33,7 @@ from inspire.platform.web import browser_api as browser_api_module
 # Helpers
 # ---------------------------------------------------------------------------
 
-_SOURCE_CHOICES = ("official", "public", "private", "all")
+_SOURCE_CHOICES = ("official", "public", "private", "personal-visible", "all")
 
 
 def _image_to_dict(img: browser_api_module.CustomImageInfo) -> dict:
@@ -73,7 +73,7 @@ def _resolve_image_id(
 
     try:
         all_images: list[browser_api_module.CustomImageInfo] = []
-        for src_key in ("official", "public", "private"):
+        for src_key in ("official", "public", "private", "personal-visible"):
             items = browser_api_module.list_images_by_source(source=src_key, session=session)
             all_images.extend(items)
     except Exception:
@@ -126,10 +126,11 @@ def list_images_cmd(
 
     \b
     Examples:
-        inspire image list                     # Official images
-        inspire image list --source private    # Your custom images
-        inspire image list --source all        # All sources
-        inspire image list --source all --json # JSON output
+        inspire image list                              # Official images
+        inspire image list --source private             # Your custom images
+        inspire image list --source personal-visible    # Web UI "personal visible" tab
+        inspire image list --source all                 # All sources
+        inspire image list --source all --json          # JSON output
     """
     json_output = resolve_json_output(ctx, json_output)
 
