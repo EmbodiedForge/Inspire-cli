@@ -159,19 +159,77 @@ def test_rtunnel_download_url_is_reachable():
     assert resp.status == 200
 
 
-def test_importing_config_models_does_not_resolve_rtunnel_url(
+def test_importing_config_package_does_not_crash_on_unsupported_platform(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Importing config models should not fail on unsupported hosts."""
+    """Importing inspire.config should not fail on unsupported hosts.
+
+    The full import chain (inspire.config → schema → options/infra →
+    rtunnel_defaults) triggers DEFAULT_RTUNNEL_DOWNLOAD_URL computation.
+    On unsupported platforms this must fall back gracefully.
+    """
     monkeypatch.setattr("platform.system", lambda: "Windows")
     monkeypatch.setattr("platform.machine", lambda: "x86_64")
 
-    for module_name in ("inspire.config.models", "inspire.config.rtunnel_defaults"):
-        sys.modules.pop(module_name, None)
+    # Clear the full package and all submodules that cache platform-dependent state.
+    modules_to_pop = [
+        name
+        for name in sys.modules
+        if name == "inspire.config" or name.startswith("inspire.config.")
+    ]
+    saved = {name: sys.modules[name] for name in modules_to_pop}
+    for name in modules_to_pop:
+        del sys.modules[name]
 
     try:
-        module = importlib.import_module("inspire.config.models")
-        assert hasattr(module, "Config")
+        config_pkg = importlib.import_module("inspire.config")
+        assert hasattr(config_pkg, "Config")
+        # The constant should fall back to linux-amd64 on unsupported platforms.
+        from inspire.config.rtunnel_defaults import DEFAULT_RTUNNEL_DOWNLOAD_URL
+
+        assert "linux-amd64" in DEFAULT_RTUNNEL_DOWNLOAD_URL
+
+        # Config() construction must also succeed (default_factory fallback).
+        Config = config_pkg.Config
+        cfg = Config(username="test", password="test")
+        assert "linux-amd64" in cfg.rtunnel_download_url
     finally:
-        for module_name in ("inspire.config.models", "inspire.config.rtunnel_defaults"):
-            sys.modules.pop(module_name, None)
+        # Remove any modules created during the test, then restore originals.
+        for name in list(sys.modules):
+            if name == "inspire.config" or name.startswith("inspire.config."):
+                del sys.modules[name]
+        sys.modules.update(saved)
+
+
+def test_importing_config_package_preserves_arch_on_unsupported_os(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Unsupported host OS fallback should keep a recognized architecture."""
+    monkeypatch.setattr("platform.system", lambda: "Windows")
+    monkeypatch.setattr("platform.machine", lambda: "ARM64")
+
+    modules_to_pop = [
+        name
+        for name in sys.modules
+        if name == "inspire.config" or name.startswith("inspire.config.")
+    ]
+    saved = {name: sys.modules[name] for name in modules_to_pop}
+    for name in modules_to_pop:
+        del sys.modules[name]
+
+    try:
+        config_pkg = importlib.import_module("inspire.config")
+        assert hasattr(config_pkg, "Config")
+
+        from inspire.config.rtunnel_defaults import DEFAULT_RTUNNEL_DOWNLOAD_URL
+
+        assert "linux-arm64" in DEFAULT_RTUNNEL_DOWNLOAD_URL
+
+        Config = config_pkg.Config
+        cfg = Config(username="test", password="test")
+        assert "linux-arm64" in cfg.rtunnel_download_url
+    finally:
+        for name in list(sys.modules):
+            if name == "inspire.config" or name.startswith("inspire.config."):
+                del sys.modules[name]
+        sys.modules.update(saved)

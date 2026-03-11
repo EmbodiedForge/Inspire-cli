@@ -61,8 +61,27 @@ def default_rtunnel_download_url() -> str:
     return f"{RTUNNEL_RELEASE_BASE_URL}/rtunnel-{os_name}-{arch}.tar.gz"
 
 
+def _fallback_rtunnel_download_url() -> str:
+    """Return an import-safe fallback URL for unsupported local platforms.
+
+    We do not support every host OS, but config imports must still succeed so
+    remote notebook/bootstrap flows can run. Preserve a recognized local
+    architecture and fall back to the Linux archive naming.
+    """
+    try:
+        arch = _normalize_arch(platform.machine())
+    except ValueError:
+        arch = "amd64"
+    return f"{RTUNNEL_RELEASE_BASE_URL}/rtunnel-linux-{arch}.tar.gz"
+
+
 #: Cached result of ``default_rtunnel_download_url()`` for the current platform.
-DEFAULT_RTUNNEL_DOWNLOAD_URL = default_rtunnel_download_url()
+#: Falls back to a Linux archive with the detected architecture so module
+#: import never crashes on unsupported local platforms.
+try:
+    DEFAULT_RTUNNEL_DOWNLOAD_URL = default_rtunnel_download_url()
+except ValueError:
+    DEFAULT_RTUNNEL_DOWNLOAD_URL = _fallback_rtunnel_download_url()
 
 
 def rtunnel_download_url_shell_snippet() -> str:
