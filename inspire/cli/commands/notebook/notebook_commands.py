@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from typing import Optional
 
@@ -728,6 +729,7 @@ def list_notebooks(
     show_default=True,
     help="Timeout in seconds for rtunnel setup to complete",
 )
+@click.argument("ssh_command", nargs=-1, type=click.UNPROCESSED)
 @pass_context
 def ssh_notebook_cmd(
     ctx: Context,
@@ -741,8 +743,21 @@ def ssh_notebook_cmd(
     rtunnel_bin: Optional[str],
     debug_playwright: bool,
     setup_timeout: int,
+    ssh_command: tuple[str, ...],
 ) -> None:
-    """SSH into a running notebook instance via rtunnel ProxyCommand."""
+    """SSH into a running notebook instance via rtunnel ProxyCommand.
+
+    \b
+    Examples:
+        inspire notebook ssh abc123
+        inspire notebook ssh abc123 --command "echo hello"
+        inspire notebook ssh abc123 -- echo 'connected'
+        inspire notebook ssh abc123 -- python train.py --epochs 100
+    """
+    if ssh_command and command:
+        raise click.UsageError("Provide a remote command via --command or after '--', not both.")
+    if ssh_command:
+        command = shlex.join(ssh_command)
     run_notebook_ssh(
         ctx,
         notebook_id=notebook,

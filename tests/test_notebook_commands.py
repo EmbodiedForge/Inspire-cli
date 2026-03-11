@@ -1043,3 +1043,89 @@ def test_run_notebook_ssh_reports_when_tunnel_not_ready(
     assert captured["type"] == "APIError"
     assert "SSH preflight failed" in captured["message"]
     assert "Proxy readiness report:" in captured["hint"]
+
+
+def test_notebook_ssh_double_dash_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run_notebook_ssh(ctx: Context, **kwargs: Any) -> None:
+        assert ctx is not None
+        captured.update(kwargs)
+
+    monkeypatch.setattr(notebook_cmd_module, "run_notebook_ssh", fake_run_notebook_ssh)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_main,
+        ["notebook", "ssh", "abc123", "--", "python", "train.py", "--epochs", "100"],
+    )
+
+    assert result.exit_code == EXIT_SUCCESS
+    assert captured["command"] == "python train.py --epochs 100"
+
+
+def test_notebook_ssh_rejects_command_and_double_dash(monkeypatch: pytest.MonkeyPatch) -> None:
+    called = False
+
+    def fake_run_notebook_ssh(ctx: Context, **kwargs: Any) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(notebook_cmd_module, "run_notebook_ssh", fake_run_notebook_ssh)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_main,
+        ["notebook", "ssh", "abc123", "--command", "echo hi", "--", "echo", "hello"],
+    )
+
+    assert result.exit_code != EXIT_SUCCESS
+    assert "not both" in result.output
+    assert called is False
+
+
+def test_notebook_ssh_command_option_still_works(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run_notebook_ssh(ctx: Context, **kwargs: Any) -> None:
+        assert ctx is not None
+        captured.update(kwargs)
+
+    monkeypatch.setattr(notebook_cmd_module, "run_notebook_ssh", fake_run_notebook_ssh)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_main,
+        ["notebook", "ssh", "abc123", "--command", "echo hello"],
+    )
+
+    assert result.exit_code == EXIT_SUCCESS
+    assert captured["command"] == "echo hello"
+
+
+def test_notebook_ssh_double_dash_empty_is_interactive(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run_notebook_ssh(ctx: Context, **kwargs: Any) -> None:
+        assert ctx is not None
+        captured.update(kwargs)
+
+    monkeypatch.setattr(notebook_cmd_module, "run_notebook_ssh", fake_run_notebook_ssh)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_main,
+        ["notebook", "ssh", "abc123", "--"],
+    )
+
+    assert result.exit_code == EXIT_SUCCESS
+    assert captured["command"] is None
+
+
+def test_notebook_ssh_help_documents_double_dash_syntax() -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["notebook", "ssh", "--help"])
+
+    assert result.exit_code == EXIT_SUCCESS
+    assert "-- echo 'connected'" in result.output
+    assert "-- python train.py --epochs 100" in result.output
