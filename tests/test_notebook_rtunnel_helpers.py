@@ -13,6 +13,7 @@ from inspire.platform.web.browser_api.rtunnel import (
     _StepTimer,
     _build_batch_setup_script,
     _build_terminal_websocket_url,
+    _compute_rtunnel_hash,
     _create_terminal_via_api,
     _delete_terminal_via_api,
     _download_rtunnel_locally,
@@ -20,8 +21,10 @@ from inspire.platform.web.browser_api.rtunnel import (
     _focus_terminal_input,
     _jupyter_server_base,
     _open_or_create_terminal,
+    _rtunnel_matches_on_notebook,
     _send_setup_command_via_terminal_ws,
     _send_terminal_command_via_websocket,
+    _upload_rtunnel_hash_sidecar,
     _upload_rtunnel_via_contents_api,
     _verify_terminal_focus,
     _wait_for_setup_completion,
@@ -1192,3 +1195,158 @@ def test_download_rtunnel_locally_no_rtunnel_in_archive(tmp_path: Path) -> None:
 
     assert result is False
     assert not dest.exists()
+
+
+# ---------------------------------------------------------------------------
+# _compute_rtunnel_hash
+# ---------------------------------------------------------------------------
+
+
+def test_compute_rtunnel_hash(tmp_path: Path) -> None:
+    import hashlib
+
+    binary = tmp_path / "rtunnel"
+    binary.write_bytes(b"\x7fELF_test_binary")
+    expected = hashlib.sha256(b"\x7fELF_test_binary").hexdigest()
+    assert _compute_rtunnel_hash(binary) == expected
+
+
+def test_compute_rtunnel_hash_missing_file(tmp_path: Path) -> None:
+    missing = tmp_path / "no_such_file"
+    assert _compute_rtunnel_hash(missing) is None
+
+
+def test_compute_rtunnel_hash_permission_error(tmp_path: Path) -> None:
+    binary = tmp_path / "rtunnel"
+    binary.write_bytes(b"\x7fELF")
+    binary.chmod(0o000)
+    try:
+        assert _compute_rtunnel_hash(binary) is None
+    finally:
+        binary.chmod(0o644)
+
+
+# ---------------------------------------------------------------------------
+# _rtunnel_matches_on_notebook
+# ---------------------------------------------------------------------------
+
+
+class _MatchGetResponse:
+    def __init__(self, status: int, data: dict | None = None) -> None:
+        self.status = status
+        self._data = data
+
+    def json(self) -> dict:
+        return self._data or {}
+
+
+class _MatchGetRequest:
+    """Fake request that returns different responses per URL substring."""
+
+    def __init__(self, responses: dict[str, _MatchGetResponse]) -> None:
+        self._responses = responses
+
+    def get(self, url: str, timeout: int = 0) -> _MatchGetResponse:
+        for key, resp in self._responses.items():
+            if key in url:
+                return resp
+        return _MatchGetResponse(500)
+
+
+class _MatchContext:
+    def __init__(self, request: _MatchGetRequest) -> None:
+        self.request = request
+
+    def cookies(self) -> list[dict]:
+        return []
+
+
+def test_rtunnel_matches_on_notebook_hit() -> None:
+    import base64 as _b64
+
+    local_hash = "abc123"
+    sidecar_b64 = _b64.b64encode(local_hash.encode()).decode()
+    ctx = _MatchContext(
+        _MatchGetRequest(
+            {
+                f"contents/{_CONTENTS_API_RTUNNEL_FILENAME}?content=0": _MatchGetResponse(200),
+                f"contents/{_CONTENTS_API_RTUNNEL_FILENAME}.sha256": _MatchGetResponse(
+                    200, {"content": sidecar_b64}
+                ),
+            }
+        )
+    )
+    assert _rtunnel_matches_on_notebook(ctx, "https://nb.example.com/lab", local_hash) is True
+
+
+def test_rtunnel_matches_on_notebook_binary_missing() -> None:
+    ctx = _MatchContext(
+        _MatchGetRequest(
+            {
+                f"contents/{_CONTENTS_API_RTUNNEL_FILENAME}?content=0": _MatchGetResponse(404),
+            }
+        )
+    )
+    assert _rtunnel_matches_on_notebook(ctx, "https://nb.example.com/lab", "abc") is False
+
+
+def test_rtunnel_matches_on_notebook_hash_mismatch() -> None:
+    import base64 as _b64
+
+    sidecar_b64 = _b64.b64encode(b"old_hash").decode()
+    ctx = _MatchContext(
+        _MatchGetRequest(
+            {
+                f"contents/{_CONTENTS_API_RTUNNEL_FILENAME}?content=0": _MatchGetResponse(200),
+                f"contents/{_CONTENTS_API_RTUNNEL_FILENAME}.sha256": _MatchGetResponse(
+                    200, {"content": sidecar_b64}
+                ),
+            }
+        )
+    )
+    assert _rtunnel_matches_on_notebook(ctx, "https://nb.example.com/lab", "new_hash") is False
+
+
+def test_rtunnel_matches_on_notebook_sidecar_missing() -> None:
+    ctx = _MatchContext(
+        _MatchGetRequest(
+            {
+                f"contents/{_CONTENTS_API_RTUNNEL_FILENAME}?content=0": _MatchGetResponse(200),
+                f"contents/{_CONTENTS_API_RTUNNEL_FILENAME}.sha256": _MatchGetResponse(404),
+            }
+        )
+    )
+    assert _rtunnel_matches_on_notebook(ctx, "https://nb.example.com/lab", "abc") is False
+
+
+def test_rtunnel_matches_on_notebook_error() -> None:
+    class _BrokenGetRequest:
+        def get(self, url: str, timeout: int = 0) -> None:
+            raise ConnectionError("network failure")
+
+    ctx = _MatchContext(_BrokenGetRequest())  # type: ignore[arg-type]
+    assert _rtunnel_matches_on_notebook(ctx, "https://nb.example.com/lab", "abc") is False
+
+
+# ---------------------------------------------------------------------------
+# _upload_rtunnel_hash_sidecar
+# ---------------------------------------------------------------------------
+
+
+def test_upload_rtunnel_hash_sidecar() -> None:
+    import base64 as _b64
+
+    resp = _DummyUploadResponse(201)
+    req = _DummyUploadRequest(resp)
+    ctx = _DummyUploadContext(req)
+
+    result = _upload_rtunnel_hash_sidecar(ctx, "https://nb.example.com/lab", "deadbeef")
+    assert result is True
+    assert len(req.calls) == 1
+
+    url, _headers, data, timeout = req.calls[0]
+    assert url == f"https://nb.example.com/api/contents/{_CONTENTS_API_RTUNNEL_FILENAME}.sha256"
+    assert data["type"] == "file"
+    assert data["format"] == "base64"
+    assert _b64.b64decode(data["content"]).decode("ascii") == "deadbeef"
+    assert timeout == 5000

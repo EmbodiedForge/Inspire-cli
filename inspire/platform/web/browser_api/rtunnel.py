@@ -114,7 +114,7 @@ def build_rtunnel_setup_commands(
         safe_name = _shlex_inner.quote(contents_api_filename)
         cmd_lines.append(
             f'if [ ! -x /tmp/rtunnel ] && [ -f "$HOME"/{safe_name} ]; then '
-            f'mv "$HOME"/{safe_name} /tmp/rtunnel && chmod +x /tmp/rtunnel; fi'
+            f'cp "$HOME"/{safe_name} /tmp/rtunnel && chmod +x /tmp/rtunnel; fi'
         )
 
     if sshd_deb_dir:
@@ -950,6 +950,127 @@ def _upload_rtunnel_via_contents_api(
         TypeError,
     ) as exc:
         _log.debug("Contents API upload failed: %s", exc, exc_info=True)
+        return False
+
+
+def _compute_rtunnel_hash(path: Path) -> Optional[str]:
+    """Return the SHA-256 hex digest of the file at *path*, or ``None`` on error."""
+    import hashlib
+
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 16), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError as exc:
+        _log.debug("Failed to hash %s: %s", path, exc)
+        return None
+
+
+def _rtunnel_matches_on_notebook(
+    context: Any,
+    lab_url: str,
+    local_hash: str,
+) -> bool:
+    """Check whether the notebook already has an up-to-date rtunnel binary.
+
+    Returns ``True`` only when **both** the binary exists on the notebook
+    (metadata-only check) **and** the ``.sha256`` sidecar matches *local_hash*.
+    Returns ``False`` on any 404, mismatch, decode error, or network error.
+    """
+    import base64 as _b64
+
+    base = _jupyter_server_base(lab_url)
+    binary_url = f"{base}api/contents/{_CONTENTS_API_RTUNNEL_FILENAME}?content=0"
+    sidecar_url = (
+        f"{base}api/contents/{_CONTENTS_API_RTUNNEL_FILENAME}.sha256" f"?format=base64&content=1"
+    )
+
+    try:
+        # 1. Check the binary exists (metadata only, fast).
+        resp = context.request.get(binary_url, timeout=5000)
+        if resp.status == 404:
+            _log.debug("rtunnel binary not found on notebook (404)")
+            return False
+        if resp.status not in (200, 201):
+            _log.debug("rtunnel binary metadata check returned %d", resp.status)
+            return False
+
+        # 2. Read the hash sidecar.
+        resp = context.request.get(sidecar_url, timeout=5000)
+        if resp.status == 404:
+            _log.debug("rtunnel hash sidecar not found on notebook (404)")
+            return False
+        if resp.status not in (200, 201):
+            _log.debug("rtunnel hash sidecar check returned %d", resp.status)
+            return False
+
+        body = resp.json()
+        remote_b64 = body.get("content", "")
+        remote_hash = _b64.b64decode(remote_b64).decode("ascii").strip()
+        if remote_hash == local_hash:
+            _log.debug("rtunnel hash matches: %s", local_hash)
+            return True
+        _log.debug("rtunnel hash mismatch: local=%s remote=%s", local_hash, remote_hash)
+        return False
+    except (
+        PlaywrightError,
+        ConnectionError,
+        OSError,
+        RuntimeError,
+        TimeoutError,
+        ValueError,
+        TypeError,
+        KeyError,
+        UnicodeDecodeError,
+    ) as exc:
+        _log.debug("rtunnel hash check failed: %s", exc, exc_info=True)
+        return False
+
+
+def _upload_rtunnel_hash_sidecar(
+    context: Any,
+    lab_url: str,
+    hex_hash: str,
+) -> bool:
+    """Upload a ``.sha256`` sidecar alongside the rtunnel binary (best-effort).
+
+    Returns ``True`` on success, ``False`` on failure. Failures are logged but
+    must not block the setup flow.
+    """
+    import base64 as _b64
+
+    base = _jupyter_server_base(lab_url)
+    api_url = f"{base}api/contents/{_CONTENTS_API_RTUNNEL_FILENAME}.sha256"
+    encoded = _b64.b64encode(hex_hash.encode("ascii")).decode("ascii")
+
+    try:
+        headers = _build_jupyter_xsrf_headers(context)
+        resp = context.request.put(
+            api_url,
+            headers=headers,
+            data={
+                "type": "file",
+                "format": "base64",
+                "content": encoded,
+            },
+            timeout=5000,
+        )
+        ok = resp.status in (200, 201)
+        if not ok:
+            _log.debug("Hash sidecar upload returned %d", resp.status)
+        return ok
+    except (
+        PlaywrightError,
+        ConnectionError,
+        OSError,
+        RuntimeError,
+        TimeoutError,
+        ValueError,
+        TypeError,
+    ) as exc:
+        _log.debug("Hash sidecar upload failed: %s", exc, exc_info=True)
         return False
 
 
@@ -2039,7 +2160,13 @@ def _setup_notebook_rtunnel_sync(
 
             if local_rtunnel.is_file():
                 _log.debug("Local rtunnel binary: %d bytes", local_rtunnel.stat().st_size)
-                if _upload_rtunnel_via_contents_api(context, lab_frame.url, local_rtunnel):
+                local_hash = _compute_rtunnel_hash(local_rtunnel)
+                if local_hash and _rtunnel_matches_on_notebook(context, lab_frame.url, local_hash):
+                    contents_api_filename = _CONTENTS_API_RTUNNEL_FILENAME
+                    _sys.stderr.write("  rtunnel binary already on notebook (skipping upload).\n")
+                elif _upload_rtunnel_via_contents_api(context, lab_frame.url, local_rtunnel):
+                    if local_hash:
+                        _upload_rtunnel_hash_sidecar(context, lab_frame.url, local_hash)
                     contents_api_filename = _CONTENTS_API_RTUNNEL_FILENAME
                     _sys.stderr.write("  Uploaded rtunnel binary via Jupyter Contents API.\n")
                 else:
