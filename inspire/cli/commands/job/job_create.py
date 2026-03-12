@@ -21,7 +21,6 @@ from inspire.cli.utils.compute_group_autoselect import find_best_compute_group_l
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.config import Config, ConfigError
 from inspire.config.workspaces import select_workspace_id
-from inspire.platform.web import browser_api as browser_api_module
 
 
 def run_job_create(
@@ -149,10 +148,9 @@ def run_job_create(
                 pass
 
         # Auto-enable fault tolerance for LOW-priority projects
-        is_low_priority = selected.priority_level.upper() == "LOW"
-        if fault_tolerant is None and is_low_priority:
-            fault_tolerant = True
-        auto_fault_tolerance = bool(fault_tolerant)
+        is_low_priority, auto_fault_tolerance = job_submit.resolve_fault_tolerance(
+            selected, fault_tolerant
+        )
 
         if not ctx.json_output:
             if fallback_msg:
@@ -169,20 +167,16 @@ def run_job_create(
         # Show compute-group availability diagnostics
         if not ctx.json_output and auto and location:
             try:
+                from inspire.platform.web import browser_api as browser_api_module
+
                 all_avail = browser_api_module.get_accurate_gpu_availability(
                     workspace_id=selected_workspace_id
                 )
-                same_type = [
-                    a for a in all_avail if requested_gpu_type.value.upper() in a.gpu_type.upper()
-                ]
-                if same_type:
-                    parts = []
-                    for a in sorted(same_type, key=lambda x: x.available_gpus, reverse=True):
-                        part = f"{a.group_name}: {a.available_gpus} free"
-                        if a.low_priority_gpus > 0:
-                            part += f" (+{a.low_priority_gpus} preemptible)"
-                        parts.append(part)
-                    click.echo(f"  {requested_gpu_type.value} availability: {' | '.join(parts)}")
+                summary = job_submit.format_gpu_availability_summary(
+                    all_avail, requested_gpu_type.value
+                )
+                if summary:
+                    click.echo(summary)
             except Exception:
                 pass  # diagnostics are best-effort
 

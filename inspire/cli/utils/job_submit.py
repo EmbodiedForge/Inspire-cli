@@ -24,6 +24,40 @@ class JobSubmission:
     max_time_ms: str
 
 
+def resolve_fault_tolerance(
+    project: ProjectInfo,
+    fault_tolerant: bool | None,
+) -> tuple[bool, bool]:
+    """Determine fault tolerance based on project priority and explicit flag.
+
+    Returns (is_low_priority, auto_fault_tolerance).
+    """
+    is_low = (project.priority_level or "").upper() == "LOW"
+    if fault_tolerant is None and is_low:
+        fault_tolerant = True
+    return is_low, bool(fault_tolerant)
+
+
+def format_gpu_availability_summary(
+    availability: list,
+    gpu_type: str,
+) -> str | None:
+    """Format a one-line GPU availability summary for the given type.
+
+    Returns None if no matching groups found.
+    """
+    same_type = [a for a in availability if gpu_type.upper() in a.gpu_type.upper()]
+    if not same_type:
+        return None
+    parts = []
+    for a in sorted(same_type, key=lambda x: x.available_gpus, reverse=True):
+        part = f"{a.group_name}: {a.available_gpus} free"
+        if a.low_priority_gpus > 0:
+            part += f" (+{a.low_priority_gpus} preemptible)"
+        parts.append(part)
+    return f"  {gpu_type} availability: {' | '.join(parts)}"
+
+
 def wrap_in_bash(command: str) -> str:
     """Wrap a command in bash -c unless already wrapped."""
     stripped = command.strip()
@@ -196,6 +230,8 @@ __all__ = [
     "JobSubmission",
     "build_remote_logged_command",
     "cache_created_job",
+    "format_gpu_availability_summary",
+    "resolve_fault_tolerance",
     "select_project_for_workspace",
     "submit_training_job",
     "wrap_in_bash",

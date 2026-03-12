@@ -24,9 +24,9 @@ SOURCE_ENV = "env"
 
 
 def _default_rtunnel_download_url() -> str:
-    from inspire.config.rtunnel_defaults import default_rtunnel_download_url
+    from inspire.config.rtunnel_defaults import DEFAULT_RTUNNEL_DOWNLOAD_URL
 
-    return default_rtunnel_download_url()
+    return DEFAULT_RTUNNEL_DOWNLOAD_URL
 
 
 @dataclass
