@@ -34,6 +34,7 @@ class ConfigOption:
     parser: Callable[[str], Any] | None = None
     validator: Callable[[Any], bool] | None = None
     scope: str = "project"
+    value_type: type | None = None
 
 
 def _parse_int(value: str) -> int:
@@ -62,6 +63,16 @@ def _parse_list(value: str) -> list[str]:
             if item:
                 parts.append(item)
     return parts
+
+
+_VALID_UPLOAD_POLICIES = frozenset({"auto", "never", "always"})
+
+
+def _parse_upload_policy(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized not in _VALID_UPLOAD_POLICIES:
+        raise ValueError(f"must be auto, never, or always (got {value!r})")
+    return normalized
 
 
 def parse_value(option: ConfigOption, value: str) -> Any:

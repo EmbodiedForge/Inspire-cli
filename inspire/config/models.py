@@ -131,6 +131,7 @@ class Config:
     setup_script: Optional[str] = None
     rtunnel_download_url: str = field(default_factory=_default_rtunnel_download_url)
     apt_mirror_url: Optional[str] = None
+    rtunnel_upload_policy: str = "auto"
 
     # Tunnel retry settings
     tunnel_retries: int = 3

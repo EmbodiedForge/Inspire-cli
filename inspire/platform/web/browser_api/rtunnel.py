@@ -1074,6 +1074,83 @@ def _upload_rtunnel_hash_sidecar(
         return False
 
 
+def _resolve_rtunnel_binary(
+    *,
+    context: Any,
+    lab_url: str,
+    ssh_runtime: Optional[SshRuntimeConfig],
+) -> Optional[str]:
+    """Decide whether to upload the rtunnel binary via the Contents API.
+
+    Returns ``_CONTENTS_API_RTUNNEL_FILENAME`` when a usable copy is already on
+    the notebook (hash-verified), or after a successful upload.  Returns
+    ``None`` when no upload is needed (e.g. ``rtunnel_bin`` is configured so the
+    setup script will copy from the shared path) or when all upload attempts
+    fail.
+    """
+    import sys as _sys
+
+    local_rtunnel = Path.home() / ".local" / "bin" / "rtunnel"
+    local_exists = local_rtunnel.is_file()
+    _log.debug("Local rtunnel path: %s (exists=%s)", local_rtunnel, local_exists)
+
+    rtunnel_bin_configured = ssh_runtime and ssh_runtime.rtunnel_bin
+    policy = ssh_runtime.rtunnel_upload_policy if ssh_runtime else "auto"
+
+    if rtunnel_bin_configured:
+        _sys.stderr.write(f"  Using configured rtunnel path: {ssh_runtime.rtunnel_bin}\n")
+
+    if policy == "never":
+        _sys.stderr.write("  Upload policy: never — skipping Contents API upload.\n")
+        return None
+
+    if policy == "auto" and rtunnel_bin_configured:
+        # If a local binary happens to exist and matches the notebook copy,
+        # return the filename so the setup script can use the Contents API copy
+        # as a verified fallback.  Otherwise skip the upload entirely — the
+        # setup script will copy from $RTUNNEL_BIN_PATH.
+        if local_exists:
+            local_hash = _compute_rtunnel_hash(local_rtunnel)
+            if local_hash and _rtunnel_matches_on_notebook(context, lab_url, local_hash):
+                return _CONTENTS_API_RTUNNEL_FILENAME
+        return None
+
+    # -- "always", or "auto" without rtunnel_bin: download + upload -----------
+
+    if policy == "always" and rtunnel_bin_configured:
+        _sys.stderr.write("  Upload policy: always — preparing Contents API fallback.\n")
+
+    if not local_exists:
+        download_url = (
+            ssh_runtime.rtunnel_download_url if ssh_runtime else DEFAULT_RTUNNEL_DOWNLOAD_URL
+        )
+        if _download_rtunnel_locally(download_url, local_rtunnel):
+            _sys.stderr.write("  Downloaded rtunnel binary locally.\n")
+        else:
+            _sys.stderr.write("  WARNING: Failed to download rtunnel binary locally.\n")
+
+    if local_rtunnel.is_file():
+        _log.debug("Local rtunnel binary: %d bytes", local_rtunnel.stat().st_size)
+        local_hash = _compute_rtunnel_hash(local_rtunnel)
+        if local_hash and _rtunnel_matches_on_notebook(context, lab_url, local_hash):
+            _sys.stderr.write("  rtunnel binary already on notebook (skipping upload).\n")
+            return _CONTENTS_API_RTUNNEL_FILENAME
+        elif _upload_rtunnel_via_contents_api(context, lab_url, local_rtunnel):
+            if local_hash:
+                _upload_rtunnel_hash_sidecar(context, lab_url, local_hash)
+            _sys.stderr.write("  Uploaded rtunnel binary via Jupyter Contents API.\n")
+            return _CONTENTS_API_RTUNNEL_FILENAME
+        else:
+            _sys.stderr.write(
+                "  WARNING: Failed to upload rtunnel binary via Jupyter Contents API.\n"
+            )
+
+    else:
+        _sys.stderr.write(f"  WARNING: rtunnel binary not found at {local_rtunnel}\n")
+
+    return None
+
+
 def _download_rtunnel_locally(
     download_url: str,
     dest: Path,
@@ -2137,44 +2214,11 @@ def _setup_notebook_rtunnel_sync(
                 pass
             timer.mark("wait_spinner")
 
-            contents_api_filename = None
-            local_rtunnel = Path.home() / ".local" / "bin" / "rtunnel"
-            _log.debug("Local rtunnel path: %s (exists=%s)", local_rtunnel, local_rtunnel.is_file())
-
-            if not local_rtunnel.is_file():
-                rtunnel_bin_configured = ssh_runtime and ssh_runtime.rtunnel_bin
-                _log.debug(
-                    "rtunnel_bin configured: %s",
-                    ssh_runtime.rtunnel_bin if ssh_runtime else None,
-                )
-                if not rtunnel_bin_configured:
-                    download_url = (
-                        ssh_runtime.rtunnel_download_url
-                        if ssh_runtime
-                        else DEFAULT_RTUNNEL_DOWNLOAD_URL
-                    )
-                    if _download_rtunnel_locally(download_url, local_rtunnel):
-                        _sys.stderr.write("  Downloaded rtunnel binary locally.\n")
-                    else:
-                        _sys.stderr.write("  WARNING: Failed to download rtunnel binary locally.\n")
-
-            if local_rtunnel.is_file():
-                _log.debug("Local rtunnel binary: %d bytes", local_rtunnel.stat().st_size)
-                local_hash = _compute_rtunnel_hash(local_rtunnel)
-                if local_hash and _rtunnel_matches_on_notebook(context, lab_frame.url, local_hash):
-                    contents_api_filename = _CONTENTS_API_RTUNNEL_FILENAME
-                    _sys.stderr.write("  rtunnel binary already on notebook (skipping upload).\n")
-                elif _upload_rtunnel_via_contents_api(context, lab_frame.url, local_rtunnel):
-                    if local_hash:
-                        _upload_rtunnel_hash_sidecar(context, lab_frame.url, local_hash)
-                    contents_api_filename = _CONTENTS_API_RTUNNEL_FILENAME
-                    _sys.stderr.write("  Uploaded rtunnel binary via Jupyter Contents API.\n")
-                else:
-                    _sys.stderr.write(
-                        "  WARNING: Failed to upload rtunnel binary via Jupyter Contents API.\n"
-                    )
-            else:
-                _sys.stderr.write(f"  WARNING: rtunnel binary not found at {local_rtunnel}\n")
+            contents_api_filename = _resolve_rtunnel_binary(
+                context=context,
+                lab_url=lab_frame.url,
+                ssh_runtime=ssh_runtime,
+            )
 
             _log.debug("contents_api_filename=%s", contents_api_filename)
             cmd_lines = build_rtunnel_setup_commands(

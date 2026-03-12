@@ -21,6 +21,7 @@ from inspire.platform.web.browser_api.rtunnel import (
     _focus_terminal_input,
     _jupyter_server_base,
     _open_or_create_terminal,
+    _resolve_rtunnel_binary,
     _rtunnel_matches_on_notebook,
     _send_setup_command_via_terminal_ws,
     _send_terminal_command_via_websocket,
@@ -1350,3 +1351,281 @@ def test_upload_rtunnel_hash_sidecar() -> None:
     assert data["format"] == "base64"
     assert _b64.b64decode(data["content"]).decode("ascii") == "deadbeef"
     assert timeout == 5000
+
+
+# ---------------------------------------------------------------------------
+# _resolve_rtunnel_binary
+# ---------------------------------------------------------------------------
+
+
+class _ResolveContext:
+    """Minimal Playwright browser-context stub for _resolve_rtunnel_binary tests."""
+
+    def __init__(self) -> None:
+        self.request = _MatchGetRequest({})
+
+    def cookies(self) -> list[dict]:
+        return []
+
+
+def test_resolve_rtunnel_binary_configured_hash_match(tmp_path, monkeypatch):
+    """rtunnel_bin set, local exists, hash matches → return FILENAME, no upload."""
+    from inspire.config.ssh_runtime import SshRuntimeConfig
+
+    local_bin = tmp_path / ".local" / "bin" / "rtunnel"
+    local_bin.parent.mkdir(parents=True)
+    local_bin.write_bytes(b"\x7fELF_rtunnel")
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+    ssh_rt = SshRuntimeConfig(rtunnel_bin="/shared/bin/rtunnel")
+    ctx = _ResolveContext()
+
+    monkeypatch.setattr(rtunnel_module, "_compute_rtunnel_hash", lambda _p: "aaa111")
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_rtunnel_matches_on_notebook",
+        lambda _ctx, _url, _h: True,
+    )
+    upload_called = []
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_upload_rtunnel_via_contents_api",
+        lambda *a, **kw: upload_called.append(1) or True,
+    )
+
+    result = _resolve_rtunnel_binary(
+        context=ctx, lab_url="https://nb.example.com/lab", ssh_runtime=ssh_rt
+    )
+    assert result == _CONTENTS_API_RTUNNEL_FILENAME
+    assert upload_called == []
+
+
+def test_resolve_rtunnel_binary_configured_hash_mismatch(tmp_path, monkeypatch):
+    """rtunnel_bin set, local exists, hash mismatch → return None, no upload."""
+    from inspire.config.ssh_runtime import SshRuntimeConfig
+
+    local_bin = tmp_path / ".local" / "bin" / "rtunnel"
+    local_bin.parent.mkdir(parents=True)
+    local_bin.write_bytes(b"\x7fELF_rtunnel")
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+    ssh_rt = SshRuntimeConfig(rtunnel_bin="/shared/bin/rtunnel")
+    ctx = _ResolveContext()
+
+    hash_calls = []
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_compute_rtunnel_hash",
+        lambda _p: (hash_calls.append(1), "aaa111")[1],
+    )
+    match_calls = []
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_rtunnel_matches_on_notebook",
+        lambda _ctx, _url, _h: (match_calls.append(1), False)[1],
+    )
+    upload_called = []
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_upload_rtunnel_via_contents_api",
+        lambda *a, **kw: upload_called.append(1) or True,
+    )
+
+    result = _resolve_rtunnel_binary(
+        context=ctx, lab_url="https://nb.example.com/lab", ssh_runtime=ssh_rt
+    )
+    assert result is None
+    assert len(hash_calls) == 1
+    assert len(match_calls) == 1
+    assert upload_called == []
+
+
+def test_resolve_rtunnel_binary_configured_no_local(tmp_path, monkeypatch):
+    """rtunnel_bin set, no local binary → return None, no hash/match/upload calls."""
+    from inspire.config.ssh_runtime import SshRuntimeConfig
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+    ssh_rt = SshRuntimeConfig(rtunnel_bin="/shared/bin/rtunnel")
+    ctx = _ResolveContext()
+
+    hash_calls = []
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_compute_rtunnel_hash",
+        lambda _p: hash_calls.append(1) or "aaa111",
+    )
+    match_calls = []
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_rtunnel_matches_on_notebook",
+        lambda _ctx, _url, _h: match_calls.append(1) or True,
+    )
+    upload_called = []
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_upload_rtunnel_via_contents_api",
+        lambda *a, **kw: upload_called.append(1) or True,
+    )
+
+    result = _resolve_rtunnel_binary(
+        context=ctx, lab_url="https://nb.example.com/lab", ssh_runtime=ssh_rt
+    )
+    assert result is None
+    assert hash_calls == []
+    assert match_calls == []
+    assert upload_called == []
+
+
+def test_resolve_rtunnel_binary_not_configured_downloads(tmp_path, monkeypatch):
+    """rtunnel_bin not set, no local binary → _download_rtunnel_locally called."""
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+    ctx = _ResolveContext()
+
+    download_calls = []
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_download_rtunnel_locally",
+        lambda _url, _dest: (download_calls.append(1), False)[1],
+    )
+    upload_called = []
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_upload_rtunnel_via_contents_api",
+        lambda *a, **kw: upload_called.append(1) or True,
+    )
+
+    result = _resolve_rtunnel_binary(
+        context=ctx, lab_url="https://nb.example.com/lab", ssh_runtime=None
+    )
+    assert result is None
+    assert len(download_calls) == 1
+    assert upload_called == []
+
+
+# ---------------------------------------------------------------------------
+# _resolve_rtunnel_binary — upload policy tests
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_rtunnel_binary_policy_never_returns_none(tmp_path, monkeypatch):
+    """policy=never → None, no side-effect calls regardless of local binary."""
+    from inspire.config.ssh_runtime import SshRuntimeConfig
+
+    local_bin = tmp_path / ".local" / "bin" / "rtunnel"
+    local_bin.parent.mkdir(parents=True)
+    local_bin.write_bytes(b"\x7fELF_rtunnel")
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+    ssh_rt = SshRuntimeConfig(rtunnel_upload_policy="never")
+    ctx = _ResolveContext()
+
+    hash_calls = []
+    monkeypatch.setattr(
+        rtunnel_module, "_compute_rtunnel_hash", lambda _p: hash_calls.append(1) or "aaa111"
+    )
+    upload_called = []
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_upload_rtunnel_via_contents_api",
+        lambda *a, **kw: upload_called.append(1) or True,
+    )
+    download_calls = []
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_download_rtunnel_locally",
+        lambda _url, _dest: (download_calls.append(1), False)[1],
+    )
+
+    result = _resolve_rtunnel_binary(
+        context=ctx, lab_url="https://nb.example.com/lab", ssh_runtime=ssh_rt
+    )
+    assert result is None
+    assert hash_calls == []
+    assert upload_called == []
+    assert download_calls == []
+
+
+def test_resolve_rtunnel_binary_policy_never_ignores_configured_bin(tmp_path, monkeypatch):
+    """policy=never + rtunnel_bin configured → still None."""
+    from inspire.config.ssh_runtime import SshRuntimeConfig
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+    ssh_rt = SshRuntimeConfig(
+        rtunnel_bin="/shared/bin/rtunnel",
+        rtunnel_upload_policy="never",
+    )
+    ctx = _ResolveContext()
+
+    hash_calls = []
+    monkeypatch.setattr(
+        rtunnel_module, "_compute_rtunnel_hash", lambda _p: hash_calls.append(1) or "aaa111"
+    )
+
+    result = _resolve_rtunnel_binary(
+        context=ctx, lab_url="https://nb.example.com/lab", ssh_runtime=ssh_rt
+    )
+    assert result is None
+    assert hash_calls == []
+
+
+def test_resolve_rtunnel_binary_policy_always_forces_upload(tmp_path, monkeypatch):
+    """policy=always + rtunnel_bin + local binary → upload called."""
+    from inspire.config.ssh_runtime import SshRuntimeConfig
+
+    local_bin = tmp_path / ".local" / "bin" / "rtunnel"
+    local_bin.parent.mkdir(parents=True)
+    local_bin.write_bytes(b"\x7fELF_rtunnel")
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+    ssh_rt = SshRuntimeConfig(
+        rtunnel_bin="/shared/bin/rtunnel",
+        rtunnel_upload_policy="always",
+    )
+    ctx = _ResolveContext()
+
+    monkeypatch.setattr(rtunnel_module, "_compute_rtunnel_hash", lambda _p: "aaa111")
+    monkeypatch.setattr(
+        rtunnel_module, "_rtunnel_matches_on_notebook", lambda _ctx, _url, _h: False
+    )
+    upload_called = []
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_upload_rtunnel_via_contents_api",
+        lambda *a, **kw: upload_called.append(1) or True,
+    )
+    monkeypatch.setattr(rtunnel_module, "_upload_rtunnel_hash_sidecar", lambda *a, **kw: True)
+
+    result = _resolve_rtunnel_binary(
+        context=ctx, lab_url="https://nb.example.com/lab", ssh_runtime=ssh_rt
+    )
+    assert result == _CONTENTS_API_RTUNNEL_FILENAME
+    assert len(upload_called) == 1
+
+
+def test_resolve_rtunnel_binary_policy_always_downloads_when_no_local(tmp_path, monkeypatch):
+    """policy=always + no local → download attempted."""
+    from inspire.config.ssh_runtime import SshRuntimeConfig
+
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+    ssh_rt = SshRuntimeConfig(
+        rtunnel_bin="/shared/bin/rtunnel",
+        rtunnel_upload_policy="always",
+    )
+    ctx = _ResolveContext()
+
+    download_calls = []
+    monkeypatch.setattr(
+        rtunnel_module,
+        "_download_rtunnel_locally",
+        lambda _url, _dest: (download_calls.append(1), False)[1],
+    )
+
+    result = _resolve_rtunnel_binary(
+        context=ctx, lab_url="https://nb.example.com/lab", ssh_runtime=ssh_rt
+    )
+    assert result is None
+    assert len(download_calls) == 1

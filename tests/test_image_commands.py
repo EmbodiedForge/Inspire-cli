@@ -445,6 +445,20 @@ def test_image_list_all_sources(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
                     created_at="",
                 )
             ]
+        elif source == "personal-visible":
+            return [
+                browser_api_module.CustomImageInfo(
+                    image_id="img-pv",
+                    url="registry/pv",
+                    name="personal-visible-img",
+                    framework="PT",
+                    version="3.0",
+                    source="SOURCE_PERSONAL_VISIBLE",
+                    status="READY",
+                    description="",
+                    created_at="",
+                )
+            ]
         return []
 
     monkeypatch.setattr(
@@ -458,11 +472,12 @@ def test_image_list_all_sources(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert result.exit_code == 0
 
     payload = json.loads(result.output)
-    # official + public (empty) + private = 2
-    assert payload["data"]["total"] == 2
+    # official + public (empty) + private + personal-visible = 3
+    assert payload["data"]["total"] == 3
     names = [img["name"] for img in payload["data"]["images"]]
     assert "official-img" in names
     assert "private-img" in names
+    assert "personal-visible-img" in names
 
 
 def test_image_detail_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -530,7 +545,7 @@ def test_image_register_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
         workspace_id=None,
         description="",
         visibility="VISIBILITY_PRIVATE",
-        add_method=0,
+        add_method="DIRECT_PUSH",
         session=None,
     ) -> dict:
         captured["name"] = name
@@ -543,7 +558,7 @@ def test_image_register_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     runner = CliRunner()
     result = runner.invoke(
         cli_main,
-        ["--json", "image", "register", "-n", "my-img", "-v", "v1.0", "--method", "address"],
+        ["--json", "image", "register", "-n", "my-img", "-v", "v1.0"],
     )
     assert result.exit_code == 0
 
@@ -551,7 +566,7 @@ def test_image_register_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     assert payload["data"]["image_id"] == "img-new-001"
     assert captured["name"] == "my-img"
     assert captured["version"] == "v1.0"
-    assert captured["add_method"] == 2
+    assert captured["add_method"] == "DIRECT_PUSH"
 
 
 def test_image_register_human_push(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -560,7 +575,7 @@ def test_image_register_human_push(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     monkeypatch.setattr(
         browser_api_module,
         "create_image",
-        lambda name, version, workspace_id=None, description="", visibility="VISIBILITY_PRIVATE", add_method=0, session=None: {
+        lambda name, version, workspace_id=None, description="", visibility="VISIBILITY_PRIVATE", add_method="DIRECT_PUSH", session=None: {
             "image": {"image_id": "img-new-002", "address": "registry.example/my-img:v0.1"}
         },
     )
@@ -652,6 +667,31 @@ def test_image_delete_prompts_without_force(
     assert "Cancelled" in result.output
 
 
+def test_image_delete_json_without_force_prompts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """--json without --force must still prompt for confirmation."""
+    _patch_config_and_session(monkeypatch, tmp_path)
+
+    deleted_ids: list[str] = []
+
+    monkeypatch.setattr(
+        browser_api_module,
+        "delete_image",
+        lambda image_id, session=None: deleted_ids.append(image_id) or {},
+    )
+
+    runner = CliRunner()
+    # Answer 'n' — should NOT delete
+    result = runner.invoke(cli_main, ["--json", "image", "delete", "img-del-004"], input="n\n")
+    assert result.exit_code == 0
+    assert deleted_ids == []
+    # Prompt text precedes the JSON; extract the JSON portion
+    json_start = result.output.index("{")
+    payload = json.loads(result.output[json_start:])
+    assert payload["data"]["status"] == "cancelled"
+
+
 # ---------------------------------------------------------------------------
 # set-default tests
 # ---------------------------------------------------------------------------
@@ -735,6 +775,35 @@ def test_set_default_preserves_existing_config(
     # Both the old and new content should be present
     assert "base_url" in content
     assert "new-img" in content
+
+
+def test_set_default_from_subdirectory_uses_project_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Running set-default from a subdirectory should update the project-root config."""
+    _patch_config_and_session(monkeypatch, tmp_path)
+
+    # Create a project config at tmp_path/.inspire/config.toml
+    config_dir = tmp_path / ".inspire"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / "config.toml"
+    config_path.write_text('[auth]\nusername = "test"\n')
+
+    # cd into a subdirectory
+    sub = tmp_path / "src" / "deep"
+    sub.mkdir(parents=True, exist_ok=True)
+    monkeypatch.chdir(sub)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["image", "set-default", "--job", "subdir-img"])
+    assert result.exit_code == 0
+
+    # The project-root config should be updated, NOT a new nested one
+    content = config_path.read_text()
+    assert "subdir-img" in content
+
+    # No nested config should have been created
+    assert not (sub / ".inspire" / "config.toml").exists()
 
 
 # ---------------------------------------------------------------------------

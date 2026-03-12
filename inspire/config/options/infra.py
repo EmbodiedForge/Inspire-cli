@@ -8,6 +8,7 @@ from inspire.config.schema_models import (
     _parse_float,
     _parse_int,
     _parse_list,
+    _parse_upload_policy,
 )
 
 SSH_OPTIONS: list[ConfigOption] = [
@@ -65,6 +66,17 @@ SSH_OPTIONS: list[ConfigOption] = [
         default=None,
         category="SSH",
         scope="global",
+    ),
+    ConfigOption(
+        env_var="INSPIRE_RTUNNEL_UPLOAD_POLICY",
+        toml_key="ssh.rtunnel_upload_policy",
+        field_name="rtunnel_upload_policy",
+        description="Rtunnel upload fallback policy: auto (default), never, or always",
+        default="auto",
+        category="SSH",
+        scope="global",
+        parser=_parse_upload_policy,
+        value_type=str,
     ),
 ]
 

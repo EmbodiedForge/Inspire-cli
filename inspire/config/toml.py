@@ -10,8 +10,9 @@ try:
 except ImportError:  # pragma: no cover
     import tomli as tomllib
 
-from inspire.config.models import CONFIG_FILENAME, PROJECT_CONFIG_DIR
+from inspire.config.models import CONFIG_FILENAME, PROJECT_CONFIG_DIR, ConfigError
 from inspire.config.schema import get_option_by_toml
+from inspire.config.schema_models import ConfigOption
 
 
 def _find_project_config() -> Path | None:
@@ -43,3 +44,17 @@ def _flatten_toml(data: dict[str, Any], prefix: str = "") -> dict[str, Any]:
 def _toml_key_to_field(toml_key: str) -> str | None:
     option = get_option_by_toml(toml_key)
     return option.field_name if option else None
+
+
+def _validate_toml_value(option: ConfigOption, value: Any) -> Any:
+    if option.value_type is not None and not isinstance(value, option.value_type):
+        raise ConfigError(
+            f"Invalid type for {option.toml_key}: expected {option.value_type.__name__}, "
+            f"got {type(value).__name__}"
+        )
+    if option.parser and isinstance(value, str):
+        try:
+            return option.parser(value)
+        except (ValueError, TypeError) as exc:
+            raise ConfigError(f"Invalid value for {option.toml_key}: {exc}") from exc
+    return value

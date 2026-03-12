@@ -718,6 +718,12 @@ def list_notebooks(
     help="Path to pre-cached rtunnel binary (e.g., /inspire/.../rtunnel)",
 )
 @click.option(
+    "--rtunnel-upload-policy",
+    type=click.Choice(["auto", "never", "always"], case_sensitive=False),
+    default=None,
+    help="Rtunnel upload fallback: auto (default), never, or always",
+)
+@click.option(
     "--debug-playwright",
     is_flag=True,
     help="Run browser automation with visible window for debugging",
@@ -741,6 +747,7 @@ def ssh_notebook_cmd(
     ssh_port: int,
     command: Optional[str],
     rtunnel_bin: Optional[str],
+    rtunnel_upload_policy: Optional[str],
     debug_playwright: bool,
     setup_timeout: int,
     ssh_command: tuple[str, ...],
@@ -768,6 +775,7 @@ def ssh_notebook_cmd(
         ssh_port=ssh_port,
         command=command,
         rtunnel_bin=rtunnel_bin,
+        rtunnel_upload_policy=rtunnel_upload_policy,
         debug_playwright=debug_playwright,
         setup_timeout=setup_timeout,
     )

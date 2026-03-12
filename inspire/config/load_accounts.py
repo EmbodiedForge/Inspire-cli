@@ -17,6 +17,14 @@ from .load_common import (
     _parse_alias_map,
     _resolve_alias,
 )
+from inspire.config.schema import get_option_by_field
+from inspire.config.toml import _validate_toml_value
+
+
+def _validated_override(field_name: str, value: Any) -> Any:
+    """Validate a TOML account override value against its schema option."""
+    opt = get_option_by_field(field_name)
+    return _validate_toml_value(opt, value) if opt else value
 
 
 def _parse_global_accounts(raw_accounts: Any) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
@@ -51,7 +59,7 @@ def _parse_global_accounts(raw_accounts: Any) -> tuple[dict[str, str], dict[str,
             value = raw_value.get(field_name)
             if value is None or value == "":
                 continue
-            account_data["overrides"][field_name] = value
+            account_data["overrides"][field_name] = _validated_override(field_name, value)
 
         for section_name, key_map in _ACCOUNT_SECTION_KEY_MAP.items():
             section = raw_value.get(section_name)
@@ -61,7 +69,7 @@ def _parse_global_accounts(raw_accounts: Any) -> tuple[dict[str, str], dict[str,
                 value = section.get(key)
                 if value is None or value == "":
                     continue
-                account_data["overrides"][field_name] = value
+                account_data["overrides"][field_name] = _validated_override(field_name, value)
 
         catalogs[username] = account_data
 

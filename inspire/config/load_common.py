@@ -24,6 +24,7 @@ _ACCOUNT_OVERRIDE_FIELDS = {
     "dropbear_deb_dir",
     "setup_script",
     "rtunnel_download_url",
+    "rtunnel_upload_policy",
 }
 
 _ACCOUNT_SECTION_KEY_MAP = {
@@ -45,6 +46,7 @@ _ACCOUNT_SECTION_KEY_MAP = {
         "dropbear_deb_dir": "dropbear_deb_dir",
         "setup_script": "setup_script",
         "rtunnel_download_url": "rtunnel_download_url",
+        "rtunnel_upload_policy": "rtunnel_upload_policy",
     },
 }
 
@@ -140,6 +142,7 @@ def _default_config_values() -> dict[str, Any]:
         "setup_script": None,
         "rtunnel_download_url": DEFAULT_RTUNNEL_DOWNLOAD_URL,
         "apt_mirror_url": None,
+        "rtunnel_upload_policy": "auto",
         "tunnel_retries": 3,
         "tunnel_retry_pause": 2.0,
         "shm_size": None,

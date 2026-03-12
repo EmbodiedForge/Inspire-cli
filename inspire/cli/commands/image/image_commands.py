@@ -33,7 +33,8 @@ from inspire.platform.web import browser_api as browser_api_module
 # Helpers
 # ---------------------------------------------------------------------------
 
-_SOURCE_CHOICES = ("official", "public", "private", "personal-visible", "all")
+_IMAGE_SOURCES = ("official", "public", "private", "personal-visible")
+_SOURCE_CHOICES = _IMAGE_SOURCES + ("all",)
 
 
 def _image_to_dict(img: browser_api_module.CustomImageInfo) -> dict:
@@ -73,7 +74,7 @@ def _resolve_image_id(
 
     try:
         all_images: list[browser_api_module.CustomImageInfo] = []
-        for src_key in ("official", "public", "private", "personal-visible"):
+        for src_key in _IMAGE_SOURCES:
             items = browser_api_module.list_images_by_source(source=src_key, session=session)
             all_images.extend(items)
     except Exception:
@@ -147,7 +148,7 @@ def list_images_cmd(
 
     try:
         if source == "all":
-            for src_key in ("official", "public", "private"):
+            for src_key in _IMAGE_SOURCES:
                 items = browser_api_module.list_images_by_source(source=src_key, session=session)
                 results.extend(_image_to_dict(img) for img in items)
         else:
@@ -248,14 +249,6 @@ def image_detail(
     help="Image visibility",
 )
 @click.option(
-    "--method",
-    type=click.Choice(["push", "address"], case_sensitive=False),
-    default="push",
-    show_default=True,
-    help="'push': create a slot then docker-push your image; "
-    "'address': register an image already hosted elsewhere",
-)
-@click.option(
     "--wait/--no-wait",
     default=False,
     help="Wait for image to reach READY status",
@@ -273,7 +266,6 @@ def register_image_cmd(
     version: str,
     description: str,
     visibility: str,
-    method: str,
     wait: bool,
     json_output: bool,
 ) -> None:
@@ -283,21 +275,15 @@ def register_image_cmd(
     notebook as an image, use 'inspire image save' instead.
 
     \b
-    Push workflow (default):
+    Workflow:
       1. inspire image register -n my-img -v v1.0
       2. docker tag <local-image> <registry-url>   (shown in output)
       3. docker push <registry-url>
       4. Platform detects the push and marks the image READY.
 
     \b
-    Address workflow:
-      Register an image already hosted on a public/private registry.
-      inspire image register -n my-img -v v1.0 --method address
-
-    \b
     Examples:
         inspire image register -n my-pytorch -v v1.0
-        inspire image register -n my-img -v v2.0 --method address
         inspire image register -n my-img -v v1.0 --visibility public --wait
     """
     json_output = resolve_json_output(ctx, json_output)
@@ -314,7 +300,6 @@ def register_image_cmd(
     visibility_value = (
         "VISIBILITY_PUBLIC" if visibility.lower() == "public" else "VISIBILITY_PRIVATE"
     )
-    add_method_value = 2 if method.lower() == "address" else 0
 
     try:
         result = browser_api_module.create_image(
@@ -322,7 +307,6 @@ def register_image_cmd(
             version=version,
             description=description,
             visibility=visibility_value,
-            add_method=add_method_value,
             session=session,
         )
     except Exception as e:
@@ -349,7 +333,7 @@ def register_image_cmd(
         return
 
     click.echo(f"Image registered: {image_id or 'unknown'}")
-    if registry_url and method.lower() == "push":
+    if registry_url:
         click.echo("\nTo push your image:")
         click.echo(f"  docker tag <local-image> {registry_url}")
         click.echo(f"  docker push {registry_url}")
@@ -501,9 +485,14 @@ def delete_image_cmd(
 
     image_id = _resolve_image_id(ctx, image_id, json_output, session)
 
-    if not force and not json_output:
+    if not force:
         if not click.confirm(f"Delete image '{image_id}'?"):
-            click.echo("Cancelled.")
+            if json_output:
+                click.echo(
+                    json_formatter.format_json({"image_id": image_id, "status": "cancelled"})
+                )
+            else:
+                click.echo("Cancelled.")
             return
 
     try:
@@ -573,7 +562,12 @@ def set_default_image_cmd(
         )
         return
 
-    config_path = Path(".inspire") / "config.toml"
+    # Locate the existing project config (walks up directory tree).
+    # Fall back to CWD-relative path if no project config exists yet.
+    from inspire.config.toml import _find_project_config
+
+    existing_config = _find_project_config()
+    config_path = existing_config if existing_config else Path(".inspire") / "config.toml"
 
     # Read existing config if present
     existing_data: dict = {}

@@ -184,14 +184,10 @@ def create_image(
     workspace_id: Optional[str] = None,
     description: str = "",
     visibility: str = "VISIBILITY_PRIVATE",
-    add_method: int = 0,
+    add_method: str = "DIRECT_PUSH",
     session: Optional[WebSession] = None,
 ) -> dict[str, Any]:
     """Register a custom Docker image.
-
-    The platform supports two add methods:
-      - 0: LOCAL_PUSH (user pushes via ``docker push``)
-      - 2: IMAGE_ADDRESS (register an existing image address)
 
     Args:
         name: Image name (lowercase, digits, dashes, dots, underscores).
@@ -199,7 +195,7 @@ def create_image(
         workspace_id: Workspace ID (determines registry).
         description: Optional description.
         visibility: ``"VISIBILITY_PRIVATE"`` or ``"VISIBILITY_PUBLIC"``.
-        add_method: 0 for local push, 2 for image address.
+        add_method: ``"DIRECT_PUSH"`` (create a slot, then ``docker push``).
         session: Existing web session.
 
     Returns:

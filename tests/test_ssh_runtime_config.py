@@ -8,6 +8,8 @@ import pytest
 
 from inspire.bridge.tunnel.rtunnel import _get_rtunnel_download_url
 from inspire.config import Config
+from inspire.config.models import ConfigError
+from inspire.config.schema_models import _parse_upload_policy
 from inspire.config.ssh_runtime import DEFAULT_RTUNNEL_DOWNLOAD_URL, resolve_ssh_runtime_config
 
 
@@ -26,6 +28,7 @@ class TestSshRuntimeConfig:
             "INSPIRE_DROPBEAR_DEB_DIR",
             "INSPIRE_SETUP_SCRIPT",
             "INSPIRE_RTUNNEL_DOWNLOAD_URL",
+            "INSPIRE_RTUNNEL_UPLOAD_POLICY",
         ]
         for var in env_vars:
             monkeypatch.delenv(var, raising=False)
@@ -188,3 +191,98 @@ rtunnel_download_url = "https://project.example/shared.tgz"
         monkeypatch.setenv("INSPIRE_RTUNNEL_DOWNLOAD_URL", "https://env.example/shared.tgz")
 
         assert _get_rtunnel_download_url() == "https://project.example/shared.tgz"
+
+    def test_upload_policy_resolved_from_toml(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        clean_env: None,
+    ) -> None:
+        _write_project_config(
+            tmp_path,
+            """
+[ssh]
+rtunnel_upload_policy = "never"
+""",
+        )
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "missing" / "config.toml")
+        monkeypatch.chdir(tmp_path)
+
+        runtime = resolve_ssh_runtime_config()
+
+        assert runtime.rtunnel_upload_policy == "never"
+
+    def test_upload_policy_invalid_toml_raises_at_config_load(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        clean_env: None,
+    ) -> None:
+        _write_project_config(
+            tmp_path,
+            """
+[ssh]
+rtunnel_upload_policy = "bogus"
+""",
+        )
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "missing" / "config.toml")
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(ConfigError):
+            Config.from_files_and_env(require_credentials=False)
+
+    def test_upload_policy_wrong_type_toml_raises(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        clean_env: None,
+    ) -> None:
+        _write_project_config(
+            tmp_path,
+            """
+[ssh]
+rtunnel_upload_policy = 123
+""",
+        )
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "missing" / "config.toml")
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(ConfigError):
+            Config.from_files_and_env(require_credentials=False)
+
+    def test_upload_policy_invalid_in_account_section_raises(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        clean_env: None,
+    ) -> None:
+        global_dir = tmp_path / "global"
+        global_dir.mkdir()
+        global_config = global_dir / "config.toml"
+        global_config.write_text(
+            """
+[accounts."testuser".ssh]
+rtunnel_upload_policy = "bogus"
+"""
+        )
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("INSPIRE_USERNAME", "testuser")
+
+        with pytest.raises(ConfigError):
+            Config.from_files_and_env(require_credentials=False)
+
+
+class TestParseUploadPolicy:
+    def test_normalizes_uppercase(self) -> None:
+        assert _parse_upload_policy("NEVER") == "never"
+
+    def test_strips_whitespace(self) -> None:
+        assert _parse_upload_policy("  Auto  ") == "auto"
+
+    def test_accepts_always(self) -> None:
+        assert _parse_upload_policy("always") == "always"
+
+    def test_rejects_bogus(self) -> None:
+        with pytest.raises(ValueError):
+            _parse_upload_policy("bogus")

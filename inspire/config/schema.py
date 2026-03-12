@@ -15,6 +15,7 @@ from inspire.config.schema_models import (  # noqa: F401
     _parse_float,
     _parse_int,
     _parse_list,
+    _parse_upload_policy,
     parse_value,
 )
 from inspire.config.options.api import API_OPTIONS, AUTH_OPTIONS
@@ -62,6 +63,14 @@ def get_option_by_toml(toml_key: str) -> ConfigOption | None:
     """Get configuration option by TOML key."""
     for opt in CONFIG_OPTIONS:
         if opt.toml_key == toml_key:
+            return opt
+    return None
+
+
+def get_option_by_field(field_name: str) -> ConfigOption | None:
+    """Get configuration option by field name."""
+    for opt in CONFIG_OPTIONS:
+        if opt.field_name == field_name:
             return opt
     return None
 
