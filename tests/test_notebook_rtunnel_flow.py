@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from inspire.platform.web.browser_api import rtunnel as flow_module
+from inspire.platform.web.browser_api.rtunnel import flow as flow_module
 
 
 class DummyLocator:

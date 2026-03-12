@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from inspire.platform.web.browser_api import rtunnel as rtunnel_module
+from inspire.platform.web.browser_api.rtunnel import terminal as terminal_module
+from inspire.platform.web.browser_api.rtunnel import upload as upload_module
 from inspire.platform.web.browser_api.rtunnel import (
     _CONTENTS_API_RTUNNEL_FILENAME,
     _StepTimer,
@@ -311,19 +313,19 @@ def test_send_setup_command_via_terminal_ws_cleans_up_terminal(
     class _Frame:
         url = "https://nb.example.com/lab"
 
-    monkeypatch.setattr(rtunnel_module, "_create_terminal_via_api", lambda *_a, **_k: "term-1")
+    monkeypatch.setattr(terminal_module, "_create_terminal_via_api", lambda *_a, **_k: "term-1")
     monkeypatch.setattr(
-        rtunnel_module,
+        terminal_module,
         "_build_terminal_websocket_url",
         lambda _url, _term: "wss://nb.example.com/terminals/websocket/term-1",
     )
     monkeypatch.setattr(
-        rtunnel_module,
+        terminal_module,
         "_send_terminal_command_via_websocket",
         lambda *_a, **_k: events.append(("send", "ok")) or True,
     )
     monkeypatch.setattr(
-        rtunnel_module,
+        terminal_module,
         "_delete_terminal_via_api",
         lambda _ctx, *, lab_url, term_name: events.append(("delete", f"{lab_url}|{term_name}"))
         or True,
@@ -345,17 +347,17 @@ def test_send_setup_command_via_terminal_ws_cleans_up_on_failure(
     class _Frame:
         url = "https://nb.example.com/lab"
 
-    monkeypatch.setattr(rtunnel_module, "_create_terminal_via_api", lambda *_a, **_k: "term-2")
+    monkeypatch.setattr(terminal_module, "_create_terminal_via_api", lambda *_a, **_k: "term-2")
     monkeypatch.setattr(
-        rtunnel_module,
+        terminal_module,
         "_build_terminal_websocket_url",
         lambda _url, _term: "wss://nb.example.com/terminals/websocket/term-2",
     )
     monkeypatch.setattr(
-        rtunnel_module, "_send_terminal_command_via_websocket", lambda *_a, **_k: False
+        terminal_module, "_send_terminal_command_via_websocket", lambda *_a, **_k: False
     )
     monkeypatch.setattr(
-        rtunnel_module,
+        terminal_module,
         "_delete_terminal_via_api",
         lambda *_a, **_k: events.append("deleted") or True,
     )
@@ -374,7 +376,7 @@ def test_send_setup_command_via_terminal_ws_cleans_up_on_failure(
 def test_send_setup_command_via_terminal_ws_returns_false_when_terminal_create_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(rtunnel_module, "_create_terminal_via_api", lambda *_a, **_k: None)
+    monkeypatch.setattr(terminal_module, "_create_terminal_via_api", lambda *_a, **_k: None)
 
     assert (
         _send_setup_command_via_terminal_ws(
@@ -481,9 +483,9 @@ def test_wait_for_terminal_surface_progressive_succeeds(monkeypatch: pytest.Monk
         attempts["count"] += 1
         return attempts["count"] >= 3
 
-    monkeypatch.setattr(rtunnel_module.time, "monotonic", fake_monotonic)
-    monkeypatch.setattr(rtunnel_module, "_wait_for_terminal_surface", fake_wait_surface)
-    monkeypatch.setattr(rtunnel_module, "_click_terminal_tab", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(terminal_module.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(terminal_module, "_wait_for_terminal_surface", fake_wait_surface)
+    monkeypatch.setattr(terminal_module, "_click_terminal_tab", lambda *_args, **_kwargs: False)
 
     class _ProgressPage:
         def __init__(self, now_ref: list[float]) -> None:
@@ -517,11 +519,11 @@ def test_wait_for_terminal_surface_progressive_timeout(monkeypatch: pytest.Monke
     def fake_monotonic() -> float:
         return fake_time[0]
 
-    monkeypatch.setattr(rtunnel_module.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(terminal_module.time, "monotonic", fake_monotonic)
     monkeypatch.setattr(
-        rtunnel_module, "_wait_for_terminal_surface", lambda *_args, **_kwargs: False
+        terminal_module, "_wait_for_terminal_surface", lambda *_args, **_kwargs: False
     )
-    monkeypatch.setattr(rtunnel_module, "_click_terminal_tab", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(terminal_module, "_click_terminal_tab", lambda *_args, **_kwargs: False)
 
     class _ProgressPage:
         def __init__(self, now_ref: list[float]) -> None:
@@ -605,7 +607,7 @@ def test_focus_terminal_input_returns_false_when_focus_never_verifies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Returns False when both focus strategies fail on all passes."""
-    monkeypatch.setattr(rtunnel_module, "_click_terminal_tab", lambda *_a, **_kw: False)
+    monkeypatch.setattr(terminal_module, "_click_terminal_tab", lambda *_a, **_kw: False)
 
     # Per pass: .xterm verify consumes 2 evaluates, atomic JS consumes 1.
     # "div", "" → verify fails; False → atomic JS returns falsy.
@@ -623,7 +625,7 @@ def test_focus_terminal_input_succeeds_via_atomic_js_focus(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Atomic JS focus succeeds when .xterm click path fails."""
-    monkeypatch.setattr(rtunnel_module, "_click_terminal_tab", lambda *_a, **_kw: False)
+    monkeypatch.setattr(terminal_module, "_click_terminal_tab", lambda *_a, **_kw: False)
 
     # .xterm count=0 (Try 1 skipped), atomic JS returns True
     textarea = _LocatorStub(wait_ok=True)
@@ -664,22 +666,22 @@ def test_open_or_create_terminal_returns_early_when_api_path_succeeds(
     calls: dict[str, int] = {"recover": 0, "entry": 0, "fallback": 0}
 
     monkeypatch.setattr(
-        rtunnel_module,
+        terminal_module,
         "_open_terminal_via_rest_api",
         lambda **_kwargs: (True, True, "api-1"),
     )
     monkeypatch.setattr(
-        rtunnel_module,
+        terminal_module,
         "_recover_api_terminal_surface",
         lambda **_kwargs: calls.__setitem__("recover", calls["recover"] + 1) or False,
     )
     monkeypatch.setattr(
-        rtunnel_module,
+        terminal_module,
         "_wait_for_terminal_entry_point",
         lambda **_kwargs: calls.__setitem__("entry", calls["entry"] + 1),
     )
     monkeypatch.setattr(
-        rtunnel_module,
+        terminal_module,
         "_open_terminal_via_dom_fallback",
         lambda **_kwargs: calls.__setitem__("fallback", calls["fallback"] + 1) or True,
     )
@@ -700,12 +702,12 @@ def test_open_or_create_terminal_uses_dom_fallback_after_api_recovery_miss(
     events: list[tuple[str, object]] = []
 
     monkeypatch.setattr(
-        rtunnel_module,
+        terminal_module,
         "_open_terminal_via_rest_api",
         lambda **_kwargs: (False, True, "api-2"),
     )
     monkeypatch.setattr(
-        rtunnel_module,
+        terminal_module,
         "_recover_api_terminal_surface",
         lambda **_kwargs: False,
     )
@@ -713,19 +715,19 @@ def test_open_or_create_terminal_uses_dom_fallback_after_api_recovery_miss(
     def fake_wait_entry(*, lab_frame, api_term_created: bool) -> None:  # noqa: ANN001
         events.append(("entry", api_term_created))
 
-    monkeypatch.setattr(rtunnel_module, "_wait_for_terminal_entry_point", fake_wait_entry)
+    monkeypatch.setattr(terminal_module, "_wait_for_terminal_entry_point", fake_wait_entry)
     monkeypatch.setattr(
-        rtunnel_module,
+        terminal_module,
         "_dismiss_terminal_dialog_once",
         lambda **kwargs: events.append(("dismiss", kwargs["settle_ms"])) or False,
     )
     monkeypatch.setattr(
-        rtunnel_module,
+        terminal_module,
         "_open_terminal_via_dom_fallback",
         lambda **_kwargs: True,
     )
     monkeypatch.setattr(
-        rtunnel_module,
+        terminal_module,
         "_click_terminal_tab",
         lambda *_args, **kwargs: events.append(("tab_click", kwargs["settle_ms"])) or True,
     )
@@ -745,16 +747,16 @@ def test_open_or_create_terminal_handles_api_full_failure(
     events: list[tuple[str, object]] = []
 
     monkeypatch.setattr(
-        rtunnel_module, "_open_terminal_via_rest_api", lambda **_kwargs: (False, False, None)
+        terminal_module, "_open_terminal_via_rest_api", lambda **_kwargs: (False, False, None)
     )
     monkeypatch.setattr(
-        rtunnel_module,
+        terminal_module,
         "_wait_for_terminal_entry_point",
         lambda **kwargs: events.append(("entry", kwargs["api_term_created"])),
     )
-    monkeypatch.setattr(rtunnel_module, "_dismiss_terminal_dialog_once", lambda **_kwargs: False)
+    monkeypatch.setattr(terminal_module, "_dismiss_terminal_dialog_once", lambda **_kwargs: False)
     monkeypatch.setattr(
-        rtunnel_module,
+        terminal_module,
         "_open_terminal_via_dom_fallback",
         lambda **kwargs: events.append(("fallback", kwargs["api_term_created"])) or True,
     )
@@ -774,13 +776,13 @@ def test_open_or_create_terminal_returns_false_when_dom_fallback_fails(
     calls = {"tab_click": 0}
 
     monkeypatch.setattr(
-        rtunnel_module, "_open_terminal_via_rest_api", lambda **_kwargs: (False, False, None)
+        terminal_module, "_open_terminal_via_rest_api", lambda **_kwargs: (False, False, None)
     )
-    monkeypatch.setattr(rtunnel_module, "_wait_for_terminal_entry_point", lambda **_kwargs: None)
-    monkeypatch.setattr(rtunnel_module, "_dismiss_terminal_dialog_once", lambda **_kwargs: False)
-    monkeypatch.setattr(rtunnel_module, "_open_terminal_via_dom_fallback", lambda **_kwargs: False)
+    monkeypatch.setattr(terminal_module, "_wait_for_terminal_entry_point", lambda **_kwargs: None)
+    monkeypatch.setattr(terminal_module, "_dismiss_terminal_dialog_once", lambda **_kwargs: False)
+    monkeypatch.setattr(terminal_module, "_open_terminal_via_dom_fallback", lambda **_kwargs: False)
     monkeypatch.setattr(
-        rtunnel_module,
+        terminal_module,
         "_click_terminal_tab",
         lambda *_args, **_kwargs: calls.__setitem__("tab_click", calls["tab_click"] + 1) or True,
     )
@@ -799,16 +801,16 @@ def test_open_or_create_terminal_returns_true_when_api_recovery_succeeds(
     calls = {"entry": 0, "fallback": 0}
 
     monkeypatch.setattr(
-        rtunnel_module, "_open_terminal_via_rest_api", lambda **_kwargs: (False, True, "api-5")
+        terminal_module, "_open_terminal_via_rest_api", lambda **_kwargs: (False, True, "api-5")
     )
-    monkeypatch.setattr(rtunnel_module, "_recover_api_terminal_surface", lambda **_kwargs: True)
+    monkeypatch.setattr(terminal_module, "_recover_api_terminal_surface", lambda **_kwargs: True)
     monkeypatch.setattr(
-        rtunnel_module,
+        terminal_module,
         "_wait_for_terminal_entry_point",
         lambda **_kwargs: calls.__setitem__("entry", calls["entry"] + 1),
     )
     monkeypatch.setattr(
-        rtunnel_module,
+        terminal_module,
         "_open_terminal_via_dom_fallback",
         lambda **_kwargs: calls.__setitem__("fallback", calls["fallback"] + 1) or True,
     )
@@ -825,7 +827,7 @@ def test_open_or_create_terminal_returns_true_when_api_recovery_succeeds(
 def test_open_terminal_via_rest_api_handles_playwright_navigation_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(rtunnel_module, "_create_terminal_via_api", lambda *_args, **_kwargs: "1")
+    monkeypatch.setattr(terminal_module, "_create_terminal_via_api", lambda *_args, **_kwargs: "1")
 
     class _Frame:
         url = "https://nb.example.com/lab"
@@ -834,7 +836,7 @@ def test_open_terminal_via_rest_api_handles_playwright_navigation_error(
             raise rtunnel_module.PlaywrightError("navigation failed")
 
     terminal_ready, api_term_created, term_name = (
-        rtunnel_module._open_terminal_via_rest_api(  # noqa: SLF001
+        terminal_module._open_terminal_via_rest_api(  # noqa: SLF001
             context=object(),
             page=object(),
             lab_frame=_Frame(),
@@ -850,23 +852,23 @@ def test_recover_api_terminal_surface_waits_for_menu_before_file_menu_fallback(
 ) -> None:
     calls: dict[str, int] = {"file_menu": 0}
 
-    monkeypatch.setattr(rtunnel_module, "_click_terminal_tab", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(terminal_module, "_click_terminal_tab", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
-        rtunnel_module,
+        terminal_module,
         "_wait_for_terminal_surface_progressive",
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
-        rtunnel_module, "_wait_for_file_menu_ready", lambda *_args, **_kwargs: False
+        terminal_module, "_wait_for_file_menu_ready", lambda *_args, **_kwargs: False
     )
     monkeypatch.setattr(
-        rtunnel_module,
+        terminal_module,
         "_open_terminal_from_file_menu",
         lambda *_args, **_kwargs: calls.__setitem__("file_menu", calls["file_menu"] + 1) or True,
     )
 
     assert (
-        rtunnel_module._recover_api_terminal_surface(  # noqa: SLF001
+        terminal_module._recover_api_terminal_surface(  # noqa: SLF001
             lab_frame=object(),
             page=object(),
         )
@@ -1382,15 +1384,15 @@ def test_resolve_rtunnel_binary_configured_hash_match(tmp_path, monkeypatch):
     ssh_rt = SshRuntimeConfig(rtunnel_bin="/shared/bin/rtunnel")
     ctx = _ResolveContext()
 
-    monkeypatch.setattr(rtunnel_module, "_compute_rtunnel_hash", lambda _p: "aaa111")
+    monkeypatch.setattr(upload_module, "_compute_rtunnel_hash", lambda _p: "aaa111")
     monkeypatch.setattr(
-        rtunnel_module,
+        upload_module,
         "_rtunnel_matches_on_notebook",
         lambda _ctx, _url, _h: True,
     )
     upload_called = []
     monkeypatch.setattr(
-        rtunnel_module,
+        upload_module,
         "_upload_rtunnel_via_contents_api",
         lambda *a, **kw: upload_called.append(1) or True,
     )
@@ -1416,19 +1418,19 @@ def test_resolve_rtunnel_binary_configured_hash_mismatch(tmp_path, monkeypatch):
 
     hash_calls = []
     monkeypatch.setattr(
-        rtunnel_module,
+        upload_module,
         "_compute_rtunnel_hash",
         lambda _p: (hash_calls.append(1), "aaa111")[1],
     )
     match_calls = []
     monkeypatch.setattr(
-        rtunnel_module,
+        upload_module,
         "_rtunnel_matches_on_notebook",
         lambda _ctx, _url, _h: (match_calls.append(1), False)[1],
     )
     upload_called = []
     monkeypatch.setattr(
-        rtunnel_module,
+        upload_module,
         "_upload_rtunnel_via_contents_api",
         lambda *a, **kw: upload_called.append(1) or True,
     )
@@ -1453,19 +1455,19 @@ def test_resolve_rtunnel_binary_configured_no_local(tmp_path, monkeypatch):
 
     hash_calls = []
     monkeypatch.setattr(
-        rtunnel_module,
+        upload_module,
         "_compute_rtunnel_hash",
         lambda _p: hash_calls.append(1) or "aaa111",
     )
     match_calls = []
     monkeypatch.setattr(
-        rtunnel_module,
+        upload_module,
         "_rtunnel_matches_on_notebook",
         lambda _ctx, _url, _h: match_calls.append(1) or True,
     )
     upload_called = []
     monkeypatch.setattr(
-        rtunnel_module,
+        upload_module,
         "_upload_rtunnel_via_contents_api",
         lambda *a, **kw: upload_called.append(1) or True,
     )
@@ -1487,13 +1489,13 @@ def test_resolve_rtunnel_binary_not_configured_downloads(tmp_path, monkeypatch):
 
     download_calls = []
     monkeypatch.setattr(
-        rtunnel_module,
+        upload_module,
         "_download_rtunnel_locally",
         lambda _url, _dest: (download_calls.append(1), False)[1],
     )
     upload_called = []
     monkeypatch.setattr(
-        rtunnel_module,
+        upload_module,
         "_upload_rtunnel_via_contents_api",
         lambda *a, **kw: upload_called.append(1) or True,
     )
@@ -1525,17 +1527,17 @@ def test_resolve_rtunnel_binary_policy_never_returns_none(tmp_path, monkeypatch)
 
     hash_calls = []
     monkeypatch.setattr(
-        rtunnel_module, "_compute_rtunnel_hash", lambda _p: hash_calls.append(1) or "aaa111"
+        upload_module, "_compute_rtunnel_hash", lambda _p: hash_calls.append(1) or "aaa111"
     )
     upload_called = []
     monkeypatch.setattr(
-        rtunnel_module,
+        upload_module,
         "_upload_rtunnel_via_contents_api",
         lambda *a, **kw: upload_called.append(1) or True,
     )
     download_calls = []
     monkeypatch.setattr(
-        rtunnel_module,
+        upload_module,
         "_download_rtunnel_locally",
         lambda _url, _dest: (download_calls.append(1), False)[1],
     )
@@ -1563,7 +1565,7 @@ def test_resolve_rtunnel_binary_policy_never_ignores_configured_bin(tmp_path, mo
 
     hash_calls = []
     monkeypatch.setattr(
-        rtunnel_module, "_compute_rtunnel_hash", lambda _p: hash_calls.append(1) or "aaa111"
+        upload_module, "_compute_rtunnel_hash", lambda _p: hash_calls.append(1) or "aaa111"
     )
 
     result = _resolve_rtunnel_binary(
@@ -1588,17 +1590,15 @@ def test_resolve_rtunnel_binary_policy_always_forces_upload(tmp_path, monkeypatc
     )
     ctx = _ResolveContext()
 
-    monkeypatch.setattr(rtunnel_module, "_compute_rtunnel_hash", lambda _p: "aaa111")
-    monkeypatch.setattr(
-        rtunnel_module, "_rtunnel_matches_on_notebook", lambda _ctx, _url, _h: False
-    )
+    monkeypatch.setattr(upload_module, "_compute_rtunnel_hash", lambda _p: "aaa111")
+    monkeypatch.setattr(upload_module, "_rtunnel_matches_on_notebook", lambda _ctx, _url, _h: False)
     upload_called = []
     monkeypatch.setattr(
-        rtunnel_module,
+        upload_module,
         "_upload_rtunnel_via_contents_api",
         lambda *a, **kw: upload_called.append(1) or True,
     )
-    monkeypatch.setattr(rtunnel_module, "_upload_rtunnel_hash_sidecar", lambda *a, **kw: True)
+    monkeypatch.setattr(upload_module, "_upload_rtunnel_hash_sidecar", lambda *a, **kw: True)
 
     result = _resolve_rtunnel_binary(
         context=ctx, lab_url="https://nb.example.com/lab", ssh_runtime=ssh_rt
@@ -1621,7 +1621,7 @@ def test_resolve_rtunnel_binary_policy_always_downloads_when_no_local(tmp_path, 
 
     download_calls = []
     monkeypatch.setattr(
-        rtunnel_module,
+        upload_module,
         "_download_rtunnel_locally",
         lambda _url, _dest: (download_calls.append(1), False)[1],
     )
