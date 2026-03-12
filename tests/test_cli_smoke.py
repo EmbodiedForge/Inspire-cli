@@ -46,3 +46,19 @@ def test_tunnel_help_includes_key_subcommands() -> None:
     assert "add" in result.output
     assert "list" in result.output
     assert "status" in result.output
+
+
+def test_job_create_help_shows_fault_tolerant_flag() -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["job", "create", "--help"])
+    assert result.exit_code == 0
+    assert "--fault-tolerant" in result.output
+    assert "--no-fault-tolerant" in result.output
+
+
+def test_run_help_shows_fault_tolerant_flag() -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["run", "--help"])
+    assert result.exit_code == 0
+    assert "--fault-tolerant" in result.output
+    assert "--no-fault-tolerant" in result.output

@@ -137,6 +137,7 @@ def submit_training_job(
     nodes: int,
     max_time_hours: float,
     project_name: Optional[str] = None,
+    auto_fault_tolerance: bool = False,
 ) -> JobSubmission:
     wrapped_command = wrap_in_bash(command)
     final_command, log_path = build_remote_logged_command(config, command=wrapped_command)
@@ -155,6 +156,7 @@ def submit_training_job(
         task_priority=priority,
         instance_count=nodes,
         max_running_time_ms=max_time_ms,
+        auto_fault_tolerance=auto_fault_tolerance,
     )
 
     if config.shm_size is not None:

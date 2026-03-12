@@ -33,6 +33,7 @@ from inspire.cli.utils.compute_group_autoselect import find_best_compute_group_l
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.config import Config, ConfigError
 from inspire.config.workspaces import select_workspace_id
+from inspire.platform.web import browser_api as browser_api_module
 
 
 def _get_current_branch() -> str | None:
@@ -192,6 +193,7 @@ def _run_flow(
     image: str | None,
     nodes: int,
     project: str | None,
+    fault_tolerant: bool | None,
 ) -> None:
     _run_sync_if_requested(ctx, sync=sync, watch=watch)
 
@@ -252,12 +254,44 @@ def _run_flow(
             return
         project_id = selected_project.project_id
 
+        # Auto-enable fault tolerance for LOW-priority projects
+        is_low_priority = selected_project.priority_level.upper() == "LOW"
+        if fault_tolerant is None and is_low_priority:
+            fault_tolerant = True
+        auto_fault_tolerance = bool(fault_tolerant)
+
         if not ctx.json_output and fallback_msg:
             click.echo(fallback_msg)
-        if ctx.debug and not ctx.json_output:
-            click.echo(
-                f"Using project: {selected_project.name}{selected_project.get_quota_status()}"
-            )
+        if not ctx.json_output:
+            if is_low_priority:
+                restart_note = " and auto-restarted" if auto_fault_tolerance else ""
+                click.echo(
+                    f"Using project: {selected_project.name} "
+                    f"(low priority — job may be preempted{restart_note})"
+                )
+            elif ctx.debug:
+                click.echo(
+                    f"Using project: "
+                    f"{selected_project.name}{selected_project.get_quota_status()}"
+                )
+
+        # Show compute-group availability diagnostics
+        if not ctx.json_output and location:
+            try:
+                all_avail = browser_api_module.get_accurate_gpu_availability(
+                    workspace_id=selected_workspace_id
+                )
+                same_type = [a for a in all_avail if gpu_type.upper() in a.gpu_type.upper()]
+                if same_type:
+                    parts = []
+                    for a in sorted(same_type, key=lambda x: x.available_gpus, reverse=True):
+                        part = f"{a.group_name}: {a.available_gpus} free"
+                        if a.low_priority_gpus > 0:
+                            part += f" (+{a.low_priority_gpus} preemptible)"
+                        parts.append(part)
+                    click.echo(f"  {gpu_type} availability: {' | '.join(parts)}")
+            except Exception:
+                pass  # diagnostics are best-effort
 
         try:
             submission = job_submit.submit_training_job(
@@ -275,6 +309,7 @@ def _run_flow(
                 nodes=nodes,
                 max_time_hours=max_time,
                 project_name=selected_project.name,
+                auto_fault_tolerance=auto_fault_tolerance,
             )
         except ValueError as e:
             _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
@@ -381,6 +416,11 @@ def _run_flow(
 @click.option(
     "--nodes", type=int, default=1, help="Number of nodes for multi-node training (default: 1)"
 )
+@click.option(
+    "--fault-tolerant/--no-fault-tolerant",
+    default=None,
+    help="Auto-restart on failure/preemption (auto-enabled for low-priority projects)",
+)
 @pass_context
 def run(
     ctx: Context,
@@ -398,6 +438,7 @@ def run(
     max_time: float,
     image: str | None,
     nodes: int,
+    fault_tolerant: bool | None,
 ) -> None:
     """Quick job submission with smart resource allocation.
 
@@ -432,6 +473,7 @@ def run(
         max_time=max_time,
         image=image,
         nodes=nodes,
+        fault_tolerant=fault_tolerant,
     )
 
 

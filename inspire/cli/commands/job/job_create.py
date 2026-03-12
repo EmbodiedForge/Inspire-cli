@@ -21,6 +21,7 @@ from inspire.cli.utils.compute_group_autoselect import find_best_compute_group_l
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.config import Config, ConfigError
 from inspire.config.workspaces import select_workspace_id
+from inspire.platform.web import browser_api as browser_api_module
 
 
 def run_job_create(
@@ -39,6 +40,7 @@ def run_job_create(
     image: str | None,
     project: str | None,
     nodes: int,
+    fault_tolerant: bool | None,
 ) -> None:
     """Run the job creation flow."""
     try:
@@ -146,10 +148,43 @@ def run_job_create(
             except ValueError:
                 pass
 
+        # Auto-enable fault tolerance for LOW-priority projects
+        is_low_priority = selected.priority_level.upper() == "LOW"
+        if fault_tolerant is None and is_low_priority:
+            fault_tolerant = True
+        auto_fault_tolerance = bool(fault_tolerant)
+
         if not ctx.json_output:
             if fallback_msg:
                 click.echo(fallback_msg)
-            click.echo(f"Using project: {selected.name}{selected.get_quota_status()}")
+            if is_low_priority:
+                restart_note = " and auto-restarted" if auto_fault_tolerance else ""
+                click.echo(
+                    f"Using project: {selected.name} "
+                    f"(low priority — job may be preempted{restart_note})"
+                )
+            else:
+                click.echo(f"Using project: {selected.name}{selected.get_quota_status()}")
+
+        # Show compute-group availability diagnostics
+        if not ctx.json_output and auto and location:
+            try:
+                all_avail = browser_api_module.get_accurate_gpu_availability(
+                    workspace_id=selected_workspace_id
+                )
+                same_type = [
+                    a for a in all_avail if requested_gpu_type.value.upper() in a.gpu_type.upper()
+                ]
+                if same_type:
+                    parts = []
+                    for a in sorted(same_type, key=lambda x: x.available_gpus, reverse=True):
+                        part = f"{a.group_name}: {a.available_gpus} free"
+                        if a.low_priority_gpus > 0:
+                            part += f" (+{a.low_priority_gpus} preemptible)"
+                        parts.append(part)
+                    click.echo(f"  {requested_gpu_type.value} availability: {' | '.join(parts)}")
+            except Exception:
+                pass  # diagnostics are best-effort
 
         try:
             submission = job_submit.submit_training_job(
@@ -167,6 +202,7 @@ def run_job_create(
                 nodes=nodes,
                 max_time_hours=max_time,
                 project_name=selected.name,
+                auto_fault_tolerance=auto_fault_tolerance,
             )
         except ValueError as e:
             _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
@@ -261,6 +297,11 @@ def run_job_create(
     default=1,
     help="Number of nodes for multi-node training (default: 1)",
 )
+@click.option(
+    "--fault-tolerant/--no-fault-tolerant",
+    default=None,
+    help="Auto-restart on failure/preemption (auto-enabled for low-priority projects)",
+)
 @pass_context
 def create(
     ctx: Context,
@@ -277,6 +318,7 @@ def create(
     image: Optional[str],
     project: Optional[str],
     nodes: int,
+    fault_tolerant: Optional[bool],
 ) -> None:
     """Create a new training job.
 
@@ -319,4 +361,5 @@ def create(
         image=image,
         project=project,
         nodes=nodes,
+        fault_tolerant=fault_tolerant,
     )

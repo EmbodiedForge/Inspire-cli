@@ -180,6 +180,7 @@ class InspireAPI:
         instance_count: Optional[int] = None,
         max_running_time_ms: Optional[str] = None,
         shm_gi: Optional[int] = None,
+        auto_fault_tolerance: bool = False,
     ) -> Dict[str, Any]:
         return _create_training_job_smart(
             self,
@@ -195,6 +196,7 @@ class InspireAPI:
             instance_count=instance_count,
             max_running_time_ms=max_running_time_ms,
             shm_gi=shm_gi,
+            auto_fault_tolerance=auto_fault_tolerance,
         )
 
     def get_job_detail(self, job_id: str) -> Dict[str, Any]:

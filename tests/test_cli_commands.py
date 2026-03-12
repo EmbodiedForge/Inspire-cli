@@ -27,6 +27,10 @@ from inspire.config import ConfigError
 from inspire.cli.utils.job_cache import JobCache
 from inspire.platform.openapi import ResourceManager
 
+import importlib
+
+run_command_module = importlib.import_module("inspire.cli.commands.run")
+
 # Valid test job IDs (must match the format: job-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
 TEST_JOB_ID = "job-12345678-1234-1234-1234-123456789abc"
 TEST_JOB_ID_2 = "job-abcdef12-3456-7890-abcd-ef1234567890"
@@ -356,6 +360,193 @@ def test_job_create_requires_target_dir(monkeypatch: pytest.MonkeyPatch):
 
     assert result.exit_code == EXIT_CONFIG_ERROR
     assert "Missing INSPIRE_TARGET_DIR" in result.output
+
+
+def _patch_low_priority_project(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    priority_level: str = "LOW",
+) -> DummyAPI:
+    """Like patch_config_and_auth but with a LOW-priority project."""
+    api = patch_config_and_auth(monkeypatch, tmp_path)
+
+    low_project = browser_api_module.ProjectInfo(
+        project_id="project-low-001",
+        name="LowPrio",
+        workspace_id="ws-test-workspace",
+        priority_level=priority_level,
+        priority_name="0",
+    )
+    monkeypatch.setattr(
+        browser_api_module,
+        "list_projects",
+        lambda workspace_id=None, session=None: [low_project],
+    )
+    monkeypatch.setattr(
+        browser_api_module,
+        "select_project",
+        lambda projects, requested=None, **_: (low_project, None),
+    )
+    return api
+
+
+def test_job_create_low_priority_auto_enables_fault_tolerance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    api = _patch_low_priority_project(monkeypatch, tmp_path)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli_main,
+        ["job", "create", "-n", "ft-test", "-r", "H200", "-c", "echo hi", "--no-auto"],
+    )
+
+    assert result.exit_code == 0
+    assert api.calls["create_training_job_smart"]["auto_fault_tolerance"] is True
+    assert "low priority" in result.output
+    assert "auto-restarted" in result.output
+
+
+def test_job_create_no_fault_tolerant_overrides_low_priority(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    api = _patch_low_priority_project(monkeypatch, tmp_path)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli_main,
+        [
+            "job",
+            "create",
+            "-n",
+            "ft-off",
+            "-r",
+            "H200",
+            "-c",
+            "echo hi",
+            "--no-auto",
+            "--no-fault-tolerant",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert api.calls["create_training_job_smart"]["auto_fault_tolerance"] is False
+    assert "low priority" in result.output
+    assert "auto-restarted" not in result.output
+
+
+def test_job_create_low_priority_case_insensitive(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """priority_level from the API may arrive in any case."""
+    api = _patch_low_priority_project(monkeypatch, tmp_path, priority_level="low")
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli_main,
+        ["job", "create", "-n", "case-test", "-r", "H200", "-c", "echo hi", "--no-auto"],
+    )
+
+    assert result.exit_code == 0
+    assert api.calls["create_training_job_smart"]["auto_fault_tolerance"] is True
+    assert "low priority" in result.output
+
+
+def test_job_create_normal_priority_no_fault_tolerance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """NORMAL-priority projects should not auto-enable fault tolerance."""
+    api = patch_config_and_auth(monkeypatch, tmp_path)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli_main,
+        ["job", "create", "-n", "normal-test", "-r", "H200", "-c", "echo hi", "--no-auto"],
+    )
+
+    assert result.exit_code == 0
+    assert api.calls["create_training_job_smart"]["auto_fault_tolerance"] is False
+    assert "low priority" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# `inspire run` — fault-tolerant / LOW-priority behavioral tests
+# ---------------------------------------------------------------------------
+
+_FAKE_BEST = type("FakeBest", (), {"available_gpus": 64, "low_priority_gpus": 0})()
+
+
+def _patch_run_autoselect(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub out compute-group auto-selection and availability diagnostics for `run`."""
+    monkeypatch.setattr(
+        run_command_module,
+        "find_best_compute_group_location",
+        lambda api, *, gpu_type, min_gpus, include_preemptible, instance_count: (
+            _FAKE_BEST,
+            "TestRoom",
+            "H200 TestRoom",
+        ),
+    )
+    monkeypatch.setattr(
+        browser_api_module,
+        "get_accurate_gpu_availability",
+        lambda workspace_id=None, session=None: [],
+    )
+
+
+def test_run_low_priority_auto_enables_fault_tolerance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    api = _patch_low_priority_project(monkeypatch, tmp_path)
+    _patch_run_autoselect(monkeypatch)
+    runner = CliRunner()
+
+    result = runner.invoke(cli_main, ["run", "echo hi"])
+
+    assert result.exit_code == 0
+    assert api.calls["create_training_job_smart"]["auto_fault_tolerance"] is True
+    assert "low priority" in result.output
+    assert "auto-restarted" in result.output
+
+
+def test_run_no_fault_tolerant_overrides_low_priority(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    api = _patch_low_priority_project(monkeypatch, tmp_path)
+    _patch_run_autoselect(monkeypatch)
+    runner = CliRunner()
+
+    result = runner.invoke(cli_main, ["run", "echo hi", "--no-fault-tolerant"])
+
+    assert result.exit_code == 0
+    assert api.calls["create_training_job_smart"]["auto_fault_tolerance"] is False
+    assert "low priority" in result.output
+    assert "auto-restarted" not in result.output
+
+
+def test_run_low_priority_case_insensitive(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """priority_level from the API may arrive in any case."""
+    api = _patch_low_priority_project(monkeypatch, tmp_path, priority_level="low")
+    _patch_run_autoselect(monkeypatch)
+    runner = CliRunner()
+
+    result = runner.invoke(cli_main, ["run", "echo hi"])
+
+    assert result.exit_code == 0
+    assert api.calls["create_training_job_smart"]["auto_fault_tolerance"] is True
+    assert "low priority" in result.output
+
+
+def test_run_normal_priority_no_fault_tolerance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """NORMAL-priority projects should not auto-enable fault tolerance."""
+    api = patch_config_and_auth(monkeypatch, tmp_path)
+    _patch_run_autoselect(monkeypatch)
+    runner = CliRunner()
+
+    result = runner.invoke(cli_main, ["run", "echo hi"])
+
+    assert result.exit_code == 0
+    assert api.calls["create_training_job_smart"]["auto_fault_tolerance"] is False
+    assert "low priority" not in result.output
 
 
 def test_wrap_in_bash():

@@ -34,6 +34,7 @@ def create_training_job_smart(
     instance_count: Optional[int] = None,
     max_running_time_ms: Optional[str] = None,
     shm_gi: Optional[int] = None,
+    auto_fault_tolerance: bool = False,
 ) -> Dict[str, Any]:
     """Create training job with smart resource matching."""
     api._check_authentication()
@@ -52,8 +53,10 @@ def create_training_job_smart(
     # Use defaults for optional parameters
     project_id = project_id or api.DEFAULT_PROJECT_ID
     workspace_id = workspace_id or api.DEFAULT_WORKSPACE_ID
-    task_priority = task_priority or api.DEFAULT_TASK_PRIORITY
-    instance_count = instance_count or api.DEFAULT_INSTANCE_COUNT
+    if task_priority is None:
+        task_priority = api.DEFAULT_TASK_PRIORITY
+    if instance_count is None:
+        instance_count = api.DEFAULT_INSTANCE_COUNT
     max_running_time_ms = max_running_time_ms or api.DEFAULT_MAX_RUNNING_TIME
 
     # Set default shared memory size
@@ -83,6 +86,9 @@ def create_training_job_smart(
         "max_running_time_ms": max_running_time_ms,
         "framework_config": [framework_item],
     }
+
+    if auto_fault_tolerance:
+        payload["auto_fault_tolerance"] = True
 
     try:
         result = api._make_request("POST", api.endpoints.TRAIN_JOB_CREATE, payload)

@@ -95,3 +95,67 @@ def test_create_training_job_smart_uses_overrides_for_framework_config() -> None
     assert framework_item["image"] == "custom.registry/pytorch:tag"
     assert framework_item["instance_count"] == 2
     assert framework_item["shm_gi"] == 256
+
+
+def test_task_priority_zero_preserved() -> None:
+    """priority=0 must not be replaced by the default (was a falsy-or bug)."""
+    api = _DummyAPI()
+
+    create_training_job_smart(
+        api,
+        name="demo",
+        command="echo demo",
+        resource="1xH200",
+        task_priority=0,
+    )
+
+    assert api.last_request is not None
+    payload = api.last_request[2]
+    assert payload["task_priority"] == 0
+
+
+def test_instance_count_zero_preserved() -> None:
+    """instance_count=0 must not be replaced by the default."""
+    api = _DummyAPI()
+
+    create_training_job_smart(
+        api,
+        name="demo",
+        command="echo demo",
+        resource="1xH200",
+        instance_count=0,
+    )
+
+    assert api.last_request is not None
+    payload = api.last_request[2]
+    assert payload["framework_config"][0]["instance_count"] == 0
+
+
+def test_auto_fault_tolerance_included_when_true() -> None:
+    api = _DummyAPI()
+
+    create_training_job_smart(
+        api,
+        name="demo",
+        command="echo demo",
+        resource="1xH200",
+        auto_fault_tolerance=True,
+    )
+
+    payload = api.last_request[2]
+    assert payload["auto_fault_tolerance"] is True
+
+
+def test_auto_fault_tolerance_absent_when_false() -> None:
+    api = _DummyAPI()
+
+    create_training_job_smart(
+        api,
+        name="demo",
+        command="echo demo",
+        resource="1xH200",
+        auto_fault_tolerance=False,
+    )
+
+    payload = api.last_request[2]
+    assert "auto_fault_tolerance" not in payload
