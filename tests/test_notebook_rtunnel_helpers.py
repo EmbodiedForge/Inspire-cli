@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import os
 from pathlib import Path
 
 import pytest
@@ -1217,6 +1218,7 @@ def test_compute_rtunnel_hash_missing_file(tmp_path: Path) -> None:
     assert _compute_rtunnel_hash(missing) is None
 
 
+@pytest.mark.skipif(os.getuid() == 0, reason="root bypasses file permissions")
 def test_compute_rtunnel_hash_permission_error(tmp_path: Path) -> None:
     binary = tmp_path / "rtunnel"
     binary.write_bytes(b"\x7fELF")
