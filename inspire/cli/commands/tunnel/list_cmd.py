@@ -52,13 +52,20 @@ def _sort_bridges_for_display(bridges, *, ssh_status: dict[str, bool], no_check:
     is_flag=True,
     help="Skip live SSH connectivity check (faster output).",
 )
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Show full details (URL, SSH user, internet status).",
+)
 @pass_context
-def tunnel_list(ctx: Context, no_check: bool) -> None:
+def tunnel_list(ctx: Context, no_check: bool, verbose: bool) -> None:
     """List all configured bridges.
 
     \b
     Example:
         inspire tunnel list
+        inspire tunnel list --verbose
         inspire tunnel list --no-check
     """
     config = load_tunnel_config()
@@ -98,9 +105,43 @@ def tunnel_list(ctx: Context, no_check: bool) -> None:
         )
         return
 
+    if verbose:
+        _print_verbose(ordered_bridges, config=config, ssh_status=ssh_status, no_check=no_check)
+    else:
+        _print_compact(ordered_bridges, config=config, ssh_status=ssh_status, no_check=no_check)
+
+
+def _print_compact(bridges, *, config, ssh_status, no_check):
+    """One line per bridge."""
+    # Find the longest name for alignment
+    max_name = max((len(b.name) for b in bridges), default=0)
+
+    for bridge in bridges:
+        is_default = bridge.name == config.default_bridge
+        marker = "*" if is_default else " "
+        name_col = bridge.name.ljust(max_name)
+
+        parts = [f"{marker} {name_col}"]
+
+        if not no_check:
+            if ssh_status.get(bridge.name, False):
+                parts.append(click.style("connected", fg="green"))
+            else:
+                parts.append(click.style("not responding", fg="red"))
+
+        parts.append(f"port {bridge.ssh_port}")
+
+        if not bridge.has_internet:
+            parts.append("no-internet")
+
+        click.echo("  ".join(parts))
+
+
+def _print_verbose(bridges, *, config, ssh_status, no_check):
+    """Multi-line detail per bridge (original format)."""
     click.echo("Configured bridges:")
     click.echo("=" * 50)
-    for bridge in ordered_bridges:
+    for bridge in bridges:
         is_default = bridge.name == config.default_bridge
         default_mark = "* " if is_default else "  "
         no_internet_mark = " [no internet]" if not bridge.has_internet else ""
