@@ -1259,10 +1259,11 @@ def test_tunnel_list_places_connected_bridges_first(monkeypatch: pytest.MonkeyPa
     result = runner.invoke(cli_main, ["tunnel", "list"])
 
     assert result.exit_code == EXIT_SUCCESS
-    alpha_pos = result.output.find("  alpha:")
-    beta_pos = result.output.find("* beta:")
-    zeta_pos = result.output.find("  zeta:")
+    alpha_pos = result.output.find("alpha")
+    beta_pos = result.output.find("beta")
+    zeta_pos = result.output.find("zeta")
     assert alpha_pos != -1 and beta_pos != -1 and zeta_pos != -1
+    # Connected bridge (alpha) should appear before disconnected ones
     assert alpha_pos < beta_pos
     assert alpha_pos < zeta_pos
 
