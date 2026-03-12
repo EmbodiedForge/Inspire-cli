@@ -92,16 +92,6 @@ def list_images_by_source(
                 "registry_hint": {"workspace_id": workspace_id},
             },
         }
-    elif api_source == "SOURCE_PRIVATE":
-        body = {
-            "page": 0,
-            "page_size": -1,
-            "filter": {
-                "source": "SOURCE_PRIVATE",
-                "source_list": [],
-                "registry_hint": {"workspace_id": workspace_id},
-            },
-        }
     else:
         body = {
             "page": 0,
