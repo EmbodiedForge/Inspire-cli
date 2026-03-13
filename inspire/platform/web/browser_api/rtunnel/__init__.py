@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from .commands import BOOTSTRAP_SENTINEL as BOOTSTRAP_SENTINEL  # noqa: F401
 from .commands import SETUP_DONE_MARKER as SETUP_DONE_MARKER  # noqa: F401
+from .commands import SSHD_MISSING_MARKER as SSHD_MISSING_MARKER  # noqa: F401
 from .commands import build_rtunnel_setup_commands as build_rtunnel_setup_commands  # noqa: F401
 from .flow import setup_notebook_rtunnel as setup_notebook_rtunnel  # noqa: F401
 from .verify import redact_proxy_url as redact_proxy_url  # noqa: F401

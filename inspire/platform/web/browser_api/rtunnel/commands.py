@@ -16,6 +16,7 @@ from inspire.config.ssh_runtime import (
 
 BOOTSTRAP_SENTINEL = "/tmp/.inspire_rtunnel_bootstrap_v1"
 SETUP_DONE_MARKER = "INSPIRE_RTUNNEL_SETUP_DONE"
+SSHD_MISSING_MARKER = "INSPIRE_SSHD_INSTALL_FAILED"
 
 
 def build_rtunnel_setup_commands(
@@ -213,10 +214,12 @@ def build_rtunnel_setup_commands(
         cmd_lines.append(start_sshd_cmd)
         cmd_lines.append(start_rtunnel_cmd)
     else:
+        sshd_missing_check = f'if [ ! -x /usr/sbin/sshd ]; then echo "{SSHD_MISSING_MARKER}"; fi'
         cmd_lines.extend(
             [
                 'RTUNNEL_URL="$RTUNNEL_DOWNLOAD_URL"',
                 openssh_bootstrap_cmd,
+                sshd_missing_check,
                 start_sshd_cmd,
                 start_rtunnel_cmd,
             ]

@@ -24,7 +24,7 @@ from inspire.platform.web.browser_api.core import (
 )
 from inspire.platform.web.session import WebSession, get_web_session
 
-from .commands import build_rtunnel_setup_commands
+from .commands import SSHD_MISSING_MARKER, build_rtunnel_setup_commands
 from .probe import probe_existing_rtunnel_proxy_url
 from .state import save_rtunnel_proxy_state
 from .terminal import (
@@ -262,18 +262,25 @@ def _send_rtunnel_setup_script(
     lab_frame: Any,
     batch_cmd: str,
     timer: "_StepTimer",
-) -> bool:
+) -> tuple[bool, list[str]]:
     import sys as _sys
 
+    detected_errors: list[str] = []
     setup_sent_via_ws = False
     try:
         setup_sent_via_ws = _send_setup_command_via_terminal_ws(
             context=context,
             lab_frame=lab_frame,
             batch_cmd=batch_cmd,
+            detected_errors=detected_errors,
         )
     except (PlaywrightError, RuntimeError, TimeoutError, ValueError):
         setup_sent_via_ws = False
+
+    # Propagate error markers immediately — even if WS returned False
+    # (marker was captured before timeout/close)
+    if detected_errors:
+        return setup_sent_via_ws, detected_errors
 
     if setup_sent_via_ws:
         _sys.stderr.write("  Sent setup script via Jupyter terminal WebSocket.\n")
@@ -281,7 +288,7 @@ def _send_rtunnel_setup_script(
         timer.mark("open_terminal")
         timer.mark("focus_xterm")
         timer.mark("build_and_send_cmd")
-        return True
+        return True, []
 
     _sys.stderr.write("  WebSocket terminal setup unavailable, using browser automation.\n")
     _sys.stderr.flush()
@@ -308,7 +315,7 @@ def _send_rtunnel_setup_script(
         page.keyboard.insert_text(batch_cmd)
         page.keyboard.press("Enter")
         timer.mark("build_and_send_cmd")
-        return False
+        return False, []
     finally:
         if browser_term_name:
             try:
@@ -465,7 +472,7 @@ def _setup_notebook_rtunnel_sync(
             )
             batch_cmd = _build_batch_setup_script(cmd_lines)
             _log.debug("Setup script length: %d chars, %d commands", len(batch_cmd), len(cmd_lines))
-            setup_sent_via_ws = _send_rtunnel_setup_script(
+            setup_sent_via_ws, setup_errors = _send_rtunnel_setup_script(
                 context=context,
                 page=page,
                 lab_frame=lab_frame,
@@ -473,6 +480,20 @@ def _setup_notebook_rtunnel_sync(
                 timer=timer,
             )
             _log.debug("Setup script sent via WS: %s", setup_sent_via_ws)
+
+            if SSHD_MISSING_MARKER in setup_errors:
+                raise RuntimeError(
+                    "SSH server (sshd) could not be installed on the notebook.\n"
+                    "Possible causes: no internet access for apt-get, or a\n"
+                    "misconfigured sshd_deb_dir (bad path / empty directory).\n\n"
+                    "Configure an APT mirror in your project config "
+                    "(.inspire/config.toml):\n\n"
+                    "  [ssh]\n"
+                    '  apt_mirror_url = "http://your-internal-mirror/ubuntu"\n\n'
+                    "Or provide pre-downloaded sshd .deb packages:\n\n"
+                    "  [ssh]\n"
+                    '  sshd_deb_dir = "/shared/path/to/sshd-debs"\n'
+                )
             _wait_for_setup_completion(
                 page=page,
                 setup_sent_via_ws=setup_sent_via_ws,

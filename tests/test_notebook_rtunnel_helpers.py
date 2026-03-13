@@ -13,6 +13,7 @@ from inspire.platform.web.browser_api.rtunnel import terminal as terminal_module
 from inspire.platform.web.browser_api.rtunnel import upload as upload_module
 from inspire.platform.web.browser_api.rtunnel import (
     _CONTENTS_API_RTUNNEL_FILENAME,
+    SSHD_MISSING_MARKER,
     _StepTimer,
     _build_batch_setup_script,
     _build_terminal_websocket_url,
@@ -1631,3 +1632,116 @@ def test_resolve_rtunnel_binary_policy_always_downloads_when_no_local(tmp_path, 
     )
     assert result is None
     assert len(download_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# _send_terminal_command_via_websocket — error marker detection
+# ---------------------------------------------------------------------------
+
+
+def _make_eval_page(return_value):  # noqa: ANN001, ANN202
+    """Create a mock page whose evaluate() returns a fixed value."""
+
+    class _EvalPage:
+        def evaluate(self, script: str, payload: dict):  # noqa: ANN201
+            return return_value
+
+    return _EvalPage()
+
+
+def test_send_terminal_command_via_websocket_populates_detected_errors() -> None:
+    """When evaluate returns a dict with errors, detected_errors should be populated."""
+    page = _make_eval_page({"ok": True, "errors": ["MARKER"]})
+    errors: list[str] = []
+    result = _send_terminal_command_via_websocket(
+        page,
+        ws_url="wss://example.test/terminals/websocket/1",
+        command="echo hi",
+        error_markers=["MARKER"],
+        detected_errors=errors,
+    )
+    assert result is True
+    assert errors == ["MARKER"]
+
+
+def test_send_terminal_command_via_websocket_dict_ok_false() -> None:
+    """When evaluate returns a dict with ok=False and no errors, returns False."""
+    page = _make_eval_page({"ok": False, "errors": []})
+    errors: list[str] = []
+    result = _send_terminal_command_via_websocket(
+        page,
+        ws_url="wss://example.test/terminals/websocket/1",
+        command="echo hi",
+        detected_errors=errors,
+    )
+    assert result is False
+    assert errors == []
+
+
+def test_send_terminal_command_via_websocket_dict_ok_false_with_errors() -> None:
+    """WS timeout with marker captured: ok=False but errors populated."""
+    page = _make_eval_page({"ok": False, "errors": ["MARKER"]})
+    errors: list[str] = []
+    result = _send_terminal_command_via_websocket(
+        page,
+        ws_url="wss://example.test/terminals/websocket/1",
+        command="echo hi",
+        error_markers=["MARKER"],
+        detected_errors=errors,
+    )
+    assert result is False
+    assert errors == ["MARKER"]
+
+
+def test_send_terminal_command_via_websocket_plain_bool_still_works() -> None:
+    """Existing mock pages returning plain bool should still work."""
+    page = _make_eval_page(True)
+    errors: list[str] = []
+    result = _send_terminal_command_via_websocket(
+        page,
+        ws_url="wss://example.test/terminals/websocket/1",
+        command="echo hi",
+        error_markers=["MARKER"],
+        detected_errors=errors,
+    )
+    assert result is True
+    assert errors == []
+
+
+def test_send_setup_command_via_terminal_ws_propagates_detected_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_send_setup_command_via_terminal_ws should propagate detected_errors."""
+
+    class _Frame:
+        url = "https://nb.example.com/lab"
+
+    monkeypatch.setattr(terminal_module, "_create_terminal_via_api", lambda *_a, **_k: "term-1")
+    monkeypatch.setattr(
+        terminal_module,
+        "_build_terminal_websocket_url",
+        lambda _url, _term: "wss://nb.example.com/terminals/websocket/term-1",
+    )
+
+    def fake_send(*_a, **kwargs):  # noqa: ANN202
+        detected = kwargs.get("detected_errors")
+        if detected is not None:
+            detected.append(SSHD_MISSING_MARKER)
+        return False
+
+    monkeypatch.setattr(terminal_module, "_send_terminal_command_via_websocket", fake_send)
+    monkeypatch.setattr(
+        terminal_module,
+        "_delete_terminal_via_api",
+        lambda *_a, **_k: True,
+    )
+
+    errors: list[str] = []
+    result = _send_setup_command_via_terminal_ws(
+        context=object(),
+        lab_frame=_Frame(),
+        batch_cmd="echo",
+        detected_errors=errors,
+    )
+    assert result is False
+    assert errors == [SSHD_MISSING_MARKER]

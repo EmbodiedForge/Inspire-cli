@@ -13,7 +13,7 @@ except ImportError:  # pragma: no cover
         pass
 
 
-from .commands import SETUP_DONE_MARKER
+from .commands import SETUP_DONE_MARKER, SSHD_MISSING_MARKER
 from ._jupyter import (
     _build_jupyter_xsrf_headers,
     _extract_jupyter_token,
@@ -106,6 +106,8 @@ def _send_terminal_command_via_websocket(
     command: str,
     timeout_ms: int = 5000,
     completion_marker: str | None = None,
+    error_markers: list[str] | None = None,
+    detected_errors: list[str] | None = None,
 ) -> bool:
     """Send a command to a Jupyter terminal via WebSocket.
 
@@ -120,26 +122,42 @@ def _send_terminal_command_via_websocket(
     after sending and waits until the marker string appears in a subsequent
     stdout message.  This allows callers to block until a setup script
     finishes (e.g. ``INSPIRE_RTUNNEL_SETUP_DONE``).
+
+    When *error_markers* is provided, stdout received after sending is
+    accumulated in a rolling buffer and checked for each marker.  Any
+    matches are appended to *detected_errors* (if supplied).  The return
+    type stays ``bool`` for backward compatibility.
     """
     stdin_payload = command.rstrip("\r\n") + "\r"
     try:
         result = page_or_frame.evaluate(
             """
-                async ({ wsUrl, stdinData, timeoutMs, promptTimeoutMs, marker }) => {
+                async ({ wsUrl, stdinData, timeoutMs, promptTimeoutMs, marker, errorMarkers }) => {
                   return await new Promise((resolve) => {
                     let settled = false;
                     let sent = false;
                     let socket = null;
+                    const foundErrors = [];
+                    let afterSendBuf = "";
                     const finish = (ok) => {
                       if (settled) return;
                       settled = true;
                       try {
                         if (socket) socket.close();
                       } catch (_) {}
-                      resolve(ok);
+                      resolve({ ok, errors: foundErrors });
                     };
 
                     const timer = setTimeout(() => finish(false), timeoutMs);
+
+                    const checkErrors = (text) => {
+                      afterSendBuf += text;
+                      for (const em of errorMarkers) {
+                        if (em && afterSendBuf.includes(em) && !foundErrors.includes(em)) {
+                          foundErrors.push(em);
+                        }
+                      }
+                    };
 
                     const CHUNK = 2048;
                     const DELAY = 50;
@@ -192,9 +210,14 @@ def _send_terminal_command_via_websocket(
                             if (promptRe.test(stdoutBuf)) {
                               doSend();
                             }
-                          } else if (marker && text.includes(marker)) {
-                            clearTimeout(timer);
-                            finish(true);
+                          } else {
+                            if (errorMarkers.length > 0) {
+                              checkErrors(text);
+                            }
+                            if (marker && text.includes(marker)) {
+                              clearTimeout(timer);
+                              finish(true);
+                            }
                           }
                         }
                       } catch (_) {}
@@ -226,8 +249,13 @@ def _send_terminal_command_via_websocket(
                 "timeoutMs": int(timeout_ms),
                 "promptTimeoutMs": min(int(timeout_ms) - 500, 3000),
                 "marker": completion_marker or "",
+                "errorMarkers": error_markers or [],
             },
         )
+        if isinstance(result, dict):
+            if detected_errors is not None:
+                detected_errors.extend(result.get("errors", []))
+            return bool(result.get("ok", False))
         return bool(result)
     except (PlaywrightError, AttributeError, RuntimeError, TypeError, ValueError):
         return False
@@ -238,6 +266,7 @@ def _send_setup_command_via_terminal_ws(
     context: Any,
     lab_frame: Any,
     batch_cmd: str,
+    detected_errors: list[str] | None = None,
 ) -> bool:
     term_name = _create_terminal_via_api(context, lab_frame.url)
     if not term_name:
@@ -251,6 +280,8 @@ def _send_setup_command_via_terminal_ws(
             command=batch_cmd,
             timeout_ms=120000,
             completion_marker=SETUP_DONE_MARKER,
+            error_markers=[SSHD_MISSING_MARKER],
+            detected_errors=detected_errors,
         )
     finally:
         _delete_terminal_via_api(context, lab_url=lab_frame.url, term_name=term_name)

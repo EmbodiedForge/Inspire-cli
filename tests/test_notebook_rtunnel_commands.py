@@ -7,6 +7,7 @@ import pytest
 from inspire.config.ssh_runtime import SshRuntimeConfig
 from inspire.platform.web.browser_api.rtunnel import (
     BOOTSTRAP_SENTINEL,
+    SSHD_MISSING_MARKER,
     build_rtunnel_setup_commands,
 )
 
@@ -246,3 +247,40 @@ def test_contents_api_filename_does_not_override_rtunnel_bin_path() -> None:
     assert (
         bin_path_idx < contents_api_idx
     ), "RTUNNEL_BIN_PATH copy must come before contents API copy"
+
+
+# ---------------------------------------------------------------------------
+# SSHD_MISSING_MARKER detection
+# ---------------------------------------------------------------------------
+
+
+def test_default_path_includes_sshd_missing_marker() -> None:
+    """Default openssh path (no dropbear) should contain the sshd missing marker."""
+    runtime = SshRuntimeConfig()
+    commands = build_rtunnel_setup_commands(
+        port=31337,
+        ssh_port=22222,
+        ssh_public_key=None,
+        ssh_runtime=runtime,
+    )
+    joined = "\n".join(commands)
+
+    assert SSHD_MISSING_MARKER in joined
+    assert f'echo "{SSHD_MISSING_MARKER}"' in joined
+    assert "[ ! -x /usr/sbin/sshd ]" in joined
+
+
+def test_dropbear_path_omits_sshd_missing_marker() -> None:
+    """Dropbear path should NOT contain the sshd missing marker."""
+    runtime = SshRuntimeConfig(
+        dropbear_deb_dir="/project/dropbear",
+    )
+    commands = build_rtunnel_setup_commands(
+        port=31337,
+        ssh_port=22222,
+        ssh_public_key=None,
+        ssh_runtime=runtime,
+    )
+    joined = "\n".join(commands)
+
+    assert SSHD_MISSING_MARKER not in joined
