@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from types import ModuleType, SimpleNamespace
 
+import pytest
+
 from inspire.platform.web.browser_api import rtunnel as rtunnel_module
 from inspire.platform.web.browser_api import playwright_notebooks as notebooks_module
 from inspire.platform.web.browser_api.playwright_notebooks import build_jupyter_proxy_url
@@ -46,12 +48,22 @@ class _FakeFrame:
 
 
 class _FakePage:
-    def __init__(self, fake_time: list[float]) -> None:
+    def __init__(
+        self,
+        fake_time: list[float],
+        *,
+        direct_redirect_url: str | None = None,
+        redirect_after_waits: int | None = None,
+    ) -> None:
         self._fake_time = fake_time
+        self._direct_redirect_url = direct_redirect_url
+        self._redirect_after_waits = redirect_after_waits
         self.goto_calls: list[str] = []
         self.wait_calls = 0
         self._frames: list[_FakeFrame] = []
         self.url = ""
+        self._current_mode = ""
+        self._direct_waits = 0
 
     @property
     def frames(self) -> list[_FakeFrame]:
@@ -63,18 +75,51 @@ class _FakePage:
         self.goto_calls.append(url)
         self.url = url
         if "/ide?notebook_id=" in url:
+            self._current_mode = "ide"
             self._frames = []
         elif "/api/v1/notebook/lab/" in url:
+            self._current_mode = "direct"
+            self._direct_waits = 0
             self._frames = [_FakeFrame(url)]
 
     def wait_for_timeout(self, timeout_ms: int) -> None:
         self.wait_calls += 1
         self._fake_time[0] += timeout_ms / 1000.0
+        if self._current_mode == "direct":
+            self._direct_waits += 1
+            if (
+                self._direct_redirect_url is not None
+                and self._redirect_after_waits is not None
+                and self._direct_waits >= self._redirect_after_waits
+            ):
+                self.url = self._direct_redirect_url
+                self._frames = []
 
 
-def test_open_notebook_lab_falls_back_early_to_direct_url(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_is_lab_like_url_requires_real_lab_route() -> None:
+    assert (
+        notebooks_module._is_lab_like_url(
+            "https://qz.sii.edu.cn/api/v1/notebook/lab/nb-123/",
+            notebook_lab_pattern="/api/v1/notebook/lab/",
+        )
+        is False
+    )
+    assert (
+        notebooks_module._is_lab_like_url(
+            "https://qz.sii.edu.cn/api/v1/notebook/lab/nb-123/lab?token=abc",
+            notebook_lab_pattern="/api/v1/notebook/lab/",
+        )
+        is True
+    )
+
+
+def test_open_notebook_lab_falls_back_and_waits_for_real_lab_url(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     fake_time = [0.0]
-    page = _FakePage(fake_time)
+    page = _FakePage(
+        fake_time,
+        direct_redirect_url="https://qz.sii.edu.cn/api/v1/notebook/lab/nb-123/lab?token=abc",
+        redirect_after_waits=1,
+    )
     monkeypatch.setattr(notebooks_module, "_get_base_url", lambda: "https://qz.sii.edu.cn")
     monkeypatch.setattr(notebooks_module, "_browser_api_path", lambda path: f"/api/v1{path}")
     monkeypatch.setattr(notebooks_module.time, "time", lambda: fake_time[0])
@@ -82,10 +127,23 @@ def test_open_notebook_lab_falls_back_early_to_direct_url(monkeypatch) -> None: 
     lab = notebooks_module.open_notebook_lab(page, notebook_id="nb-123", timeout=60000)
 
     assert lab is not None
+    assert lab is page
     assert len(page.goto_calls) == 2
     assert page.goto_calls[0] == "https://qz.sii.edu.cn/ide?notebook_id=nb-123"
     assert page.goto_calls[1] == "https://qz.sii.edu.cn/api/v1/notebook/lab/nb-123/"
     assert fake_time[0] < 20.0
+    assert page.url.endswith("/lab?token=abc")
+
+
+def test_open_notebook_lab_raises_when_gateway_page_never_becomes_lab(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    fake_time = [0.0]
+    page = _FakePage(fake_time)
+    monkeypatch.setattr(notebooks_module, "_get_base_url", lambda: "https://qz.sii.edu.cn")
+    monkeypatch.setattr(notebooks_module, "_browser_api_path", lambda path: f"/api/v1{path}")
+    monkeypatch.setattr(notebooks_module.time, "time", lambda: fake_time[0])
+
+    with pytest.raises(RuntimeError, match="Failed to resolve notebook JupyterLab"):
+        notebooks_module.open_notebook_lab(page, notebook_id="nb-123", timeout=60000)
 
 
 def test_send_command_via_terminal_ws_cleans_up_terminal(monkeypatch) -> None:  # type: ignore[no-untyped-def]

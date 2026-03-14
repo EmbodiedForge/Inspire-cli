@@ -27,12 +27,13 @@ def _is_lab_like_url(url: str, *, notebook_lab_pattern: str) -> bool:
     if not value:
         return False
 
-    normalized = value.rstrip("/")
-    if "notebook-inspire" in value and normalized.endswith("/lab"):
+    parsed = urlsplit(value)
+    path = parsed.path.rstrip("/")
+    if "notebook-inspire" in parsed.netloc and path.endswith("/lab"):
         return True
-    if notebook_lab_pattern.lstrip("/") in value:
+    if notebook_lab_pattern.rstrip("/") in parsed.path and path.endswith("/lab"):
         return True
-    if "/jupyter/" in value and normalized.endswith("/lab"):
+    if "/jupyter/" in parsed.path and path.endswith("/lab"):
         return True
     return False
 
@@ -103,7 +104,12 @@ def open_notebook_lab(page, *, notebook_id: str, timeout: int = 60000):  # noqa:
     if lab_handle is not None:
         return lab_handle
 
-    return page
+    frame_urls = [fr.url for fr in getattr(page, "frames", []) if getattr(fr, "url", "")]
+    raise RuntimeError(
+        "Failed to resolve notebook JupyterLab to a usable frame or page.\n"
+        f"Final page URL: {getattr(page, 'url', '') or '(empty)'}\n"
+        f"Frame URLs: {frame_urls or ['(none)']}"
+    )
 
 
 def build_jupyter_proxy_url(lab_url: str, *, port: int) -> str:
