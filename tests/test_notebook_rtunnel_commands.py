@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+from pathlib import Path
+
 import pytest
 
 from inspire.config.ssh_runtime import SshRuntimeConfig
@@ -12,6 +16,77 @@ from inspire.platform.web.browser_api.rtunnel import (
     build_rtunnel_setup_commands,
     resolve_rtunnel_setup_plan,
 )
+
+
+def _render_setup_script(
+    *,
+    runtime: SshRuntimeConfig,
+    contents_api_filename: str | None = None,
+) -> str:
+    commands = build_rtunnel_setup_commands(
+        port=39017,
+        ssh_port=22222,
+        ssh_public_key="ssh-ed25519 AAAA... test@example",
+        ssh_runtime=runtime,
+        contents_api_filename=contents_api_filename,
+    )
+    return "\n".join(commands) + "\n"
+
+
+def _assert_valid_bash_syntax(script: str) -> None:
+    result = subprocess.run(
+        ["bash", "-n"],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def _all_bootstrap_shell_variants() -> list[tuple[str, SshRuntimeConfig, str | None]]:
+    return [
+        ("openssh_legacy_apt", SshRuntimeConfig(), None),
+        (
+            "openssh_legacy_debs",
+            SshRuntimeConfig(
+                sshd_deb_dir="/shared/sshd-debs",
+                rtunnel_bin="/shared/bin/rtunnel",
+            ),
+            None,
+        ),
+        (
+            "dropbear_mirror",
+            SshRuntimeConfig(
+                apt_mirror_url="http://nexus.example/repository/",
+                rtunnel_bin="/shared/bin/rtunnel",
+            ),
+            None,
+        ),
+        (
+            "dropbear_bundle",
+            SshRuntimeConfig(
+                dropbear_deb_dir="/shared/dropbear",
+                rtunnel_bin="/shared/bin/rtunnel",
+            ),
+            None,
+        ),
+        (
+            "dropbear_setup_script",
+            SshRuntimeConfig(
+                dropbear_deb_dir="/shared/dropbear",
+                setup_script="/shared/setup_ssh.sh",
+                rtunnel_bin="/shared/bin/rtunnel",
+            ),
+            None,
+        ),
+        (
+            "openssh_contents_api",
+            SshRuntimeConfig(),
+            ".inspire_rtunnel_bin",
+        ),
+    ]
 
 
 def test_build_commands_uses_explicit_runtime_config(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -32,7 +107,7 @@ def test_build_commands_uses_explicit_runtime_config(monkeypatch: pytest.MonkeyP
     joined = "\n".join(commands)
 
     assert "RTUNNEL_BIN_PATH=/project/rtunnel" in joined
-    assert "RTUNNEL_BIN=/tmp/rtunnel" in joined
+    assert 'RTUNNEL_BIN="/tmp/rtunnel-$PORT"' in joined
     assert "SSHD_DEB_DIR=/project/sshd" in joined
     assert "/env/rtunnel" not in joined
     assert "/env/sshd" not in joined
@@ -113,6 +188,37 @@ def test_dropbear_apt_mirror_fallback() -> None:
     assert "[ -f /tmp/dropbear_ed25519_host_key ]" in joined
 
 
+def flowless_ssh_listener_check() -> str:
+    return (
+        '{ ss -ltnp 2>/dev/null | grep -Eq "127\\\\.0\\\\.0\\\\.1:${SSH_PORT}[[:space:]]|'
+        '\\[::1\\]:${SSH_PORT}[[:space:]]|[[:space:]]:${SSH_PORT}[[:space:]]"'
+        ' || ps -efww | grep -Eq "[d]ropbear.*-p.*${SSH_PORT}([[:space:]]|$)|'
+        "[s]shd: .*-p ${SSH_PORT}([[:space:]]|$)|"
+        '[s]shd -p ${SSH_PORT}([[:space:]]|$)"; }'
+    )
+
+
+def test_dropbear_path_skips_install_work_when_ssh_listener_already_exists() -> None:
+    runtime = SshRuntimeConfig(
+        apt_mirror_url="http://nexus.example/repository/ubuntu/",
+    )
+
+    commands = build_rtunnel_setup_commands(
+        port=31337,
+        ssh_port=22222,
+        ssh_public_key=None,
+        ssh_runtime=runtime,
+    )
+    joined = "\n".join(commands)
+    listener_check = flowless_ssh_listener_check()
+
+    assert (
+        f'if ! {listener_check}; then if [ -n "${{DROPBEAR_DEB_DIR:-}}" ] || [ -n "${{APT_MIRROR_URL:-}}" ]; then '
+        in joined
+    )
+    assert 'if [ -n "$DB_BIN" ] && [ -x "$DB_BIN" ]; then ' in joined
+
+
 def test_apt_mirror_only_without_dropbear_deb_dir() -> None:
     """When only apt_mirror_url is set (no dropbear_deb_dir), the dropbear
     path should still be entered and apt install should run."""
@@ -158,6 +264,59 @@ def test_apt_mirror_repository_root_is_normalized_on_notebook() -> None:
     assert 'echo "deb $MIRROR_URL $CODENAME $MIRROR_COMPONENTS" ' in joined
 
 
+@pytest.mark.parametrize(
+    ("strategy_name", "runtime", "contents_api_filename"),
+    _all_bootstrap_shell_variants(),
+)
+def test_rendered_setup_script_is_valid_bash_syntax(
+    strategy_name: str,
+    runtime: SshRuntimeConfig,
+    contents_api_filename: str | None,
+) -> None:
+    script = _render_setup_script(
+        runtime=runtime,
+        contents_api_filename=contents_api_filename,
+    )
+
+    _assert_valid_bash_syntax(script)
+    assert "INSPIRE_RTUNNEL_SETUP_DONE" in script, strategy_name
+    assert "INSPIRE_RTUNNEL_STATUS=" in script, strategy_name
+
+
+def test_rendered_setup_scripts_pass_shellcheck_when_available(tmp_path: Path) -> None:
+    shellcheck = shutil.which("shellcheck")
+    if shellcheck is None:
+        pytest.skip("shellcheck not installed")
+
+    script_paths: list[str] = []
+    for strategy_name, runtime, contents_api_filename in _all_bootstrap_shell_variants():
+        script = _render_setup_script(
+            runtime=runtime,
+            contents_api_filename=contents_api_filename,
+        )
+        path = tmp_path / f"{strategy_name}.sh"
+        path.write_text(f"#!/usr/bin/env bash\n{script}", encoding="utf-8")
+        script_paths.append(str(path))
+
+    result = subprocess.run(
+        [
+            shellcheck,
+            "-s",
+            "bash",
+            "-S",
+            "error",
+            "-e",
+            "SC1091",
+            *script_paths,
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_dropbear_command_contains_setup_script_and_args() -> None:
     runtime = SshRuntimeConfig(
         rtunnel_bin="/project/rtunnel",
@@ -181,7 +340,7 @@ def test_dropbear_command_contains_setup_script_and_args() -> None:
     assert 'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x "$RTUNNEL_BIN" ]; then ' in joined
     assert 'bash "$SETUP_SCRIPT" "$DROPBEAR_DEB_DIR" "$RTUNNEL_BIN_PATH"' in joined
     assert "dropbear" in joined
-    assert 'ps -efww | grep -Eq "[d]ropbear.*-p.*$SSH_PORT([[:space:]]|$)|' in joined
+    assert 'ps -efww | grep -Eq "[d]ropbear.*-p.*${SSH_PORT}([[:space:]]|$)|' in joined
     assert 'rm -f "$BOOTSTRAP_SENTINEL"' in joined
     # Verify the long single-line command is gone — setup invocation should be its own line
     assert not any(
@@ -210,17 +369,19 @@ def test_non_dropbear_uses_bootstrap_sentinel_and_start_only_commands() -> None:
     assert 'rm -f "$BOOTSTRAP_SENTINEL"' in joined
     assert "pkill -f 'sshd -p'" not in joined
     assert 'pkill -f "rtunnel.*:$PORT"' not in joined
-    assert 'ps -efww | grep -Eq "[d]ropbear.*-p.*$SSH_PORT([[:space:]]|$)|' in joined
-    assert "[s]shd: .*-p $SSH_PORT([[:space:]]|$)|" in joined
-    assert '[s]shd -p $SSH_PORT([[:space:]]|$)" )' in joined
-    assert 'ss -ltnp 2>/dev/null | grep -Eq "127\\\\.0\\\\.0\\\\.1:$SSH_PORT[[:space:]]|' in joined
+    assert 'ps -efww | grep -Eq "[d]ropbear.*-p.*${SSH_PORT}([[:space:]]|$)|' in joined
+    assert "[s]shd: .*-p ${SSH_PORT}([[:space:]]|$)|" in joined
+    assert '[s]shd -p ${SSH_PORT}([[:space:]]|$)"; }' in joined
+    assert (
+        'ss -ltnp 2>/dev/null | grep -Eq "127\\\\.0\\\\.0\\\\.1:${SSH_PORT}[[:space:]]|' in joined
+    )
     assert 'grep -Eq "[r]tunnel .*([[:space:]]|:)$PORT([[:space:]]|$)"' in joined
     # Shell snippet sets RTUNNEL_DOWNLOAD_URL dynamically
     assert "RTUNNEL_DOWNLOAD_URL=" in joined
     # RTUNNEL_URL compat alias
     assert 'RTUNNEL_URL="$RTUNNEL_DOWNLOAD_URL"' in joined
     # Curl block uses $RTUNNEL_DOWNLOAD_URL (not a literal URL)
-    assert '"$RTUNNEL_DOWNLOAD_URL" -o /tmp/rtunnel.tgz' in joined
+    assert '"$RTUNNEL_DOWNLOAD_URL" -o "$RTUNNEL_BIN.tgz"' in joined
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +402,7 @@ def test_contents_api_filename_inserts_copy_command() -> None:
 
     assert ".inspire_rtunnel_bin" in joined
     assert 'cp "$_d"/' in joined
-    assert "chmod +x /tmp/rtunnel" in joined
+    assert 'chmod +x "$RTUNNEL_BIN"' in joined
     assert '[ ! -x "$RTUNNEL_BIN" ]' in joined
     # Checks CWD first, then $HOME as fallback
     assert 'for _d in . "$HOME"' in joined

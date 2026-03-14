@@ -57,7 +57,7 @@ from .terminal import (
     _wait_for_ws_capture,
 )
 from .upload import _resolve_rtunnel_binary
-from .verify import redact_proxy_url, wait_for_rtunnel_reachable
+from .verify import probe_rtunnel_proxy_once, redact_proxy_url
 
 import logging
 
@@ -120,26 +120,6 @@ class _StepTimer:
         _sys.stderr.flush()
 
 
-def _build_vscode_proxy_url(page, *, port: int) -> str | None:  # noqa: ANN001
-    from urllib.parse import parse_qs, urlparse
-
-    vscode_url = None
-    for frame in page.frames:
-        if "/vscode/" in (frame.url or ""):
-            vscode_url = frame.url
-            break
-    if not vscode_url:
-        return None
-
-    parsed = urlparse(vscode_url)
-    token = parse_qs(parsed.query).get("token", [None])[0]
-    base = vscode_url.split("?", 1)[0].rstrip("/")
-    proxy_url = f"{base}/proxy/{port}/"
-    if token:
-        proxy_url = f"{proxy_url}?token={token}"
-    return proxy_url
-
-
 def _derive_vscode_proxy_url(proxy_url: str) -> str | None:
     """Derive a VSCode proxy URL from a Jupyter proxy URL.
 
@@ -159,22 +139,6 @@ def _derive_vscode_proxy_url(proxy_url: str) -> str | None:
     return proxy_url.replace("/jupyter/", "/vscode/", 1)
 
 
-def _extract_probe_error_summary(error: Exception) -> str:
-    message = str(error).strip()
-    if not message:
-        return error.__class__.__name__
-
-    lines = [line.strip() for line in message.splitlines() if line.strip()]
-    if not lines:
-        return error.__class__.__name__
-
-    headline = lines[0]
-    last_response = next((line for line in lines if line.startswith("Last response:")), "")
-    if last_response:
-        return f"{headline}; {last_response}"
-    return headline
-
-
 def _ensure_proxy_readiness_with_fallback(
     *,
     proxy_url: str,
@@ -183,120 +147,32 @@ def _ensure_proxy_readiness_with_fallback(
     context,  # noqa: ANN001
     page,  # noqa: ANN001
 ) -> tuple[str, list[str]]:
-    import sys as _sys
-
     diagnostics: list[str] = []
-    primary_verify_timeout_s = max(12, min(timeout, 35))
-
     derived_vscode_url = _derive_vscode_proxy_url(proxy_url)
+    preferred_proxy_url = proxy_url
+    probe_label = "primary"
+
     if derived_vscode_url and derived_vscode_url != proxy_url:
-        trace_event("proxy_probe_candidate", mode="derived_vscode", proxy_url=derived_vscode_url)
-        _sys.stderr.write(
-            f"  Probing VSCode proxy URL first: {redact_proxy_url(derived_vscode_url)}\n"
-        )
-        _sys.stderr.flush()
-        try:
-            wait_for_rtunnel_reachable(
-                proxy_url=derived_vscode_url,
-                timeout_s=min(6, timeout),
-                context=context,
-                page=page,
-            )
-            update_trace_summary(proxy_probe_result="derived_vscode_ready")
-            return derived_vscode_url, diagnostics
-        except (
-            PlaywrightError,
-            ConnectionError,
-            OSError,
-            RuntimeError,
-            TimeoutError,
-            ValueError,
-        ) as derived_error:
-            diagnostics.append(f"derived={_extract_probe_error_summary(derived_error)}")
-            trace_event(
-                "proxy_probe_failed",
-                mode="derived_vscode",
-                error=_extract_probe_error_summary(derived_error),
-            )
+        preferred_proxy_url = derived_vscode_url
+        probe_label = "derived_vscode"
 
-    try:
-        trace_event("proxy_probe_candidate", mode="primary", proxy_url=proxy_url)
-        wait_for_rtunnel_reachable(
-            proxy_url=proxy_url,
-            timeout_s=primary_verify_timeout_s,
-            context=context,
-            page=page,
-        )
-        update_trace_summary(proxy_probe_result="primary_ready")
+    trace_event("proxy_probe_candidate", mode=probe_label, proxy_url=preferred_proxy_url)
+    ready, summary = probe_rtunnel_proxy_once(
+        proxy_url=preferred_proxy_url,
+        context=context,
+        request_timeout_ms=min(max(timeout, 1) * 1000, 5000),
+    )
+
+    if ready:
+        update_trace_summary(proxy_probe_result=f"{probe_label}_ready")
+        return preferred_proxy_url, diagnostics
+
+    diagnostics.append(f"{probe_label}={summary}")
+    trace_event("proxy_probe_failed", mode=probe_label, error=summary)
+    update_trace_summary(proxy_probe_result=f"{probe_label}_failed_continue_to_ssh")
+    if preferred_proxy_url != proxy_url:
         return proxy_url, diagnostics
-    except (
-        PlaywrightError,
-        ConnectionError,
-        OSError,
-        RuntimeError,
-        TimeoutError,
-        ValueError,
-    ) as primary_error:
-        diagnostics.append(f"primary={_extract_probe_error_summary(primary_error)}")
-        trace_event(
-            "proxy_probe_failed",
-            mode="primary",
-            error=_extract_probe_error_summary(primary_error),
-        )
-
-    fallback_proxy_url = _build_vscode_proxy_url(page, port=port)
-    if not fallback_proxy_url:
-        try:
-            vscode_tab = page.locator('img[alt="vscode"]').first
-            if vscode_tab.count() > 0:
-                vscode_tab.click(timeout=1500)
-                page.wait_for_timeout(200)
-        except (PlaywrightError, TimeoutError, RuntimeError, AttributeError, ValueError):
-            pass
-        fallback_proxy_url = _build_vscode_proxy_url(page, port=port)
-
-    best_for_ssh = proxy_url
-    if fallback_proxy_url and fallback_proxy_url != proxy_url:
-        best_for_ssh = fallback_proxy_url
-
-    if not fallback_proxy_url or fallback_proxy_url == proxy_url:
-        _sys.stderr.write("  Proxy did not pass HTTP readiness; continuing with SSH preflight.\n")
-        _sys.stderr.flush()
-        update_trace_summary(proxy_probe_result="http_probe_failed_continue_to_ssh")
-        return best_for_ssh, diagnostics
-
-    trace_event("proxy_probe_candidate", mode="page_built_vscode", proxy_url=fallback_proxy_url)
-    _sys.stderr.write(f"  Trying alternate proxy URL: {redact_proxy_url(fallback_proxy_url)}\n")
-    _sys.stderr.flush()
-    try:
-        wait_for_rtunnel_reachable(
-            proxy_url=fallback_proxy_url,
-            timeout_s=max(12, min(timeout, 45)),
-            context=context,
-            page=page,
-        )
-        update_trace_summary(proxy_probe_result="fallback_vscode_ready")
-        return fallback_proxy_url, diagnostics
-    except (
-        PlaywrightError,
-        ConnectionError,
-        OSError,
-        RuntimeError,
-        TimeoutError,
-        ValueError,
-    ) as fallback_error:
-        diagnostics.append(f"fallback={_extract_probe_error_summary(fallback_error)}")
-        trace_event(
-            "proxy_probe_failed",
-            mode="page_built_vscode",
-            error=_extract_probe_error_summary(fallback_error),
-        )
-        _sys.stderr.write(
-            "  Fallback proxy did not pass HTTP readiness; " "continuing with SSH preflight.\n"
-        )
-        _sys.stderr.flush()
-        update_trace_summary(proxy_probe_result="fallback_failed_continue_to_ssh")
-        return best_for_ssh, diagnostics
+    return preferred_proxy_url, diagnostics
 
 
 def _send_rtunnel_setup_script(
@@ -310,6 +186,7 @@ def _send_rtunnel_setup_script(
     import sys as _sys
 
     detected_errors: list[str] = []
+    ws_diagnostics: dict[str, Any] = {}
     setup_confirmed = False
     trace_event("terminal_setup_attempt", transport="terminal_ws")
     update_trace_summary(terminal_transport="terminal_ws")
@@ -319,6 +196,7 @@ def _send_rtunnel_setup_script(
             lab_frame=lab_frame,
             batch_cmd=batch_cmd,
             detected_errors=detected_errors,
+            diagnostics_out=ws_diagnostics,
         )
     except (PlaywrightError, RuntimeError, TimeoutError, ValueError):
         setup_confirmed = False
@@ -339,6 +217,27 @@ def _send_rtunnel_setup_script(
         update_trace_summary(setup_confirmed="true")
         trace_event("terminal_setup_completed", transport="terminal_ws")
         return True, []
+
+    ws_command_dispatched = bool(
+        ws_diagnostics.get("wsConnected")
+        and ws_diagnostics.get("commandSent")
+        and ws_diagnostics.get("stdoutReceived")
+    )
+    if ws_command_dispatched:
+        trace_event(
+            "terminal_setup_unconfirmed_continue",
+            transport="terminal_ws",
+            prompt_detected=ws_diagnostics.get("promptDetected"),
+            stdout_len=ws_diagnostics.get("stdoutLen"),
+            elapsed=ws_diagnostics.get("elapsed"),
+        )
+        _sys.stderr.write(
+            "  WebSocket terminal command was sent but completion was not confirmed; "
+            "continuing without browser replay.\n"
+        )
+        _sys.stderr.flush()
+        update_trace_summary(setup_confirmed="false")
+        return False, []
 
     _sys.stderr.write("  WebSocket terminal setup unavailable, using browser automation.\n")
     _sys.stderr.flush()
@@ -460,12 +359,6 @@ def _verify_and_cache_rtunnel_proxy(
     account: str | None,
     timer: "_StepTimer",
 ) -> str:
-    import sys as _sys
-
-    _sys.stderr.write(
-        f"  Verifying rtunnel is reachable at: {redact_proxy_url(jupyter_proxy_url)}\n"
-    )
-    _sys.stderr.flush()
     proxy_url, probe_diagnostics = _ensure_proxy_readiness_with_fallback(
         proxy_url=jupyter_proxy_url,
         port=port,
@@ -474,8 +367,6 @@ def _verify_and_cache_rtunnel_proxy(
         page=page,
     )
     if probe_diagnostics:
-        _sys.stderr.write("  Proxy readiness summary: " + " | ".join(probe_diagnostics) + "\n")
-        _sys.stderr.flush()
         update_trace_summary(probe_diagnostics=" | ".join(probe_diagnostics))
     timer.mark("verify_proxy")
     update_trace_summary(proxy_url=redact_proxy_url(proxy_url))

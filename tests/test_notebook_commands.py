@@ -1049,7 +1049,6 @@ def test_run_notebook_ssh_reports_when_tunnel_not_ready(
     assert exc.value.code == EXIT_API_ERROR
     assert captured["type"] == "APIError"
     assert "SSH preflight failed" in captured["message"]
-    assert "Proxy readiness report:" in captured["hint"]
     assert "Observed:" in captured["hint"]
     assert "distro=debian bookworm" in captured["hint"]
 

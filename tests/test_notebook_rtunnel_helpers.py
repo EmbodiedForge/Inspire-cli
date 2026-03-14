@@ -898,30 +898,29 @@ def test_build_batch_setup_script_roundtrip() -> None:
     ]
     result = _build_batch_setup_script(commands)
 
-    # Must be a single line
-    assert "\n" not in result
+    assert result.startswith("cat <<'__INSPIRE_RTUNNEL_B64__' | base64 -d | bash\n")
+    assert result.endswith("\n__INSPIRE_RTUNNEL_B64__")
 
-    # Must start with echo and end with bash
-    assert result.startswith("echo '")
-    assert result.endswith("' | base64 -d | bash")
+    lines = result.splitlines()
+    assert lines[0] == "cat <<'__INSPIRE_RTUNNEL_B64__' | base64 -d | bash"
+    assert lines[-1] == "__INSPIRE_RTUNNEL_B64__"
 
-    # Extract and decode the base64 payload
-    b64_payload = result[len("echo '") : result.index("' | base64 -d | bash")]
+    b64_payload = "".join(lines[1:-1])
     decoded = base64.b64decode(b64_payload).decode()
 
-    # Decoded script should contain all original commands
     for cmd in commands:
         assert cmd in decoded
 
-    # Lines should be newline-separated
-    lines = decoded.strip().split("\n")
-    assert lines == commands
+    decoded_lines = decoded.strip().split("\n")
+    assert decoded_lines == commands
 
 
 def test_build_batch_setup_script_empty() -> None:
     result = _build_batch_setup_script([])
-    assert result.startswith("echo '")
-    b64_payload = result[len("echo '") : result.index("' | base64 -d | bash")]
+    lines = result.splitlines()
+    assert lines[0] == "cat <<'__INSPIRE_RTUNNEL_B64__' | base64 -d | bash"
+    assert lines[-1] == "__INSPIRE_RTUNNEL_B64__"
+    b64_payload = "".join(lines[1:-1])
     decoded = base64.b64decode(b64_payload).decode()
     assert decoded == "\n"
 
@@ -1009,8 +1008,10 @@ def test_build_rtunnel_setup_commands_sshd_deb_dir_stays_on_openssh_path() -> No
     assert "dropbear-bin" not in script
     assert SSHD_MISSING_MARKER in script
     assert SSH_SERVER_MISSING_MARKER in script
-    assert 'ss -ltnp 2>/dev/null | grep -Eq "127\\\\.0\\\\.0\\\\.1:$SSH_PORT[[:space:]]|' in script
-    assert "[s]shd: .*-p $SSH_PORT([[:space:]]|$)|" in script
+    assert (
+        'ss -ltnp 2>/dev/null | grep -Eq "127\\\\.0\\\\.0\\\\.1:${SSH_PORT}[[:space:]]|' in script
+    )
+    assert "[s]shd: .*-p ${SSH_PORT}([[:space:]]|$)|" in script
 
 
 def test_build_rtunnel_setup_commands_uses_configured_rtunnel_bin_in_place() -> None:

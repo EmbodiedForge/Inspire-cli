@@ -6,9 +6,6 @@ import os
 import subprocess
 import time
 from typing import Optional
-from urllib import error as urllib_error
-from urllib import parse as urllib_parse
-from urllib import request as urllib_request
 
 import click
 
@@ -28,7 +25,6 @@ from inspire.config import ConfigError
 from inspire.config.ssh_runtime import resolve_ssh_runtime_config
 from inspire.platform.web import browser_api as browser_api_module
 from inspire.platform.web.browser_api import NotebookFailedError
-from inspire.platform.web.browser_api.rtunnel import redact_proxy_url
 from inspire.platform.web.browser_api.rtunnel.diagnostics import (
     collect_notebook_rtunnel_diagnostics,
 )
@@ -39,34 +35,6 @@ from .notebook_lookup import (
     _resolve_notebook_id,
     _validate_notebook_account_access,
 )
-
-
-def _format_proxy_http_body(raw: bytes) -> str:
-    if not raw:
-        return ""
-    text = raw.decode("utf-8", errors="replace")
-    compact = " ".join(text.split())
-    return compact[:180]
-
-
-def _describe_proxy_http_status(proxy_url: str, timeout_s: float = 4.0) -> str:
-    parsed = urllib_parse.urlsplit(proxy_url)
-    if parsed.scheme not in {"http", "https"}:
-        return "n/a (non-http proxy URL)"
-
-    request = urllib_request.Request(proxy_url, method="GET")
-    try:
-        with urllib_request.urlopen(request, timeout=timeout_s) as response:
-            body = _format_proxy_http_body(response.read(220))
-            return f"{response.status} {body}".strip()
-    except urllib_error.HTTPError as error:
-        try:
-            body = _format_proxy_http_body(error.read(220))
-        except Exception:
-            body = ""
-        return f"{error.code} {body}".strip()
-    except Exception as error:
-        return str(error)
 
 
 def load_ssh_public_key(pubkey_path: Optional[str] = None) -> str:
@@ -469,7 +437,6 @@ def run_notebook_ssh(
         retries=6,
         retry_pause=1.5,
     ):
-        proxy_status = _describe_proxy_http_status(proxy_url)
         doctor = collect_notebook_rtunnel_diagnostics(
             notebook_id=notebook_id,
             port=port,
@@ -488,8 +455,7 @@ def run_notebook_ssh(
             EXIT_API_ERROR,
             hint=(
                 "Retry 'inspire notebook ssh <notebook-id>' in a few seconds, "
-                f"or run 'inspire tunnel test -b {profile_name}' to inspect connectivity. "
-                f"Proxy readiness report: {proxy_status} ({redact_proxy_url(proxy_url)})."
+                f"or run 'inspire tunnel test -b {profile_name}' to inspect connectivity."
                 f"{extra_hint}"
             ),
         )

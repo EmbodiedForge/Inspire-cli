@@ -155,13 +155,13 @@ def _build_rtunnel_bin_lines(
 
     lines = [
         f"RTUNNEL_BIN_PATH={shlex.quote(rtunnel_bin or '')}",
-        "RTUNNEL_BIN=/tmp/rtunnel",
+        'RTUNNEL_BIN="/tmp/rtunnel-$PORT"',
     ]
     if rtunnel_bin:
         lines.append(
             'if [ -x "$RTUNNEL_BIN_PATH" ]; then RTUNNEL_BIN="$RTUNNEL_BIN_PATH"; '
-            'elif [ -f "$RTUNNEL_BIN_PATH" ]; then cp "$RTUNNEL_BIN_PATH" /tmp/rtunnel '
-            "&& chmod +x /tmp/rtunnel && RTUNNEL_BIN=/tmp/rtunnel; fi"
+            'elif [ -f "$RTUNNEL_BIN_PATH" ]; then cp "$RTUNNEL_BIN_PATH" "$RTUNNEL_BIN" '
+            '&& chmod +x "$RTUNNEL_BIN"; fi'
         )
 
     if contents_api_filename:
@@ -169,8 +169,8 @@ def _build_rtunnel_bin_lines(
         lines.append(
             f'for _d in . "$HOME"; do '
             f'if [ ! -x "$RTUNNEL_BIN" ] && [ -f "$_d"/{safe_name} ]; then '
-            f'cp "$_d"/{safe_name} /tmp/rtunnel && chmod +x /tmp/rtunnel '
-            f"&& RTUNNEL_BIN=/tmp/rtunnel; break; fi; done"
+            f'cp "$_d"/{safe_name} "$RTUNNEL_BIN" && chmod +x "$RTUNNEL_BIN" '
+            "&& break; fi; done"
         )
     return lines
 
@@ -179,15 +179,14 @@ def _build_curl_rtunnel_block(*, skip_curl: bool) -> str:
     if skip_curl:
         return (
             'if [ ! -x "$RTUNNEL_BIN" ]; then '
-            'echo "ERROR: rtunnel binary not found at /tmp/rtunnel '
+            'echo "ERROR: rtunnel binary not found at $RTUNNEL_BIN '
             '(no curl fallback for offline notebooks)" >&2; fi'
         )
     return (
         'if [ ! -x "$RTUNNEL_BIN" ] && [ "$_INET" = 1 ]; then curl -fsSL '
         "--connect-timeout 10 --max-time 30 "
-        '"$RTUNNEL_DOWNLOAD_URL" -o /tmp/rtunnel.tgz && '
-        "tar -xzf /tmp/rtunnel.tgz -C /tmp && chmod +x /tmp/rtunnel "
-        "&& RTUNNEL_BIN=/tmp/rtunnel "
+        '"$RTUNNEL_DOWNLOAD_URL" -o "$RTUNNEL_BIN.tgz" && '
+        'tar -xzf "$RTUNNEL_BIN.tgz" -C /tmp && chmod +x "$RTUNNEL_BIN" '
         "2>/dev/null; fi"
     )
 
@@ -229,7 +228,7 @@ def _build_ensure_rtunnel_cmd(*, curl_rtunnel_block: str) -> str:
 def _build_start_sshd_cmd() -> str:
     ssh_listener_check = _build_ssh_listener_check()
     return (
-        f"if [ -x /usr/sbin/sshd ] && ! ({ssh_listener_check}); then "
+        f"if [ -x /usr/sbin/sshd ] && ! {ssh_listener_check}; then "
         "mkdir -p /run/sshd && chmod 0755 /run/sshd; "
         "ssh-keygen -A >/dev/null 2>&1 || true; "
         '/usr/sbin/sshd -p "$SSH_PORT" -o ListenAddress=127.0.0.1 -o PermitRootLogin=yes '
@@ -241,6 +240,7 @@ def _build_start_sshd_cmd() -> str:
 def _build_start_dropbear_cmd() -> str:
     ssh_listener_check = _build_ssh_listener_check()
     return (
+        f"if ! {ssh_listener_check}; then "
         'if [ -n "${DROPBEAR_DEB_DIR:-}" ] || [ -n "${APT_MIRROR_URL:-}" ]; then '
         'DB_BIN=""; '
         'if [ -n "${DROPBEAR_DEB_DIR:-}" ] && [ -x "$DROPBEAR_DEB_DIR/usr/sbin/dropbear" ]; then '
@@ -284,7 +284,7 @@ def _build_start_dropbear_cmd() -> str:
         "/etc/apt/sources.list.d/*.sources.bak; do "
         '[ -f "$_f" ] && mv "$_f" "${_f%.bak}" 2>/dev/null; done; '
         "[ -x /usr/sbin/dropbear ] && DB_BIN=/usr/sbin/dropbear; fi; "
-        f'if [ -n "$DB_BIN" ] && [ -x "$DB_BIN" ] && ! ({ssh_listener_check}); then '
+        'if [ -n "$DB_BIN" ] && [ -x "$DB_BIN" ]; then '
         'DB_KEY=""; '
         '[ -n "${DROPBEAR_DEB_DIR:-}" ] && [ -x "$DROPBEAR_DEB_DIR/usr/bin/dropbearkey" ] '
         '&& DB_KEY="$DROPBEAR_DEB_DIR/usr/bin/dropbearkey"; '
@@ -294,7 +294,7 @@ def _build_start_dropbear_cmd() -> str:
         "if [ -f /tmp/dropbear_ed25519_host_key ]; then "
         '"$DB_BIN" -E -s -g -p "127.0.0.1:$SSH_PORT" '
         "-r /tmp/dropbear_ed25519_host_key -P /tmp/dropbear.pid "
-        "2>>/tmp/dropbear.log & fi; fi; fi"
+        "2>>/tmp/dropbear.log & fi; fi; fi; fi"
     )
 
 
@@ -309,11 +309,11 @@ def _build_start_rtunnel_cmd() -> str:
 
 def _build_ssh_listener_check() -> str:
     return (
-        '(ss -ltnp 2>/dev/null | grep -Eq "127\\\\.0\\\\.0\\\\.1:$SSH_PORT[[:space:]]|'
-        '\\[::1\\]:$SSH_PORT[[:space:]]|[[:space:]]:$SSH_PORT[[:space:]]") '
-        '|| ps -efww | grep -Eq "[d]ropbear.*-p.*$SSH_PORT([[:space:]]|$)|'
-        "[s]shd: .*-p $SSH_PORT([[:space:]]|$)|"
-        '[s]shd -p $SSH_PORT([[:space:]]|$)" )'
+        '{ ss -ltnp 2>/dev/null | grep -Eq "127\\\\.0\\\\.0\\\\.1:${SSH_PORT}[[:space:]]|'
+        '\\[::1\\]:${SSH_PORT}[[:space:]]|[[:space:]]:${SSH_PORT}[[:space:]]"'
+        ' || ps -efww | grep -Eq "[d]ropbear.*-p.*${SSH_PORT}([[:space:]]|$)|'
+        "[s]shd: .*-p ${SSH_PORT}([[:space:]]|$)|"
+        '[s]shd -p ${SSH_PORT}([[:space:]]|$)"; }'
     )
 
 
@@ -323,7 +323,7 @@ def _build_ssh_server_status_cmd(*, include_sshd_marker: bool) -> str:
     if include_sshd_marker:
         parts.append(f'if [ ! -x /usr/sbin/sshd ]; then echo "{SSHD_MISSING_MARKER}"; fi')
     parts.append(f'if {status_check}; then true; else echo "{SSH_SERVER_MISSING_MARKER}"; fi')
-    return " ".join(parts)
+    return "; ".join(parts)
 
 
 def build_rtunnel_setup_commands(

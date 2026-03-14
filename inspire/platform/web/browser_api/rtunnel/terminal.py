@@ -116,6 +116,7 @@ def _send_terminal_command_via_websocket(
     completion_marker: str | None = None,
     error_markers: list[str] | None = None,
     detected_errors: list[str] | None = None,
+    diagnostics_out: dict[str, Any] | None = None,
 ) -> bool:
     """Send a command to a Jupyter terminal via WebSocket.
 
@@ -140,7 +141,7 @@ def _send_terminal_command_via_websocket(
     try:
         result = page_or_frame.evaluate(
             """
-                async ({ wsUrl, stdinData, timeoutMs, promptTimeoutMs, marker, errorMarkers }) => {
+                async ({ wsUrl, stdinData, timeoutMs, promptTimeoutMs, marker, errorMarkers, chunkSize, chunkDelayMs }) => {
                   return await new Promise((resolve) => {
                     let settled = false;
                     let sent = false;
@@ -181,8 +182,8 @@ def _send_terminal_command_via_websocket(
                       }
                     };
 
-                    const CHUNK = 2048;
-                    const DELAY = 50;
+                    const CHUNK = chunkSize;
+                    const DELAY = chunkDelayMs;
                     const doSend = () => {
                       if (sent || settled) return;
                       sent = true;
@@ -277,11 +278,18 @@ def _send_terminal_command_via_websocket(
                 "promptTimeoutMs": min(int(timeout_ms) - 500, 3000),
                 "marker": completion_marker or "",
                 "errorMarkers": error_markers or [],
+                "chunkSize": int(_TERMINAL_STDIN_CHUNK),
+                "chunkDelayMs": int(_TERMINAL_STDIN_DELAY_MS),
             },
         )
         if isinstance(result, dict):
             if detected_errors is not None:
                 detected_errors.extend(result.get("errors", []))
+            if diagnostics_out is not None:
+                diagnostics_out.clear()
+                diagnostics_out.update(result.get("diagnostics") or {})
+                diagnostics_out["ok"] = bool(result.get("ok", False))
+                diagnostics_out["errors"] = list(result.get("errors", []))
             ok = bool(result.get("ok", False))
             trace_event(
                 "terminal_ws_command_result",
@@ -320,7 +328,7 @@ def _run_terminal_command_capture_via_websocket(
         ws_url = _build_terminal_websocket_url(lab_frame.url, term_name)
         result = lab_frame.evaluate(
             """
-                async ({ wsUrl, stdinData, timeoutMs, promptTimeoutMs, marker, outputCap }) => {
+                async ({ wsUrl, stdinData, timeoutMs, promptTimeoutMs, marker, outputCap, chunkSize, chunkDelayMs }) => {
                   return await new Promise((resolve) => {
                     let settled = false;
                     let sent = false;
@@ -340,8 +348,8 @@ def _run_terminal_command_capture_via_websocket(
                       });
                     };
                     const timer = setTimeout(() => finish(false), timeoutMs);
-                    const CHUNK = 2048;
-                    const DELAY = 50;
+                    const CHUNK = chunkSize;
+                    const DELAY = chunkDelayMs;
                     const doSend = () => {
                       if (sent || settled) return;
                       sent = true;
@@ -420,6 +428,8 @@ def _run_terminal_command_capture_via_websocket(
                 "promptTimeoutMs": min(int(timeout_ms) - 500, 3000),
                 "marker": completion_marker,
                 "outputCap": 20000,
+                "chunkSize": int(_TERMINAL_STDIN_CHUNK),
+                "chunkDelayMs": int(_TERMINAL_STDIN_DELAY_MS),
             },
         )
         trace_event("terminal_ws_capture_command_result", ok=bool(result.get("ok")))
@@ -437,6 +447,7 @@ def _send_setup_command_via_terminal_ws(
     lab_frame: Any,
     batch_cmd: str,
     detected_errors: list[str] | None = None,
+    diagnostics_out: dict[str, Any] | None = None,
 ) -> bool:
     term_name = _create_terminal_via_api(context, lab_frame.url)
     if not term_name:
@@ -452,24 +463,21 @@ def _send_setup_command_via_terminal_ws(
             completion_marker=SETUP_DONE_MARKER,
             error_markers=[SSHD_MISSING_MARKER, SSH_SERVER_MISSING_MARKER],
             detected_errors=detected_errors,
+            diagnostics_out=diagnostics_out,
         )
     finally:
         _delete_terminal_via_api(context, lab_url=lab_frame.url, term_name=term_name)
 
 
 def _build_batch_setup_script(cmd_lines: list[str]) -> str:
-    """Encode setup commands as a single base64-wrapped bash line.
-
-    Instead of typing each command separately (fragile if the terminal
-    loses focus), we ship the entire script as::
-
-        echo '<base64>' | base64 -d | bash
-    """
+    """Encode setup commands as a heredoc-wrapped base64 bash payload."""
     import base64
 
     script = "\n".join(cmd_lines) + "\n"
     encoded = base64.b64encode(script.encode()).decode()
-    return f"echo '{encoded}' | base64 -d | bash"
+    wrapped = "\n".join(encoded[idx : idx + 160] for idx in range(0, len(encoded), 160))
+    marker = "__INSPIRE_RTUNNEL_B64__"
+    return f"cat <<'{marker}' | base64 -d | bash\n{wrapped}\n{marker}"
 
 
 _TERMINAL_TAB_SELECTOR = "li.lm-TabBar-tab:has-text('Terminal'), li.lm-TabBar-tab:has-text('终端')"
@@ -495,6 +503,8 @@ _FOCUS_INPUT_CLICK_TIMEOUT_MS = 500
 _FOCUS_TAB_CLICK_TIMEOUT_MS = 450
 _FOCUS_TEXTAREA_ATTACH_TIMEOUT_MS = 3000
 _FOCUS_RETRY_PASSES = 4
+_TERMINAL_STDIN_CHUNK = 512
+_TERMINAL_STDIN_DELAY_MS = 20
 
 
 def _wait_for_terminal_surface(

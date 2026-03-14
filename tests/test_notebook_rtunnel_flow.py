@@ -41,15 +41,14 @@ def test_ensure_proxy_readiness_prefers_vscode_when_available(
     derived_url = "https://nat.example/vscode/nb/proxy/31337/"
     calls: list[str] = []
 
-    def fake_wait_for_rtunnel_reachable(*, proxy_url, timeout_s, context, page) -> None:  # type: ignore[no-untyped-def]
-        assert timeout_s > 0
+    def fake_probe_rtunnel_proxy_once(*, proxy_url, context, request_timeout_ms):  # type: ignore[no-untyped-def]
+        assert request_timeout_ms > 0
         assert context is not None
-        assert page is not None
         calls.append(proxy_url)
-        if proxy_url == primary_url:
-            raise AssertionError("primary probe should not be attempted when vscode passes")
+        assert proxy_url == derived_url
+        return True, "200 ok"
 
-    monkeypatch.setattr(flow_module, "wait_for_rtunnel_reachable", fake_wait_for_rtunnel_reachable)
+    monkeypatch.setattr(flow_module, "probe_rtunnel_proxy_once", fake_probe_rtunnel_proxy_once)
 
     resolved, diagnostics = flow_module._ensure_proxy_readiness_with_fallback(
         proxy_url=primary_url,
@@ -71,15 +70,14 @@ def test_ensure_proxy_readiness_falls_back_to_primary_when_vscode_fails(
     derived_url = "https://nat.example/vscode/nb/proxy/31337/"
     calls: list[str] = []
 
-    def fake_wait_for_rtunnel_reachable(*, proxy_url, timeout_s, context, page) -> None:  # type: ignore[no-untyped-def]
-        assert timeout_s > 0
+    def fake_probe_rtunnel_proxy_once(*, proxy_url, context, request_timeout_ms):  # type: ignore[no-untyped-def]
+        assert request_timeout_ms > 0
         assert context is not None
-        assert page is not None
         calls.append(proxy_url)
-        if proxy_url == derived_url:
-            raise ValueError("vscode failed\nLast response: 404 page not found")
+        assert proxy_url == derived_url
+        return False, "404 page not found"
 
-    monkeypatch.setattr(flow_module, "wait_for_rtunnel_reachable", fake_wait_for_rtunnel_reachable)
+    monkeypatch.setattr(flow_module, "probe_rtunnel_proxy_once", fake_probe_rtunnel_proxy_once)
 
     resolved, diagnostics = flow_module._ensure_proxy_readiness_with_fallback(
         proxy_url=primary_url,
@@ -90,29 +88,27 @@ def test_ensure_proxy_readiness_falls_back_to_primary_when_vscode_fails(
     )
 
     assert resolved == primary_url
-    assert calls == [derived_url, primary_url]
+    assert calls == [derived_url]
     assert len(diagnostics) == 1
-    assert diagnostics[0].startswith("derived=")
-    assert "Last response: 404 page not found" in diagnostics[0]
+    assert diagnostics[0].startswith("derived_vscode=")
+    assert "404 page not found" in diagnostics[0]
 
 
-def test_ensure_proxy_readiness_does_not_raise_when_both_probes_fail(
+def test_ensure_proxy_readiness_probes_primary_when_no_vscode_candidate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     primary_url = "https://nat.example/jupyter/nb/proxy/31337/"
-    derived_url = "https://nat.example/vscode/nb/proxy/31337/"
-    fallback_url = "https://nat.example/vscode/nb/proxy/31337/?token=abc"
     calls: list[str] = []
 
-    def fake_wait_for_rtunnel_reachable(*, proxy_url, timeout_s, context, page) -> None:  # type: ignore[no-untyped-def]
-        assert timeout_s > 0
+    def fake_probe_rtunnel_proxy_once(*, proxy_url, context, request_timeout_ms):  # type: ignore[no-untyped-def]
+        assert request_timeout_ms > 0
         assert context is not None
-        assert page is not None
         calls.append(proxy_url)
-        raise ValueError(f"probe failed for {proxy_url}\nLast response: 404 page not found")
+        assert proxy_url == primary_url
+        return True, "200 ok"
 
-    monkeypatch.setattr(flow_module, "wait_for_rtunnel_reachable", fake_wait_for_rtunnel_reachable)
-    monkeypatch.setattr(flow_module, "_build_vscode_proxy_url", lambda _page, port: fallback_url)
+    monkeypatch.setattr(flow_module, "probe_rtunnel_proxy_once", fake_probe_rtunnel_proxy_once)
+    monkeypatch.setattr(flow_module, "_derive_vscode_proxy_url", lambda _url: None)
 
     resolved, diagnostics = flow_module._ensure_proxy_readiness_with_fallback(
         proxy_url=primary_url,
@@ -122,47 +118,38 @@ def test_ensure_proxy_readiness_does_not_raise_when_both_probes_fail(
         page=DummyPage(),
     )
 
-    assert resolved == fallback_url
-    assert calls == [derived_url, primary_url, fallback_url]
-    assert len(diagnostics) == 3
-    assert diagnostics[0].startswith("derived=")
-    assert diagnostics[1].startswith("primary=")
-    assert diagnostics[2].startswith("fallback=")
-
-
-def test_ensure_proxy_readiness_without_fallback_url(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    primary_url = "https://nat.example/jupyter/nb/proxy/31337/"
-    derived_url = "https://nat.example/vscode/nb/proxy/31337/"
-    calls: list[str] = []
-
-    def fake_wait_for_rtunnel_reachable(*, proxy_url, timeout_s, context, page) -> None:  # type: ignore[no-untyped-def]
-        assert timeout_s > 0
-        assert context is not None
-        assert page is not None
-        calls.append(proxy_url)
-        raise ValueError(f"probe failed for {proxy_url}\nLast response: 404 page not found")
-
-    monkeypatch.setattr(flow_module, "wait_for_rtunnel_reachable", fake_wait_for_rtunnel_reachable)
-    monkeypatch.setattr(flow_module, "_build_vscode_proxy_url", lambda _page, port: None)
-
-    resolved, diagnostics = flow_module._ensure_proxy_readiness_with_fallback(
-        proxy_url=primary_url,
-        port=31337,
-        timeout=60,
-        context=object(),
-        page=DummyPage(),
-    )
-
-    # When all probes fail and no page-built fallback is found, the primary
-    # (jupyter) URL should be returned as the best guess -- not the
-    # speculative derived vscode URL.
     assert resolved == primary_url
-    assert calls == [derived_url, primary_url]
-    assert len(diagnostics) == 2
-    assert diagnostics[0].startswith("derived=")
-    assert diagnostics[1].startswith("primary=")
+    assert calls == [primary_url]
+    assert diagnostics == []
+
+
+def test_ensure_proxy_readiness_returns_primary_after_failed_primary_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    primary_url = "https://nat.example/jupyter/nb/proxy/31337/"
+    calls: list[str] = []
+
+    def fake_probe_rtunnel_proxy_once(*, proxy_url, context, request_timeout_ms):  # type: ignore[no-untyped-def]
+        assert request_timeout_ms > 0
+        assert context is not None
+        calls.append(proxy_url)
+        assert proxy_url == primary_url
+        return False, "500 connect ECONNREFUSED 0.0.0.0:31337"
+
+    monkeypatch.setattr(flow_module, "probe_rtunnel_proxy_once", fake_probe_rtunnel_proxy_once)
+    monkeypatch.setattr(flow_module, "_derive_vscode_proxy_url", lambda _url: None)
+
+    resolved, diagnostics = flow_module._ensure_proxy_readiness_with_fallback(
+        proxy_url=primary_url,
+        port=31337,
+        timeout=60,
+        context=object(),
+        page=DummyPage(),
+    )
+
+    assert resolved == primary_url
+    assert calls == [primary_url]
+    assert diagnostics == ["primary=500 connect ECONNREFUSED 0.0.0.0:31337"]
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +170,9 @@ def test_send_rtunnel_setup_script_propagates_errors_on_ws_success(
 ) -> None:
     """WS returns True + populates errors → returns (True, [marker])."""
 
-    def fake_ws_send(*, context, lab_frame, batch_cmd, detected_errors=None):  # noqa: ANN202
+    def fake_ws_send(
+        *, context, lab_frame, batch_cmd, detected_errors=None, diagnostics_out=None
+    ):  # noqa: ANN202
         if detected_errors is not None:
             detected_errors.append(SSHD_MISSING_MARKER)
         return True
@@ -207,7 +196,9 @@ def test_send_rtunnel_setup_script_propagates_errors_on_ws_failure(
     """WS returns False + populates errors → returns (False, [marker]),
     NOT (False, []) from the browser fallback."""
 
-    def fake_ws_send(*, context, lab_frame, batch_cmd, detected_errors=None):  # noqa: ANN202
+    def fake_ws_send(
+        *, context, lab_frame, batch_cmd, detected_errors=None, diagnostics_out=None
+    ):  # noqa: ANN202
         if detected_errors is not None:
             detected_errors.append(SSHD_MISSING_MARKER)
         return False
@@ -230,7 +221,9 @@ def test_send_rtunnel_setup_script_returns_empty_errors_on_clean_ws(
 ) -> None:
     """WS returns True with no errors → returns (True, [])."""
 
-    def fake_ws_send(*, context, lab_frame, batch_cmd, detected_errors=None):  # noqa: ANN202
+    def fake_ws_send(
+        *, context, lab_frame, batch_cmd, detected_errors=None, diagnostics_out=None
+    ):  # noqa: ANN202
         return True
 
     monkeypatch.setattr(flow_module, "_send_setup_command_via_terminal_ws", fake_ws_send)
@@ -243,6 +236,50 @@ def test_send_rtunnel_setup_script_returns_empty_errors_on_clean_ws(
         timer=_DummyTimer(),
     )
     assert ok is True
+    assert errors == []
+
+
+def test_send_rtunnel_setup_script_skips_browser_replay_when_ws_command_was_sent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_ws_send(
+        *,
+        context,
+        lab_frame,
+        batch_cmd,
+        detected_errors=None,
+        diagnostics_out=None,
+    ):  # noqa: ANN202
+        if diagnostics_out is not None:
+            diagnostics_out.update(
+                {
+                    "wsConnected": True,
+                    "promptDetected": True,
+                    "commandSent": True,
+                    "stdoutReceived": True,
+                    "stdoutLen": 2048,
+                    "elapsed": 120000,
+                }
+            )
+        return False
+
+    monkeypatch.setattr(flow_module, "_send_setup_command_via_terminal_ws", fake_ws_send)
+    monkeypatch.setattr(
+        flow_module,
+        "_open_or_create_terminal",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("browser fallback should not run")
+        ),
+    )
+
+    ok, errors = flow_module._send_rtunnel_setup_script(
+        context=object(),
+        page=DummyPage(),
+        lab_frame=object(),
+        batch_cmd="echo",
+        timer=_DummyTimer(),
+    )
+    assert ok is False
     assert errors == []
 
 
@@ -413,7 +450,9 @@ def _setup_hybrid_mocks(
         "delete_called": False,
     }
 
-    def fake_ws_send(*, context, lab_frame, batch_cmd, detected_errors=None):  # noqa: ANN202
+    def fake_ws_send(
+        *, context, lab_frame, batch_cmd, detected_errors=None, diagnostics_out=None
+    ):  # noqa: ANN202
         track["ws_send_called"] = True
         return ws_send_returns
 

@@ -1,4 +1,4 @@
-"""Proxy-readiness verification: URL redaction, HTTP polling, reachability."""
+"""Proxy-readiness verification: URL redaction and lightweight HTTP probing."""
 
 from __future__ import annotations
 
@@ -117,6 +117,47 @@ def _summarize_request_error(error: Exception) -> str:
         return error.__class__.__name__
     headline = message.splitlines()[0].strip()
     return _redact_token_like_text(headline)
+
+
+def probe_rtunnel_proxy_once(
+    *,
+    proxy_url: str,
+    context: Any,
+    request_timeout_ms: int = 5000,
+) -> tuple[bool, str]:
+    """Run a single HTTP probe against an rtunnel proxy URL.
+
+    Returns ``(ready, summary)`` where *ready* reflects the current HTTP response
+    and *summary* is a single-line, redacted status suitable for debug logs.
+    """
+    display_url = redact_proxy_url(proxy_url)
+    trace_event("proxy_probe_once_start", proxy_url=display_url, timeout_ms=request_timeout_ms)
+    try:
+        resp = context.request.get(proxy_url, timeout=request_timeout_ms)
+        try:
+            body = resp.text()
+        except (PlaywrightError, AttributeError, RuntimeError, TypeError, ValueError):
+            body = ""
+        summary = _redact_token_like_text(f"{resp.status} {body[:200].strip()}")
+        ready = _is_rtunnel_proxy_ready(status=resp.status, body=body)
+        trace_event(
+            "proxy_probe_once_result",
+            proxy_url=display_url,
+            ready=ready,
+            status=summary,
+        )
+        return ready, summary
+    except (
+        PlaywrightError,
+        ConnectionError,
+        OSError,
+        RuntimeError,
+        TimeoutError,
+        ValueError,
+    ) as exc:
+        summary = _summarize_request_error(exc)
+        trace_event("proxy_probe_once_error", proxy_url=display_url, error=summary)
+        return False, summary
 
 
 def wait_for_rtunnel_reachable(

@@ -13,10 +13,16 @@ jobs:
       - uses: https://data.forgejo.org/actions/checkout@v4
       - name: Install uv
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y shellcheck
       - name: Lint
         run: uv run ruff check inspire tests
       - name: Check formatting
         run: uv run black --check inspire tests
+      - name: ShellCheck tracked shell scripts
+        run: shellcheck -s bash -S error -e SC1091 examples/setup_ssh_dropbear.sh
+      - name: ShellCheck rendered rtunnel setup scripts
+        run: uv run pytest tests/test_notebook_rtunnel_commands.py -q -k rendered_setup_scripts_pass_shellcheck_when_available
 
   test:
     runs-on: codeberg-small
