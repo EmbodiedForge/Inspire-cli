@@ -77,9 +77,14 @@ def build_rtunnel_setup_commands(
         import shlex as _shlex_inner
 
         safe_name = _shlex_inner.quote(contents_api_filename)
+        # The Jupyter Contents API uploads to the server root directory,
+        # which is typically the notebook workdir — NOT necessarily $HOME.
+        # Check CWD first (matches Jupyter root for fresh terminals),
+        # then $HOME as fallback.
         cmd_lines.append(
-            f'if [ ! -x /tmp/rtunnel ] && [ -f "$HOME"/{safe_name} ]; then '
-            f'cp "$HOME"/{safe_name} /tmp/rtunnel && chmod +x /tmp/rtunnel; fi'
+            f'for _d in . "$HOME"; do '
+            f'if [ ! -x /tmp/rtunnel ] && [ -f "$_d"/{safe_name} ]; then '
+            f'cp "$_d"/{safe_name} /tmp/rtunnel && chmod +x /tmp/rtunnel; break; fi; done'
         )
 
     if sshd_deb_dir:

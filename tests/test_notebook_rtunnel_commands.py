@@ -202,9 +202,11 @@ def test_contents_api_filename_inserts_copy_command() -> None:
     joined = "\n".join(commands)
 
     assert ".inspire_rtunnel_bin" in joined
-    assert 'cp "$HOME"/' in joined
+    assert 'cp "$_d"/' in joined
     assert "chmod +x /tmp/rtunnel" in joined
     assert "[ ! -x /tmp/rtunnel ]" in joined
+    # Checks CWD first, then $HOME as fallback
+    assert 'for _d in . "$HOME"' in joined
 
 
 def test_contents_api_filename_none_has_no_move_command() -> None:
