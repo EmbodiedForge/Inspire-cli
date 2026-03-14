@@ -139,13 +139,27 @@ def _send_terminal_command_via_websocket(
                     let socket = null;
                     const foundErrors = [];
                     let afterSendBuf = "";
+                    let wsConnected = false;
+                    let promptDetected = false;
+                    let stdoutReceived = false;
+                    let wsCloseCode = null;
+                    let wsCloseReason = "";
+                    const startTime = Date.now();
                     const finish = (ok) => {
                       if (settled) return;
                       settled = true;
                       try {
                         if (socket) socket.close();
                       } catch (_) {}
-                      resolve({ ok, errors: foundErrors });
+                      resolve({
+                        ok, errors: foundErrors,
+                        diagnostics: {
+                          wsConnected, promptDetected, commandSent: sent,
+                          stdoutReceived, stdoutLen: afterSendBuf.length,
+                          wsCloseCode, wsCloseReason,
+                          elapsed: Date.now() - startTime
+                        }
+                      });
                     };
 
                     const timer = setTimeout(() => finish(false), timeoutMs);
@@ -205,9 +219,11 @@ def _send_terminal_command_via_websocket(
                         const msg = JSON.parse(ev.data);
                         if (Array.isArray(msg) && msg[0] === "stdout") {
                           const text = String(msg[1]);
+                          stdoutReceived = true;
                           if (!sent) {
                             stdoutBuf += text;
                             if (promptRe.test(stdoutBuf)) {
+                              promptDetected = true;
                               doSend();
                             }
                           } else {
@@ -224,6 +240,7 @@ def _send_terminal_command_via_websocket(
                     });
 
                     socket.addEventListener("open", () => {
+                      wsConnected = true;
                       // Fall back after promptTimeoutMs in case
                       // the shell never emits a recognisable prompt.
                       setTimeout(() => doSend(), promptTimeoutMs);
@@ -235,6 +252,8 @@ def _send_terminal_command_via_websocket(
                     });
 
                     socket.addEventListener("close", (ev) => {
+                      wsCloseCode = ev.code;
+                      wsCloseReason = ev.reason || "";
                       if (!settled) {
                         clearTimeout(timer);
                         finish(false);
@@ -255,7 +274,12 @@ def _send_terminal_command_via_websocket(
         if isinstance(result, dict):
             if detected_errors is not None:
                 detected_errors.extend(result.get("errors", []))
-            return bool(result.get("ok", False))
+            ok = bool(result.get("ok", False))
+            if not ok:
+                diag = result.get("diagnostics")
+                if diag:
+                    _log_ws_diagnostics(diag)
+            return ok
         return bool(result)
     except (PlaywrightError, AttributeError, RuntimeError, TypeError, ValueError):
         return False
@@ -516,6 +540,21 @@ def _focus_terminal_input(
     return False
 
 
+def _log_ws_diagnostics(diag: dict) -> None:
+    """Write structured WS diagnostics to stderr (only on failure)."""
+    parts = [
+        f"wsConnected={diag.get('wsConnected')}",
+        f"promptDetected={diag.get('promptDetected')}",
+        f"commandSent={diag.get('commandSent')}",
+        f"stdoutReceived={diag.get('stdoutReceived')}",
+        f"stdoutLen={diag.get('stdoutLen', 0)}",
+        f"wsCloseCode={diag.get('wsCloseCode')}",
+        f"wsCloseReason={diag.get('wsCloseReason', '')!r}",
+        f"elapsed={diag.get('elapsed', 0)}ms",
+    ]
+    _log_terminal_status("  [ws-diagnostics] " + " | ".join(parts))
+
+
 def _log_terminal_status(message: str) -> None:
     import sys as _sys
 
@@ -755,3 +794,180 @@ def _open_or_create_terminal(
     )
     _dismiss_terminal_dialog_once(lab_frame=lab_frame, page=page, settle_ms=120)
     return True, term_name
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Read-only WS output listener for hybrid browser fallback
+# ---------------------------------------------------------------------------
+
+_WS_CAPTURE_BUF_CAP = 8000
+
+
+def _attach_ws_output_listener(
+    page_or_frame: Any,
+    *,
+    ws_url: str,
+    completion_marker: str,
+    error_markers: list[str],
+) -> bool:
+    """Attach a read-only WebSocket listener for stdout marker detection.
+
+    Sets up ``window._inspireWsCapture`` (state dict) and
+    ``window._inspireWsCaptureSocket`` (WebSocket ref) on the target frame.
+    The internal stdout buffer is used for marker matching only — it is never
+    exposed to Python to avoid leaking sensitive setup output (e.g. SSH keys).
+
+    Returns ``True`` if the JS setup succeeded.
+    """
+    try:
+        result = page_or_frame.evaluate(
+            """
+            ({ wsUrl, completionMarker, errorMarkers, bufCap }) => {
+              try {
+                window._inspireWsCapture = {
+                  done: false, errors: [], markerFound: false,
+                  wsConnected: false, stdoutReceived: false, stdoutLen: 0,
+                  wsCloseCode: null, wsCloseReason: "", elapsed: 0
+                };
+                const state = window._inspireWsCapture;
+                const startTime = Date.now();
+                let buf = "";
+
+                const socket = new WebSocket(wsUrl);
+                window._inspireWsCaptureSocket = socket;
+
+                const finish = () => {
+                  state.elapsed = Date.now() - startTime;
+                  state.done = true;
+                  try { socket.close(); } catch (_) {}
+                };
+
+                socket.addEventListener("open", () => {
+                  state.wsConnected = true;
+                });
+
+                socket.addEventListener("message", (ev) => {
+                  try {
+                    const msg = JSON.parse(ev.data);
+                    if (Array.isArray(msg) && msg[0] === "stdout") {
+                      const text = String(msg[1]);
+                      state.stdoutReceived = true;
+                      buf += text;
+                      if (buf.length > bufCap) buf = buf.slice(-bufCap);
+                      state.stdoutLen = buf.length;
+
+                      for (const em of errorMarkers) {
+                        if (em && buf.includes(em) && !state.errors.includes(em)) {
+                          state.errors.push(em);
+                        }
+                      }
+                      if (state.errors.length > 0) {
+                        finish();
+                        return;
+                      }
+                      if (completionMarker && buf.includes(completionMarker)) {
+                        state.markerFound = true;
+                        finish();
+                      }
+                    }
+                  } catch (_) {}
+                });
+
+                socket.addEventListener("close", (ev) => {
+                  state.wsCloseCode = ev.code;
+                  state.wsCloseReason = ev.reason || "";
+                  if (!state.done) finish();
+                });
+
+                socket.addEventListener("error", () => {
+                  if (!state.done) finish();
+                });
+
+                return true;
+              } catch (_) {
+                return false;
+              }
+            }
+            """,
+            {
+                "wsUrl": ws_url,
+                "completionMarker": completion_marker,
+                "errorMarkers": error_markers,
+                "bufCap": _WS_CAPTURE_BUF_CAP,
+            },
+        )
+        return bool(result)
+    except (PlaywrightError, AttributeError, RuntimeError, TypeError, ValueError):
+        return False
+
+
+def _poll_ws_capture(page_or_frame: Any) -> dict:
+    """Read the current state of the WS output listener.
+
+    Returns a safe default dict on any error so callers never need to
+    handle ``None``.
+    """
+    try:
+        result = page_or_frame.evaluate("window._inspireWsCapture || null")
+        if isinstance(result, dict):
+            return result
+    except (PlaywrightError, AttributeError, RuntimeError, TypeError, ValueError):
+        pass
+    return {
+        "done": False,
+        "errors": [],
+        "markerFound": False,
+        "wsConnected": False,
+        "stdoutReceived": False,
+        "stdoutLen": 0,
+        "wsCloseCode": None,
+        "wsCloseReason": "",
+        "elapsed": 0,
+    }
+
+
+def _wait_for_ws_capture(
+    page_or_frame: Any,
+    page: Any,
+    *,
+    timeout_ms: int,
+    poll_interval_ms: int = 500,
+) -> dict:
+    """Poll ``_poll_ws_capture`` until done, errors found, or timeout.
+
+    Uses ``page.wait_for_timeout`` for Playwright-friendly sleeping.
+    Returns the final capture state dict.
+    """
+    start = time.monotonic()
+    while True:
+        state = _poll_ws_capture(page_or_frame)
+        if state.get("done") or state.get("errors"):
+            return state
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        if elapsed_ms >= timeout_ms:
+            return state
+        remaining = timeout_ms - elapsed_ms
+        sleep_ms = min(poll_interval_ms, remaining)
+        if sleep_ms <= 0:
+            return state
+        page.wait_for_timeout(sleep_ms)
+
+
+def _detach_ws_output_listener(page_or_frame: Any) -> None:
+    """Close the WS capture socket and clean up window globals.  Best-effort."""
+    try:
+        page_or_frame.evaluate(
+            """
+            () => {
+              try {
+                if (window._inspireWsCaptureSocket) {
+                  window._inspireWsCaptureSocket.close();
+                }
+              } catch (_) {}
+              delete window._inspireWsCapture;
+              delete window._inspireWsCaptureSocket;
+            }
+            """
+        )
+    except Exception:
+        pass

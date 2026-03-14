@@ -24,16 +24,20 @@ from inspire.platform.web.browser_api.core import (
 )
 from inspire.platform.web.session import WebSession, get_web_session
 
-from .commands import SSHD_MISSING_MARKER, build_rtunnel_setup_commands
+from .commands import SETUP_DONE_MARKER, SSHD_MISSING_MARKER, build_rtunnel_setup_commands
 from .probe import probe_existing_rtunnel_proxy_url
 from .state import save_rtunnel_proxy_state
 from .terminal import (
+    _attach_ws_output_listener,
     _build_batch_setup_script,
+    _build_terminal_websocket_url,
     _delete_terminal_via_api,
+    _detach_ws_output_listener,
     _focus_terminal_input,
     _open_or_create_terminal,
     _send_setup_command_via_terminal_ws,
     _wait_for_terminal_surface,
+    _wait_for_ws_capture,
 )
 from .upload import _resolve_rtunnel_binary
 from .verify import redact_proxy_url, wait_for_rtunnel_reachable
@@ -266,23 +270,23 @@ def _send_rtunnel_setup_script(
     import sys as _sys
 
     detected_errors: list[str] = []
-    setup_sent_via_ws = False
+    setup_confirmed = False
     try:
-        setup_sent_via_ws = _send_setup_command_via_terminal_ws(
+        setup_confirmed = _send_setup_command_via_terminal_ws(
             context=context,
             lab_frame=lab_frame,
             batch_cmd=batch_cmd,
             detected_errors=detected_errors,
         )
     except (PlaywrightError, RuntimeError, TimeoutError, ValueError):
-        setup_sent_via_ws = False
+        setup_confirmed = False
 
     # Propagate error markers immediately — even if WS returned False
     # (marker was captured before timeout/close)
     if detected_errors:
-        return setup_sent_via_ws, detected_errors
+        return setup_confirmed, detected_errors
 
-    if setup_sent_via_ws:
+    if setup_confirmed:
         _sys.stderr.write("  Sent setup script via Jupyter terminal WebSocket.\n")
         _sys.stderr.flush()
         timer.mark("open_terminal")
@@ -294,6 +298,7 @@ def _send_rtunnel_setup_script(
     _sys.stderr.flush()
 
     browser_term_name: str | None = None
+    ws_listener_attached = False
     try:
         result, browser_term_name = _open_or_create_terminal(context, page, lab_frame)
         if not result:
@@ -308,6 +313,22 @@ def _send_rtunnel_setup_script(
                 raise ValueError("Failed to focus Jupyter terminal input")
         timer.mark("focus_xterm")
 
+        # Attach a read-only WS listener for stdout marker detection
+        if browser_term_name:
+            try:
+                ws_url = _build_terminal_websocket_url(lab_frame.url, browser_term_name)
+                ws_listener_attached = _attach_ws_output_listener(
+                    lab_frame,
+                    ws_url=ws_url,
+                    completion_marker=SETUP_DONE_MARKER,
+                    error_markers=[SSHD_MISSING_MARKER],
+                )
+                if ws_listener_attached:
+                    _sys.stderr.write("  Attached WS output listener for marker detection.\n")
+                    _sys.stderr.flush()
+            except (PlaywrightError, RuntimeError, TimeoutError, ValueError):
+                ws_listener_attached = False
+
         _sys.stderr.write(
             f"  Executing setup script ({len(batch_cmd)} chars) in notebook terminal...\n"
         )
@@ -315,8 +336,22 @@ def _send_rtunnel_setup_script(
         page.keyboard.insert_text(batch_cmd)
         page.keyboard.press("Enter")
         timer.mark("build_and_send_cmd")
+
+        # If WS listener is attached, wait for markers via polling
+        if ws_listener_attached:
+            ws_state = _wait_for_ws_capture(lab_frame, page, timeout_ms=120000)
+            ws_errors = ws_state.get("errors", [])
+            if ws_errors:
+                return True, ws_errors
+            if ws_state.get("markerFound"):
+                return True, []
+            # WS listener timed out without markers — unconfirmed
+            return False, []
+
         return False, []
     finally:
+        if ws_listener_attached:
+            _detach_ws_output_listener(lab_frame)
         if browser_term_name:
             try:
                 _delete_terminal_via_api(
@@ -329,10 +364,10 @@ def _send_rtunnel_setup_script(
 def _wait_for_setup_completion(
     *,
     page: Any,
-    setup_sent_via_ws: bool,
+    setup_confirmed: bool,
     timer: "_StepTimer",
 ) -> None:
-    if not setup_sent_via_ws:
+    if not setup_confirmed:
         page.wait_for_timeout(3000)
     else:
         page.wait_for_timeout(500)
@@ -472,14 +507,14 @@ def _setup_notebook_rtunnel_sync(
             )
             batch_cmd = _build_batch_setup_script(cmd_lines)
             _log.debug("Setup script length: %d chars, %d commands", len(batch_cmd), len(cmd_lines))
-            setup_sent_via_ws, setup_errors = _send_rtunnel_setup_script(
+            setup_confirmed, setup_errors = _send_rtunnel_setup_script(
                 context=context,
                 page=page,
                 lab_frame=lab_frame,
                 batch_cmd=batch_cmd,
                 timer=timer,
             )
-            _log.debug("Setup script sent via WS: %s", setup_sent_via_ws)
+            _log.debug("Setup confirmed: %s", setup_confirmed)
 
             if SSHD_MISSING_MARKER in setup_errors:
                 raise RuntimeError(
@@ -496,7 +531,7 @@ def _setup_notebook_rtunnel_sync(
                 )
             _wait_for_setup_completion(
                 page=page,
-                setup_sent_via_ws=setup_sent_via_ws,
+                setup_confirmed=setup_confirmed,
                 timer=timer,
             )
             _capture_terminal_debug_artifact(page=page, timer=timer)

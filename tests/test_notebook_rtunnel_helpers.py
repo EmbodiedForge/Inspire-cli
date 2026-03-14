@@ -15,16 +15,19 @@ from inspire.platform.web.browser_api.rtunnel import (
     _CONTENTS_API_RTUNNEL_FILENAME,
     SSHD_MISSING_MARKER,
     _StepTimer,
+    _attach_ws_output_listener,
     _build_batch_setup_script,
     _build_terminal_websocket_url,
     _compute_rtunnel_hash,
     _create_terminal_via_api,
     _delete_terminal_via_api,
+    _detach_ws_output_listener,
     _download_rtunnel_locally,
     _extract_jupyter_token,
     _focus_terminal_input,
     _jupyter_server_base,
     _open_or_create_terminal,
+    _poll_ws_capture,
     _resolve_rtunnel_binary,
     _rtunnel_matches_on_notebook,
     _send_setup_command_via_terminal_ws,
@@ -35,6 +38,7 @@ from inspire.platform.web.browser_api.rtunnel import (
     _wait_for_setup_completion,
     _wait_for_terminal_surface,
     _wait_for_terminal_surface_progressive,
+    _wait_for_ws_capture,
 )
 
 
@@ -945,7 +949,7 @@ def test_wait_for_setup_completion_uses_short_settle_for_ws_path() -> None:
     page = _WaitPageStub()
     timer = _TimerStub()
 
-    _wait_for_setup_completion(page=page, setup_sent_via_ws=True, timer=timer)
+    _wait_for_setup_completion(page=page, setup_confirmed=True, timer=timer)
 
     assert page.wait_calls == [500]
     assert timer.labels == ["wait_marker"]
@@ -955,7 +959,7 @@ def test_wait_for_setup_completion_uses_longer_settle_for_browser_path() -> None
     page = _WaitPageStub()
     timer = _TimerStub()
 
-    _wait_for_setup_completion(page=page, setup_sent_via_ws=False, timer=timer)
+    _wait_for_setup_completion(page=page, setup_confirmed=False, timer=timer)
 
     assert page.wait_calls == [3000]
     assert timer.labels == ["wait_marker"]
@@ -1745,3 +1749,195 @@ def test_send_setup_command_via_terminal_ws_propagates_detected_errors(
     )
     assert result is False
     assert errors == [SSHD_MISSING_MARKER]
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: WS diagnostics logging
+# ---------------------------------------------------------------------------
+
+
+def test_send_terminal_command_logs_diagnostics_on_failure(capsys: pytest.CaptureFixture) -> None:
+    """When WS returns {ok: False, diagnostics: {...}}, diagnostics are logged to stderr."""
+    diag = {
+        "wsConnected": True,
+        "promptDetected": False,
+        "commandSent": False,
+        "stdoutReceived": False,
+        "stdoutLen": 0,
+        "wsCloseCode": 1006,
+        "wsCloseReason": "",
+        "elapsed": 5000,
+    }
+    page = _make_eval_page({"ok": False, "errors": [], "diagnostics": diag})
+    result = _send_terminal_command_via_websocket(
+        page,
+        ws_url="wss://example.test/terminals/websocket/1",
+        command="echo hi",
+    )
+    assert result is False
+    captured = capsys.readouterr()
+    assert "ws-diagnostics" in captured.err
+    assert "wsConnected=True" in captured.err
+    assert "promptDetected=False" in captured.err
+    assert "wsCloseCode=1006" in captured.err
+
+
+def test_send_terminal_command_no_diagnostics_on_success(capsys: pytest.CaptureFixture) -> None:
+    """When WS returns {ok: True, diagnostics: {...}}, no diagnostics are logged."""
+    diag = {
+        "wsConnected": True,
+        "promptDetected": True,
+        "commandSent": True,
+        "stdoutReceived": True,
+        "stdoutLen": 42,
+        "wsCloseCode": 1000,
+        "wsCloseReason": "",
+        "elapsed": 3000,
+    }
+    page = _make_eval_page({"ok": True, "errors": [], "diagnostics": diag})
+    result = _send_terminal_command_via_websocket(
+        page,
+        ws_url="wss://example.test/terminals/websocket/1",
+        command="echo hi",
+    )
+    assert result is True
+    captured = capsys.readouterr()
+    assert "ws-diagnostics" not in captured.err
+
+
+def test_send_terminal_command_no_diagnostics_key_still_works() -> None:
+    """Backward compat: {ok: False, errors: []} without diagnostics key works silently."""
+    page = _make_eval_page({"ok": False, "errors": []})
+    result = _send_terminal_command_via_websocket(
+        page,
+        ws_url="wss://example.test/terminals/websocket/1",
+        command="echo hi",
+    )
+    assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: WS output listener — unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_attach_ws_output_listener_returns_true() -> None:
+    """_attach_ws_output_listener returns True when evaluate succeeds."""
+
+    class _EvalFrame:
+        def evaluate(self, script, payload=None):  # noqa: ANN001, ANN201
+            return True
+
+    result = _attach_ws_output_listener(
+        _EvalFrame(),
+        ws_url="wss://example.test/terminals/websocket/1",
+        completion_marker="DONE",
+        error_markers=["ERROR"],
+    )
+    assert result is True
+
+
+def test_attach_ws_output_listener_returns_false_on_error() -> None:
+    """_attach_ws_output_listener returns False when evaluate raises."""
+
+    class _BrokenFrame:
+        def evaluate(self, script, payload=None):  # noqa: ANN001, ANN201
+            raise RuntimeError("evaluate failed")
+
+    result = _attach_ws_output_listener(
+        _BrokenFrame(),
+        ws_url="wss://example.test/terminals/websocket/1",
+        completion_marker="DONE",
+        error_markers=["ERROR"],
+    )
+    assert result is False
+
+
+def test_poll_ws_capture_returns_state() -> None:
+    """_poll_ws_capture returns the capture dict from window._inspireWsCapture."""
+    capture_state = {
+        "done": True,
+        "errors": ["SOME_ERROR"],
+        "markerFound": False,
+        "wsConnected": True,
+        "stdoutReceived": True,
+        "stdoutLen": 100,
+        "wsCloseCode": 1000,
+        "wsCloseReason": "",
+        "elapsed": 5000,
+    }
+
+    class _EvalFrame:
+        def evaluate(self, script):  # noqa: ANN001, ANN201
+            return capture_state
+
+    result = _poll_ws_capture(_EvalFrame())
+    assert result == capture_state
+
+
+def test_poll_ws_capture_returns_empty_on_error() -> None:
+    """_poll_ws_capture returns safe default dict when evaluate raises."""
+
+    class _BrokenFrame:
+        def evaluate(self, script):  # noqa: ANN001, ANN201
+            raise RuntimeError("evaluate failed")
+
+    result = _poll_ws_capture(_BrokenFrame())
+    assert result["done"] is False
+    assert result["errors"] == []
+    assert result["wsConnected"] is False
+
+
+def test_detach_ws_output_listener_does_not_raise() -> None:
+    """_detach_ws_output_listener does not raise even when evaluate fails."""
+
+    class _BrokenFrame:
+        def evaluate(self, script):  # noqa: ANN001, ANN201
+            raise RuntimeError("evaluate failed")
+
+    # Should not raise
+    _detach_ws_output_listener(_BrokenFrame())
+
+
+def test_wait_for_ws_capture_polls_until_done() -> None:
+    """_wait_for_ws_capture polls and returns when done=True."""
+    call_count = 0
+
+    class _PollingFrame:
+        def evaluate(self, script):  # noqa: ANN001, ANN201
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 3:
+                return {
+                    "done": True,
+                    "errors": [],
+                    "markerFound": True,
+                    "wsConnected": True,
+                    "stdoutReceived": True,
+                    "stdoutLen": 50,
+                    "wsCloseCode": None,
+                    "wsCloseReason": "",
+                    "elapsed": 2000,
+                }
+            return {
+                "done": False,
+                "errors": [],
+                "markerFound": False,
+                "wsConnected": True,
+                "stdoutReceived": False,
+                "stdoutLen": 0,
+                "wsCloseCode": None,
+                "wsCloseReason": "",
+                "elapsed": 500,
+            }
+
+    class _DummyPage:
+        def wait_for_timeout(self, ms: int) -> None:
+            pass
+
+    result = _wait_for_ws_capture(
+        _PollingFrame(), _DummyPage(), timeout_ms=10000, poll_interval_ms=10
+    )
+    assert result["done"] is True
+    assert result["markerFound"] is True
+    assert call_count >= 3

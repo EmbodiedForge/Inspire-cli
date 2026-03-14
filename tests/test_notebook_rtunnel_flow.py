@@ -343,3 +343,210 @@ def test_setup_raises_on_sshd_missing_marker_ws_false(
 
     with pytest.raises(RuntimeError, match="sshd_deb_dir"):
         flow_module._setup_notebook_rtunnel_sync(notebook_id="test-nb")
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Hybrid browser fallback with WS output capture
+# ---------------------------------------------------------------------------
+
+
+class _HybridFrame:
+    url = "https://nb.example.com/lab"
+
+    def locator(self, _sel: str):  # noqa: ANN201
+        return _FakeLocator()
+
+
+class _HybridKeyboard:
+    def __init__(self) -> None:
+        self.inserted: list[str] = []
+        self.pressed: list[str] = []
+
+    def insert_text(self, text: str) -> None:
+        self.inserted.append(text)
+
+    def press(self, key: str) -> None:
+        self.pressed.append(key)
+
+
+class _HybridPage:
+    def __init__(self) -> None:
+        self.keyboard = _HybridKeyboard()
+
+    def wait_for_timeout(self, _ms: int) -> None:
+        pass
+
+
+def _setup_hybrid_mocks(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    ws_send_returns: bool = False,
+    term_name: str | None = "term-1",
+    attach_returns: bool = True,
+    ws_capture_state: dict | None = None,
+) -> dict:
+    """Wire mocks for testing the hybrid browser fallback path."""
+    track: dict = {
+        "ws_send_called": False,
+        "open_terminal_called": False,
+        "focus_called": False,
+        "attach_called": False,
+        "detach_called": False,
+        "delete_called": False,
+    }
+
+    def fake_ws_send(*, context, lab_frame, batch_cmd, detected_errors=None):  # noqa: ANN202
+        track["ws_send_called"] = True
+        return ws_send_returns
+
+    def fake_open_terminal(_ctx, _page, _frame):  # noqa: ANN202
+        track["open_terminal_called"] = True
+        return True, term_name
+
+    def fake_focus(_frame, _page):  # noqa: ANN202
+        track["focus_called"] = True
+        return True
+
+    def fake_attach(_frame, *, ws_url, completion_marker, error_markers):  # noqa: ANN202
+        track["attach_called"] = True
+        return attach_returns
+
+    def fake_wait_capture(_frame, _page, *, timeout_ms, poll_interval_ms=500):  # noqa: ANN202
+        return ws_capture_state or {"done": False, "errors": [], "markerFound": False}
+
+    def fake_detach(_frame):  # noqa: ANN202
+        track["detach_called"] = True
+
+    def fake_build_ws_url(_url, _name):  # noqa: ANN202
+        return "wss://nb.example.com/terminals/websocket/term-1"
+
+    def fake_wait_surface(_frame, *, timeout_ms):  # noqa: ANN202
+        return True
+
+    def fake_delete(_ctx, *, lab_url, term_name):  # noqa: ANN202
+        track["delete_called"] = True
+        return True
+
+    monkeypatch.setattr(flow_module, "_send_setup_command_via_terminal_ws", fake_ws_send)
+    monkeypatch.setattr(flow_module, "_open_or_create_terminal", fake_open_terminal)
+    monkeypatch.setattr(flow_module, "_focus_terminal_input", fake_focus)
+    monkeypatch.setattr(flow_module, "_attach_ws_output_listener", fake_attach)
+    monkeypatch.setattr(flow_module, "_wait_for_ws_capture", fake_wait_capture)
+    monkeypatch.setattr(flow_module, "_detach_ws_output_listener", fake_detach)
+    monkeypatch.setattr(flow_module, "_build_terminal_websocket_url", fake_build_ws_url)
+    monkeypatch.setattr(flow_module, "_wait_for_terminal_surface", fake_wait_surface)
+    monkeypatch.setattr(flow_module, "_delete_terminal_via_api", fake_delete)
+    return track
+
+
+def test_send_rtunnel_setup_script_hybrid_detects_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Browser fallback + WS listener captures SSHD_MISSING_MARKER → (True, [marker])."""
+    track = _setup_hybrid_mocks(
+        monkeypatch,
+        ws_send_returns=False,
+        ws_capture_state={
+            "done": True,
+            "errors": [SSHD_MISSING_MARKER],
+            "markerFound": False,
+        },
+    )
+
+    ok, errors = flow_module._send_rtunnel_setup_script(
+        context=object(),
+        page=_HybridPage(),
+        lab_frame=_HybridFrame(),
+        batch_cmd="echo test",
+        timer=_DummyTimer(),
+    )
+    assert ok is True
+    assert errors == [SSHD_MISSING_MARKER]
+    assert track["attach_called"]
+    assert track["detach_called"]
+
+
+def test_send_rtunnel_setup_script_hybrid_detects_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """WS listener finds completion marker → (True, [])."""
+    track = _setup_hybrid_mocks(
+        monkeypatch,
+        ws_send_returns=False,
+        ws_capture_state={
+            "done": True,
+            "errors": [],
+            "markerFound": True,
+        },
+    )
+
+    ok, errors = flow_module._send_rtunnel_setup_script(
+        context=object(),
+        page=_HybridPage(),
+        lab_frame=_HybridFrame(),
+        batch_cmd="echo test",
+        timer=_DummyTimer(),
+    )
+    assert ok is True
+    assert errors == []
+    assert track["attach_called"]
+    assert track["detach_called"]
+
+
+def test_send_rtunnel_setup_script_hybrid_skips_ws_without_term_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No term_name → no WS listener, returns (False, [])."""
+    track = _setup_hybrid_mocks(
+        monkeypatch,
+        ws_send_returns=False,
+        term_name=None,
+    )
+
+    ok, errors = flow_module._send_rtunnel_setup_script(
+        context=object(),
+        page=_HybridPage(),
+        lab_frame=_HybridFrame(),
+        batch_cmd="echo test",
+        timer=_DummyTimer(),
+    )
+    assert ok is False
+    assert errors == []
+    assert not track["attach_called"]
+    assert not track["detach_called"]
+
+
+def test_send_rtunnel_setup_script_hybrid_cleans_up_on_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_detach_ws_output_listener is called in finally block on exception."""
+    track = _setup_hybrid_mocks(
+        monkeypatch,
+        ws_send_returns=False,
+    )
+
+    # Make keyboard.insert_text raise to simulate a failure after attach
+    class _FailingPage:
+        def __init__(self) -> None:
+            self.keyboard = self
+
+        def insert_text(self, text: str) -> None:
+            raise RuntimeError("keyboard failed")
+
+        def press(self, key: str) -> None:
+            pass
+
+        def wait_for_timeout(self, _ms: int) -> None:
+            pass
+
+    with pytest.raises(RuntimeError, match="keyboard failed"):
+        flow_module._send_rtunnel_setup_script(
+            context=object(),
+            page=_FailingPage(),
+            lab_frame=_HybridFrame(),
+            batch_cmd="echo test",
+            timer=_DummyTimer(),
+        )
+    assert track["attach_called"]
+    assert track["detach_called"]
+    assert track["delete_called"]

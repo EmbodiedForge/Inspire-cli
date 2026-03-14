@@ -51,6 +51,11 @@ from .terminal import _wait_for_terminal_surface as _wait_for_terminal_surface  
 from .terminal import (
     _wait_for_terminal_surface_progressive as _wait_for_terminal_surface_progressive,
 )  # noqa: F401, E501
+from .terminal import _attach_ws_output_listener as _attach_ws_output_listener  # noqa: F401
+from .terminal import _detach_ws_output_listener as _detach_ws_output_listener  # noqa: F401
+from .terminal import _log_ws_diagnostics as _log_ws_diagnostics  # noqa: F401
+from .terminal import _poll_ws_capture as _poll_ws_capture  # noqa: F401
+from .terminal import _wait_for_ws_capture as _wait_for_ws_capture  # noqa: F401
 from .upload import _CONTENTS_API_RTUNNEL_FILENAME as _CONTENTS_API_RTUNNEL_FILENAME  # noqa: F401
 from .upload import _compute_rtunnel_hash as _compute_rtunnel_hash  # noqa: F401
 from .upload import _download_rtunnel_locally as _download_rtunnel_locally  # noqa: F401

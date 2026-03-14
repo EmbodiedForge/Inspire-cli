@@ -107,21 +107,33 @@ def build_rtunnel_setup_commands(
         )
     else:
         curl_rtunnel_block = (
-            'if [ ! -x "$RTUNNEL_BIN" ]; then curl -fsSL '
+            'if [ ! -x "$RTUNNEL_BIN" ] && [ "$_INET" = 1 ]; then curl -fsSL '
+            "--connect-timeout 10 --max-time 30 "
             '"$RTUNNEL_DOWNLOAD_URL" -o /tmp/rtunnel.tgz && '
             "tar -xzf /tmp/rtunnel.tgz -C /tmp && chmod +x /tmp/rtunnel "
             "2>/dev/null; fi"
         )
 
+    # Quick TCP probe: set _INET=1 if archive.ubuntu.com:80 is reachable
+    # within 3s, else _INET=0.  Gates apt-get and curl on no-internet
+    # notebooks so they fail immediately instead of waiting for DNS timeout.
+    inet_probe = (
+        "_INET=0; timeout 3 bash -c "
+        "'exec 3<>/dev/tcp/archive.ubuntu.com/80' 2>/dev/null && _INET=1"
+    )
+
     openssh_bootstrap_cmd = (
         'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x /tmp/rtunnel ] '
         "|| [ ! -x /usr/sbin/sshd ]; then "
+        f"{inet_probe}; "
         "if [ ! -x /usr/sbin/sshd ]; then "
         'if [ -n "${SSHD_DEB_DIR:-}" ] && ls "$SSHD_DEB_DIR"/*.deb >/dev/null 2>&1; then '
         'dpkg -i "$SSHD_DEB_DIR"/*.deb >/dev/null 2>&1 || true; '
-        'elif [ -z "${SSHD_DEB_DIR:-}" ]; then '
-        "export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && "
-        "apt-get install -y -qq openssh-server; fi; fi; "
+        'elif [ -z "${SSHD_DEB_DIR:-}" ] && [ "$_INET" = 1 ]; then '
+        "export DEBIAN_FRONTEND=noninteractive; "
+        "timeout 30 apt-get -o Acquire::Retries=0 -o Acquire::http::Timeout=10 "
+        "update -qq && "
+        "timeout 30 apt-get install -y -qq openssh-server; fi; fi; "
         "RTUNNEL_BIN=/tmp/rtunnel; "
         'if [ -n "${RTUNNEL_BIN_PATH:-}" ] && [ -x "$RTUNNEL_BIN_PATH" ]; then '
         'cp "$RTUNNEL_BIN_PATH" /tmp/rtunnel && chmod +x /tmp/rtunnel; fi; '
@@ -169,8 +181,8 @@ def build_rtunnel_setup_commands(
         'echo "deb $APT_MIRROR_URL $CODENAME main restricted universe multiverse" '
         "> /etc/apt/sources.list.d/inspire-mirror.list; "
         "export DEBIAN_FRONTEND=noninteractive; "
-        "apt-get update -qq >/dev/null 2>&1 && "
-        "apt-get install -y -qq dropbear-bin >/dev/null 2>&1 || true; "
+        "timeout 60 apt-get update -qq >/dev/null 2>&1 && "
+        "timeout 60 apt-get install -y -qq dropbear-bin >/dev/null 2>&1 || true; "
         "for _f in /etc/apt/sources.list.bak /etc/apt/sources.list.d/*.list.bak; do "
         '[ -f "$_f" ] && mv "$_f" "${_f%.bak}" 2>/dev/null; done; '
         "[ -x /usr/sbin/dropbear ] && DB_BIN=/usr/sbin/dropbear; fi; "
