@@ -13,6 +13,7 @@ from inspire.platform.web.browser_api.rtunnel import terminal as terminal_module
 from inspire.platform.web.browser_api.rtunnel import upload as upload_module
 from inspire.platform.web.browser_api.rtunnel import (
     _CONTENTS_API_RTUNNEL_FILENAME,
+    SSH_SERVER_MISSING_MARKER,
     SSHD_MISSING_MARKER,
     _StepTimer,
     _attach_ws_output_listener,
@@ -970,6 +971,26 @@ def test_build_rtunnel_setup_commands_apt_mirror_path_skips_curl_and_time_bounds
     assert "curl -fsSL" not in script
 
 
+def test_build_rtunnel_setup_commands_repository_root_mirror_is_supported() -> None:
+    from inspire.config.ssh_runtime import SshRuntimeConfig
+
+    commands = build_rtunnel_setup_commands(
+        port=31337,
+        ssh_port=22222,
+        ssh_public_key=None,
+        ssh_runtime=SshRuntimeConfig(
+            apt_mirror_url="http://mirror.example/repository/",
+            rtunnel_bin="/shared/bin/rtunnel",
+        ),
+    )
+    script = "\n".join(commands)
+
+    assert "APT_MIRROR_URL=http://mirror.example/repository/" in script
+    assert 'MIRROR_URL="${APT_MIRROR_URL%/}"' in script
+    assert '*/repository) MIRROR_URL="$MIRROR_URL/$MIRROR_DISTRO" ;;' in script
+    assert 'echo "deb $MIRROR_URL $CODENAME $MIRROR_COMPONENTS" ' in script
+
+
 def test_build_rtunnel_setup_commands_sshd_deb_dir_stays_on_openssh_path() -> None:
     from inspire.config.ssh_runtime import SshRuntimeConfig
 
@@ -987,6 +1008,25 @@ def test_build_rtunnel_setup_commands_sshd_deb_dir_stays_on_openssh_path() -> No
     assert 'dpkg -i "$SSHD_DEB_DIR"/*.deb >/dev/null 2>&1 || true;' in script
     assert "dropbear-bin" not in script
     assert SSHD_MISSING_MARKER in script
+    assert SSH_SERVER_MISSING_MARKER in script
+
+
+def test_build_rtunnel_setup_commands_uses_configured_rtunnel_bin_in_place() -> None:
+    from inspire.config.ssh_runtime import SshRuntimeConfig
+
+    commands = build_rtunnel_setup_commands(
+        port=31337,
+        ssh_port=22222,
+        ssh_public_key=None,
+        ssh_runtime=SshRuntimeConfig(
+            rtunnel_bin="/shared/bin/rtunnel",
+        ),
+    )
+    script = "\n".join(commands)
+
+    assert 'if [ -x "$RTUNNEL_BIN_PATH" ]; then RTUNNEL_BIN="$RTUNNEL_BIN_PATH"; ' in script
+    assert 'nohup "$RTUNNEL_BIN" "$SSH_PORT" "$PORT" ' in script
+    assert 'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x "$RTUNNEL_BIN" ] ' in script
 
 
 # ---------------------------------------------------------------------------

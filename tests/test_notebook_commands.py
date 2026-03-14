@@ -1019,6 +1019,13 @@ def test_run_notebook_ssh_reports_when_tunnel_not_ready(
         lambda bridge_name, config, remote_command=None: ["ssh", "root@localhost"],
     )
     monkeypatch.setattr(
+        ssh_flow_module,
+        "collect_notebook_rtunnel_diagnostics",
+        lambda **kwargs: __import__("types").SimpleNamespace(
+            observed="distro=debian bookworm | strategy=dropbear_mirror",
+        ),
+    )
+    monkeypatch.setattr(
         ssh_flow_module.os,
         "execvp",
         lambda file, args: (_ for _ in ()).throw(AssertionError("execvp should not run")),
@@ -1043,6 +1050,8 @@ def test_run_notebook_ssh_reports_when_tunnel_not_ready(
     assert captured["type"] == "APIError"
     assert "SSH preflight failed" in captured["message"]
     assert "Proxy readiness report:" in captured["hint"]
+    assert "Observed:" in captured["hint"]
+    assert "distro=debian bookworm" in captured["hint"]
 
 
 def test_notebook_ssh_double_dash_command(monkeypatch: pytest.MonkeyPatch) -> None:

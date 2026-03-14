@@ -29,6 +29,10 @@ from inspire.config.ssh_runtime import resolve_ssh_runtime_config
 from inspire.platform.web import browser_api as browser_api_module
 from inspire.platform.web.browser_api import NotebookFailedError
 from inspire.platform.web.browser_api.rtunnel import redact_proxy_url
+from inspire.platform.web.browser_api.rtunnel.diagnostics import (
+    collect_notebook_rtunnel_diagnostics,
+)
+from inspire.platform.web.browser_api.rtunnel.logging import get_last_failure_summary
 
 from .notebook_lookup import (
     _get_current_user_detail,
@@ -438,7 +442,11 @@ def run_notebook_ssh(
             timeout=setup_timeout,
         )
     except Exception as e:
-        _handle_error(ctx, "APIError", f"Failed to set up notebook tunnel: {e}", EXIT_API_ERROR)
+        message = f"Failed to set up notebook tunnel: {e}"
+        failure_summary = get_last_failure_summary()
+        if failure_summary and failure_summary not in message:
+            message = f"{message}\n\n{failure_summary}"
+        _handle_error(ctx, "APIError", message, EXIT_API_ERROR)
         return
 
     bridge = BridgeProfile(
@@ -462,6 +470,17 @@ def run_notebook_ssh(
         retry_pause=1.5,
     ):
         proxy_status = _describe_proxy_http_status(proxy_url)
+        doctor = collect_notebook_rtunnel_diagnostics(
+            notebook_id=notebook_id,
+            port=port,
+            ssh_port=ssh_port,
+            ssh_runtime=ssh_runtime,
+            session=session,
+            headless=not debug_playwright,
+        )
+        extra_hint = ""
+        if doctor is not None:
+            extra_hint = f" Observed: {doctor.observed}."
         _handle_error(
             ctx,
             "APIError",
@@ -471,6 +490,7 @@ def run_notebook_ssh(
                 "Retry 'inspire notebook ssh <notebook-id>' in a few seconds, "
                 f"or run 'inspire tunnel test -b {profile_name}' to inspect connectivity. "
                 f"Proxy readiness report: {proxy_status} ({redact_proxy_url(proxy_url)})."
+                f"{extra_hint}"
             ),
         )
         return

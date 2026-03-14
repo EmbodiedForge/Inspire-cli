@@ -24,7 +24,24 @@ from inspire.platform.web.browser_api.core import (
 )
 from inspire.platform.web.session import WebSession, get_web_session
 
-from .commands import SETUP_DONE_MARKER, SSHD_MISSING_MARKER, build_rtunnel_setup_commands
+from .commands import (
+    SETUP_DONE_MARKER,
+    SSHD_MISSING_MARKER,
+    SSH_SERVER_MISSING_MARKER,
+    build_rtunnel_setup_commands,
+    describe_rtunnel_setup_plan,
+)
+from .diagnostics import collect_notebook_rtunnel_diagnostics
+from .logging import (
+    attach_failure_summary,
+    bind_trace,
+    clear_last_failure_summary,
+    create_trace,
+    format_trace_summary,
+    set_last_failure_summary,
+    trace_event,
+    update_trace_summary,
+)
 from .probe import probe_existing_rtunnel_proxy_url
 from .state import save_rtunnel_proxy_state
 from .terminal import (
@@ -173,6 +190,7 @@ def _ensure_proxy_readiness_with_fallback(
 
     derived_vscode_url = _derive_vscode_proxy_url(proxy_url)
     if derived_vscode_url and derived_vscode_url != proxy_url:
+        trace_event("proxy_probe_candidate", mode="derived_vscode", proxy_url=derived_vscode_url)
         _sys.stderr.write(
             f"  Probing VSCode proxy URL first: {redact_proxy_url(derived_vscode_url)}\n"
         )
@@ -184,6 +202,7 @@ def _ensure_proxy_readiness_with_fallback(
                 context=context,
                 page=page,
             )
+            update_trace_summary(proxy_probe_result="derived_vscode_ready")
             return derived_vscode_url, diagnostics
         except (
             PlaywrightError,
@@ -194,14 +213,21 @@ def _ensure_proxy_readiness_with_fallback(
             ValueError,
         ) as derived_error:
             diagnostics.append(f"derived={_extract_probe_error_summary(derived_error)}")
+            trace_event(
+                "proxy_probe_failed",
+                mode="derived_vscode",
+                error=_extract_probe_error_summary(derived_error),
+            )
 
     try:
+        trace_event("proxy_probe_candidate", mode="primary", proxy_url=proxy_url)
         wait_for_rtunnel_reachable(
             proxy_url=proxy_url,
             timeout_s=primary_verify_timeout_s,
             context=context,
             page=page,
         )
+        update_trace_summary(proxy_probe_result="primary_ready")
         return proxy_url, diagnostics
     except (
         PlaywrightError,
@@ -212,6 +238,11 @@ def _ensure_proxy_readiness_with_fallback(
         ValueError,
     ) as primary_error:
         diagnostics.append(f"primary={_extract_probe_error_summary(primary_error)}")
+        trace_event(
+            "proxy_probe_failed",
+            mode="primary",
+            error=_extract_probe_error_summary(primary_error),
+        )
 
     fallback_proxy_url = _build_vscode_proxy_url(page, port=port)
     if not fallback_proxy_url:
@@ -231,8 +262,10 @@ def _ensure_proxy_readiness_with_fallback(
     if not fallback_proxy_url or fallback_proxy_url == proxy_url:
         _sys.stderr.write("  Proxy did not pass HTTP readiness; continuing with SSH preflight.\n")
         _sys.stderr.flush()
+        update_trace_summary(proxy_probe_result="http_probe_failed_continue_to_ssh")
         return best_for_ssh, diagnostics
 
+    trace_event("proxy_probe_candidate", mode="page_built_vscode", proxy_url=fallback_proxy_url)
     _sys.stderr.write(f"  Trying alternate proxy URL: {redact_proxy_url(fallback_proxy_url)}\n")
     _sys.stderr.flush()
     try:
@@ -242,6 +275,7 @@ def _ensure_proxy_readiness_with_fallback(
             context=context,
             page=page,
         )
+        update_trace_summary(proxy_probe_result="fallback_vscode_ready")
         return fallback_proxy_url, diagnostics
     except (
         PlaywrightError,
@@ -252,10 +286,16 @@ def _ensure_proxy_readiness_with_fallback(
         ValueError,
     ) as fallback_error:
         diagnostics.append(f"fallback={_extract_probe_error_summary(fallback_error)}")
+        trace_event(
+            "proxy_probe_failed",
+            mode="page_built_vscode",
+            error=_extract_probe_error_summary(fallback_error),
+        )
         _sys.stderr.write(
             "  Fallback proxy did not pass HTTP readiness; " "continuing with SSH preflight.\n"
         )
         _sys.stderr.flush()
+        update_trace_summary(proxy_probe_result="fallback_failed_continue_to_ssh")
         return best_for_ssh, diagnostics
 
 
@@ -271,6 +311,8 @@ def _send_rtunnel_setup_script(
 
     detected_errors: list[str] = []
     setup_confirmed = False
+    trace_event("terminal_setup_attempt", transport="terminal_ws")
+    update_trace_summary(terminal_transport="terminal_ws")
     try:
         setup_confirmed = _send_setup_command_via_terminal_ws(
             context=context,
@@ -280,10 +322,12 @@ def _send_rtunnel_setup_script(
         )
     except (PlaywrightError, RuntimeError, TimeoutError, ValueError):
         setup_confirmed = False
+        trace_event("terminal_setup_ws_exception")
 
     # Propagate error markers immediately — even if WS returned False
     # (marker was captured before timeout/close)
     if detected_errors:
+        update_trace_summary(setup_errors=",".join(detected_errors))
         return setup_confirmed, detected_errors
 
     if setup_confirmed:
@@ -292,10 +336,14 @@ def _send_rtunnel_setup_script(
         timer.mark("open_terminal")
         timer.mark("focus_xterm")
         timer.mark("build_and_send_cmd")
+        update_trace_summary(setup_confirmed="true")
+        trace_event("terminal_setup_completed", transport="terminal_ws")
         return True, []
 
     _sys.stderr.write("  WebSocket terminal setup unavailable, using browser automation.\n")
     _sys.stderr.flush()
+    trace_event("terminal_setup_fallback", transport="browser_automation")
+    update_trace_summary(terminal_transport="browser_automation")
 
     browser_term_name: str | None = None
     ws_listener_attached = False
@@ -321,13 +369,15 @@ def _send_rtunnel_setup_script(
                     lab_frame,
                     ws_url=ws_url,
                     completion_marker=SETUP_DONE_MARKER,
-                    error_markers=[SSHD_MISSING_MARKER],
+                    error_markers=[SSHD_MISSING_MARKER, SSH_SERVER_MISSING_MARKER],
                 )
                 if ws_listener_attached:
+                    trace_event("terminal_ws_listener_attached", term_name=browser_term_name)
                     _sys.stderr.write("  Attached WS output listener for marker detection.\n")
                     _sys.stderr.flush()
             except (PlaywrightError, RuntimeError, TimeoutError, ValueError):
                 ws_listener_attached = False
+                trace_event("terminal_ws_listener_attach_failed", term_name=browser_term_name)
 
         _sys.stderr.write(
             f"  Executing setup script ({len(batch_cmd)} chars) in notebook terminal...\n"
@@ -340,14 +390,27 @@ def _send_rtunnel_setup_script(
         # If WS listener is attached, wait for markers via polling
         if ws_listener_attached:
             ws_state = _wait_for_ws_capture(lab_frame, page, timeout_ms=120000)
+            trace_event(
+                "terminal_ws_capture_result",
+                marker_found=ws_state.get("markerFound"),
+                errors=",".join(ws_state.get("errors", [])),
+                ws_connected=ws_state.get("wsConnected"),
+                stdout_received=ws_state.get("stdoutReceived"),
+                stdout_len=ws_state.get("stdoutLen"),
+                ws_close_code=ws_state.get("wsCloseCode"),
+            )
             ws_errors = ws_state.get("errors", [])
             if ws_errors:
+                update_trace_summary(setup_errors=",".join(ws_errors))
                 return True, ws_errors
             if ws_state.get("markerFound"):
+                update_trace_summary(setup_confirmed="true")
                 return True, []
             # WS listener timed out without markers — unconfirmed
+            update_trace_summary(setup_confirmed="false")
             return False, []
 
+        update_trace_summary(setup_confirmed="false")
         return False, []
     finally:
         if ws_listener_attached:
@@ -375,8 +438,11 @@ def _wait_for_setup_completion(
 
 
 def _capture_terminal_debug_artifact(*, page: Any, timer: "_StepTimer") -> None:
+    screenshot_path = "/tmp/notebook_terminal_debug.png"
     try:
-        page.screenshot(path="/tmp/notebook_terminal_debug.png")
+        page.screenshot(path=screenshot_path)
+        update_trace_summary(screenshot_path=screenshot_path)
+        trace_event("debug_artifact_saved", screenshot_path=screenshot_path)
     except (PlaywrightError, OSError, RuntimeError, TimeoutError, ValueError, TypeError):
         pass
     timer.mark("screenshot")
@@ -410,7 +476,10 @@ def _verify_and_cache_rtunnel_proxy(
     if probe_diagnostics:
         _sys.stderr.write("  Proxy readiness summary: " + " | ".join(probe_diagnostics) + "\n")
         _sys.stderr.flush()
+        update_trace_summary(probe_diagnostics=" | ".join(probe_diagnostics))
     timer.mark("verify_proxy")
+    update_trace_summary(proxy_url=redact_proxy_url(proxy_url))
+    trace_event("proxy_ready_for_ssh", proxy_url=proxy_url)
 
     try:
         save_rtunnel_proxy_state(
@@ -423,6 +492,8 @@ def _verify_and_cache_rtunnel_proxy(
         )
     except OSError:
         pass
+    else:
+        trace_event("proxy_state_saved")
     timer.mark("save_state")
     return proxy_url
 
@@ -454,101 +525,178 @@ def _setup_notebook_rtunnel_sync(
         session = get_web_session()
     account = session.login_username
     timer.mark("session_init")
-
-    existing = probe_existing_rtunnel_proxy_url(
+    trace = create_trace(
         notebook_id=notebook_id,
-        port=port,
-        session=session,
         account=account,
+        port=port,
+        ssh_port=ssh_port,
+        headless=headless,
     )
-    if existing:
+    clear_last_failure_summary()
+    with bind_trace(trace):
+        trace_event("setup_start", timeout=timeout)
+
+        existing = probe_existing_rtunnel_proxy_url(
+            notebook_id=notebook_id,
+            port=port,
+            session=session,
+            account=account,
+        )
+        if existing:
+            timer.mark("probe_existing")
+            timer.summary()
+            update_trace_summary(
+                proxy_url=redact_proxy_url(existing),
+                proxy_probe_result="fast_path_reuse",
+            )
+            trace_event("fast_path_hit", proxy_url=existing)
+            _sys.stderr.write("Using existing rtunnel connection (fast path).\n")
+            _sys.stderr.flush()
+            return existing
+
         timer.mark("probe_existing")
-        timer.summary()
-        _sys.stderr.write("Using existing rtunnel connection (fast path).\n")
+        trace_event("fast_path_miss")
+        _sys.stderr.write("Setting up rtunnel tunnel via browser automation...\n")
         _sys.stderr.flush()
-        return existing
-
-    timer.mark("probe_existing")
-    _sys.stderr.write("Setting up rtunnel tunnel via browser automation...\n")
-    _sys.stderr.flush()
-
-    with sync_playwright() as p:
-        browser = _launch_browser(p, headless=headless)
-        timer.mark("playwright_launch")
-        context = _new_context(browser, storage_state=session.storage_state)
-        page = context.new_page()
-        timer.mark("context_and_page")
 
         try:
-            lab_frame = open_notebook_lab(page, notebook_id=notebook_id, timeout=60000)
-            timer.mark("open_lab")
-            jupyter_proxy_url = build_jupyter_proxy_url(lab_frame.url, port=port)
-            timer.mark("build_proxy_url")
+            with sync_playwright() as p:
+                browser = _launch_browser(p, headless=headless)
+                trace_event("playwright_launch", headless=headless)
+                timer.mark("playwright_launch")
+                context = _new_context(browser, storage_state=session.storage_state)
+                page = context.new_page()
+                timer.mark("context_and_page")
 
-            try:
-                lab_frame.locator("text=加载中").first.wait_for(state="hidden", timeout=30000)
-            except (PlaywrightError, TimeoutError, RuntimeError, AttributeError, ValueError):
-                pass
-            timer.mark("wait_spinner")
+                try:
+                    lab_frame = open_notebook_lab(page, notebook_id=notebook_id, timeout=60000)
+                    update_trace_summary(lab_resolution="resolved")
+                    trace_event("lab_opened", lab_url=lab_frame.url)
+                    timer.mark("open_lab")
+                    jupyter_proxy_url = build_jupyter_proxy_url(lab_frame.url, port=port)
+                    update_trace_summary(proxy_url=redact_proxy_url(jupyter_proxy_url))
+                    trace_event("proxy_url_built", proxy_url=jupyter_proxy_url)
+                    timer.mark("build_proxy_url")
 
-            contents_api_filename = _resolve_rtunnel_binary(
-                context=context,
-                lab_url=lab_frame.url,
-                ssh_runtime=ssh_runtime,
-            )
+                    try:
+                        lab_frame.locator("text=加载中").first.wait_for(
+                            state="hidden", timeout=30000
+                        )
+                    except (
+                        PlaywrightError,
+                        TimeoutError,
+                        RuntimeError,
+                        AttributeError,
+                        ValueError,
+                    ):
+                        trace_event("lab_spinner_wait_skipped")
+                    timer.mark("wait_spinner")
 
-            _log.debug("contents_api_filename=%s", contents_api_filename)
-            cmd_lines = build_rtunnel_setup_commands(
-                port=port,
-                ssh_port=ssh_port,
-                ssh_public_key=ssh_public_key,
-                ssh_runtime=ssh_runtime,
-                contents_api_filename=contents_api_filename,
-            )
-            batch_cmd = _build_batch_setup_script(cmd_lines)
-            _log.debug("Setup script length: %d chars, %d commands", len(batch_cmd), len(cmd_lines))
-            setup_confirmed, setup_errors = _send_rtunnel_setup_script(
-                context=context,
-                page=page,
-                lab_frame=lab_frame,
-                batch_cmd=batch_cmd,
-                timer=timer,
-            )
-            _log.debug("Setup confirmed: %s", setup_confirmed)
+                    contents_api_filename = _resolve_rtunnel_binary(
+                        context=context,
+                        lab_url=lab_frame.url,
+                        ssh_runtime=ssh_runtime,
+                    )
+                    _log.debug("contents_api_filename=%s", contents_api_filename)
 
-            if SSHD_MISSING_MARKER in setup_errors:
-                raise RuntimeError(
-                    "SSH server (sshd) could not be installed on the notebook.\n"
-                    "Possible causes: no internet access for apt-get, or a\n"
-                    "misconfigured sshd_deb_dir (bad path / empty directory).\n\n"
-                    "Configure an APT mirror in your project config "
-                    "(.inspire/config.toml):\n\n"
-                    "  [ssh]\n"
-                    '  apt_mirror_url = "http://your-internal-mirror/ubuntu"\n\n'
-                    "Or provide pre-downloaded sshd .deb packages:\n\n"
-                    "  [ssh]\n"
-                    '  sshd_deb_dir = "/shared/path/to/sshd-debs"\n'
-                )
-            _wait_for_setup_completion(
-                page=page,
-                setup_confirmed=setup_confirmed,
-                timer=timer,
-            )
-            _capture_terminal_debug_artifact(page=page, timer=timer)
-            return _verify_and_cache_rtunnel_proxy(
+                    setup_plan = describe_rtunnel_setup_plan(
+                        ssh_runtime=ssh_runtime,
+                        contents_api_filename=contents_api_filename,
+                    )
+                    update_trace_summary(
+                        bootstrap_mode=setup_plan.get("bootstrap_mode"),
+                        rtunnel_source=setup_plan.get("rtunnel_source"),
+                        upload_policy=setup_plan.get("upload_policy"),
+                    )
+                    trace_event("setup_plan", **setup_plan)
+
+                    cmd_lines = build_rtunnel_setup_commands(
+                        port=port,
+                        ssh_port=ssh_port,
+                        ssh_public_key=ssh_public_key,
+                        ssh_runtime=ssh_runtime,
+                        contents_api_filename=contents_api_filename,
+                    )
+                    batch_cmd = _build_batch_setup_script(cmd_lines)
+                    _log.debug(
+                        "Setup script length: %d chars, %d commands", len(batch_cmd), len(cmd_lines)
+                    )
+                    trace_event(
+                        "setup_script_built",
+                        command_count=len(cmd_lines),
+                        batch_length=len(batch_cmd),
+                    )
+                    setup_confirmed, setup_errors = _send_rtunnel_setup_script(
+                        context=context,
+                        page=page,
+                        lab_frame=lab_frame,
+                        batch_cmd=batch_cmd,
+                        timer=timer,
+                    )
+                    _log.debug("Setup confirmed: %s", setup_confirmed)
+                    update_trace_summary(setup_confirmed=setup_confirmed)
+                    trace_event(
+                        "setup_script_result",
+                        setup_confirmed=setup_confirmed,
+                        setup_errors=",".join(setup_errors),
+                    )
+
+                    if SSHD_MISSING_MARKER in setup_errors:
+                        raise RuntimeError(
+                            "OpenSSH bootstrap finished, but no SSH server was installed on "
+                            "the notebook."
+                        )
+                    if SSH_SERVER_MISSING_MARKER in setup_errors:
+                        strategy = str(setup_plan.get("bootstrap_strategy") or "")
+                        if strategy.startswith("dropbear"):
+                            raise RuntimeError(
+                                "Dropbear bootstrap completed, but no SSH server process is "
+                                "running on the notebook."
+                            )
+                        raise RuntimeError(
+                            "Notebook setup finished, but no SSH server process is running."
+                        )
+                    _wait_for_setup_completion(
+                        page=page,
+                        setup_confirmed=setup_confirmed,
+                        timer=timer,
+                    )
+                    trace_event("setup_wait_complete", setup_confirmed=setup_confirmed)
+                    _capture_terminal_debug_artifact(page=page, timer=timer)
+                    proxy_url = _verify_and_cache_rtunnel_proxy(
+                        notebook_id=notebook_id,
+                        jupyter_proxy_url=jupyter_proxy_url,
+                        port=port,
+                        ssh_port=ssh_port,
+                        timeout=timeout,
+                        context=context,
+                        page=page,
+                        account=account,
+                        timer=timer,
+                    )
+                    trace_event("setup_complete", proxy_url=proxy_url)
+                    return proxy_url
+                finally:
+                    timer.summary()
+        except Exception as exc:
+            doctor = collect_notebook_rtunnel_diagnostics(
                 notebook_id=notebook_id,
-                jupyter_proxy_url=jupyter_proxy_url,
                 port=port,
                 ssh_port=ssh_port,
-                timeout=timeout,
-                context=context,
-                page=page,
-                account=account,
-                timer=timer,
+                ssh_runtime=ssh_runtime,
+                session=session,
+                headless=headless,
             )
-
-        finally:
-            timer.summary()
+            if doctor is not None:
+                update_trace_summary(
+                    diagnosis_observed=doctor.observed,
+                    diagnosis_excerpt=doctor.excerpt,
+                )
+            update_trace_summary(last_error=str(exc))
+            trace_event("setup_failed", error=str(exc), error_type=type(exc).__name__)
+            set_last_failure_summary(format_trace_summary(trace))
+            summary_message = attach_failure_summary(str(exc), trace)
+            raise RuntimeError(summary_message) from exc
 
 
 # ============================================================================

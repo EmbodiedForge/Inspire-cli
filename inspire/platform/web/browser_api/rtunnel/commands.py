@@ -1,7 +1,8 @@
-"""Shell commands for bootstrapping rtunnel + sshd/dropbear on a notebook."""
+"""Shell commands for bootstrapping rtunnel + SSH access on a notebook."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Optional
 
 from inspire.config.rtunnel_defaults import (
@@ -17,115 +18,192 @@ from inspire.config.ssh_runtime import (
 BOOTSTRAP_SENTINEL = "/tmp/.inspire_rtunnel_bootstrap_v1"
 SETUP_DONE_MARKER = "INSPIRE_RTUNNEL_SETUP_DONE"
 SSHD_MISSING_MARKER = "INSPIRE_SSHD_INSTALL_FAILED"
+SSH_SERVER_MISSING_MARKER = "INSPIRE_SSH_SERVER_MISSING"
 
 
-def build_rtunnel_setup_commands(
+@dataclass(frozen=True)
+class RtunnelSetupPlan:
+    bootstrap_mode: str
+    bootstrap_strategy: str
+    legacy_bootstrap: bool
+    rtunnel_source: str
+    skip_curl: bool
+    rtunnel_bin_configured: bool
+    contents_api_filename: str
+    contents_api_filename_set: bool
+    sshd_deb_dir_set: bool
+    dropbear_deb_dir_set: bool
+    apt_mirror_url_set: bool
+    setup_script_set: bool
+    sshd_deb_dir_ignored: bool
+
+    def as_trace_dict(self, *, upload_policy: str) -> dict[str, object]:
+        return {
+            "bootstrap_mode": self.bootstrap_mode,
+            "bootstrap_strategy": self.bootstrap_strategy,
+            "legacy_bootstrap": self.legacy_bootstrap,
+            "rtunnel_source": self.rtunnel_source,
+            "upload_policy": upload_policy,
+            "rtunnel_bin_configured": self.rtunnel_bin_configured,
+            "contents_api_filename": self.contents_api_filename,
+            "contents_api_filename_set": self.contents_api_filename_set,
+            "sshd_deb_dir_set": self.sshd_deb_dir_set,
+            "dropbear_deb_dir_set": self.dropbear_deb_dir_set,
+            "apt_mirror_url_set": self.apt_mirror_url_set,
+            "setup_script_set": self.setup_script_set,
+            "sshd_deb_dir_ignored": self.sshd_deb_dir_ignored,
+            "skip_curl": self.skip_curl,
+        }
+
+
+def _resolve_rtunnel_source(
     *,
-    port: int,
-    ssh_port: int,
-    ssh_public_key: Optional[str],
+    rtunnel_bin: Optional[str],
+    contents_api_filename: Optional[str],
+) -> str:
+    if rtunnel_bin:
+        return "configured_bin"
+    if contents_api_filename:
+        return "contents_api"
+    return "download_or_existing_tmp"
+
+
+def resolve_rtunnel_setup_plan(
+    *,
     ssh_runtime: Optional[SshRuntimeConfig] = None,
     contents_api_filename: Optional[str] = None,
-) -> list[str]:
-    import shlex
-
+) -> RtunnelSetupPlan:
     if ssh_runtime is None:
         ssh_runtime = resolve_ssh_runtime_config()
-
-    if ssh_public_key:
-        ssh_public_key_escaped = ssh_public_key.replace("'", "'\"'\"'")
-        key_line = (
-            "mkdir -p /root/.ssh && chmod 700 /root/.ssh && echo "
-            f"'{ssh_public_key_escaped}' >> /root/.ssh/authorized_keys && chmod 600 "
-            "/root/.ssh/authorized_keys"
-        )
-    else:
-        key_line = "mkdir -p /root/.ssh && chmod 700 /root/.ssh"
 
     rtunnel_bin = ssh_runtime.rtunnel_bin
     sshd_deb_dir = ssh_runtime.sshd_deb_dir
     dropbear_deb_dir = ssh_runtime.dropbear_deb_dir
-    rtunnel_download_url = ssh_runtime.rtunnel_download_url or DEFAULT_RTUNNEL_DOWNLOAD_URL
+    apt_mirror_url = ssh_runtime.apt_mirror_url
+    setup_script = ssh_runtime.setup_script
 
-    cmd_lines = [
-        f"PORT={port}",
-        f"SSH_PORT={ssh_port}",
-        key_line,
-        f"BOOTSTRAP_SENTINEL={BOOTSTRAP_SENTINEL}",
+    if setup_script:
+        bootstrap_mode = "dropbear"
+        bootstrap_strategy = "dropbear_setup_script"
+    elif dropbear_deb_dir:
+        bootstrap_mode = "dropbear"
+        bootstrap_strategy = "dropbear_bundle"
+    elif apt_mirror_url:
+        bootstrap_mode = "dropbear"
+        bootstrap_strategy = "dropbear_mirror"
+    elif sshd_deb_dir:
+        bootstrap_mode = "openssh"
+        bootstrap_strategy = "openssh_legacy_debs"
+    else:
+        bootstrap_mode = "openssh"
+        bootstrap_strategy = "openssh_legacy_apt"
+
+    legacy_bootstrap = bootstrap_mode == "openssh"
+    skip_curl = bool(contents_api_filename or bootstrap_mode == "dropbear")
+
+    return RtunnelSetupPlan(
+        bootstrap_mode=bootstrap_mode,
+        bootstrap_strategy=bootstrap_strategy,
+        legacy_bootstrap=legacy_bootstrap,
+        rtunnel_source=_resolve_rtunnel_source(
+            rtunnel_bin=rtunnel_bin,
+            contents_api_filename=contents_api_filename,
+        ),
+        skip_curl=skip_curl,
+        rtunnel_bin_configured=bool(rtunnel_bin),
+        contents_api_filename=contents_api_filename or "",
+        contents_api_filename_set=bool(contents_api_filename),
+        sshd_deb_dir_set=bool(sshd_deb_dir),
+        dropbear_deb_dir_set=bool(dropbear_deb_dir),
+        apt_mirror_url_set=bool(apt_mirror_url),
+        setup_script_set=bool(setup_script),
+        sshd_deb_dir_ignored=bool(sshd_deb_dir and bootstrap_mode == "dropbear"),
+    )
+
+
+def describe_rtunnel_setup_plan(
+    *,
+    ssh_runtime: Optional[SshRuntimeConfig] = None,
+    contents_api_filename: Optional[str] = None,
+) -> dict[str, object]:
+    if ssh_runtime is None:
+        ssh_runtime = resolve_ssh_runtime_config()
+    plan = resolve_rtunnel_setup_plan(
+        ssh_runtime=ssh_runtime,
+        contents_api_filename=contents_api_filename,
+    )
+    return plan.as_trace_dict(upload_policy=ssh_runtime.rtunnel_upload_policy)
+
+
+def _build_key_setup_line(ssh_public_key: Optional[str]) -> str:
+    if ssh_public_key:
+        ssh_public_key_escaped = ssh_public_key.replace("'", "'\"'\"'")
+        return (
+            "mkdir -p /root/.ssh && chmod 700 /root/.ssh && echo "
+            f"'{ssh_public_key_escaped}' >> /root/.ssh/authorized_keys && chmod 600 "
+            "/root/.ssh/authorized_keys"
+        )
+    return "mkdir -p /root/.ssh && chmod 700 /root/.ssh"
+
+
+def _build_rtunnel_bin_lines(
+    *,
+    rtunnel_bin: Optional[str],
+    contents_api_filename: Optional[str],
+) -> list[str]:
+    import shlex
+
+    lines = [
+        f"RTUNNEL_BIN_PATH={shlex.quote(rtunnel_bin or '')}",
+        "RTUNNEL_BIN=/tmp/rtunnel",
     ]
-
-    # Set $RTUNNEL_DOWNLOAD_URL via uname for the remote container
-    cmd_lines.append(rtunnel_download_url_shell_snippet())
-
-    # If user explicitly configured a URL, override the dynamic detection
-    try:
-        auto_url = default_rtunnel_download_url()
-    except ValueError:
-        auto_url = None
-    if auto_url is not None and rtunnel_download_url != auto_url:
-        cmd_lines.append(f"RTUNNEL_DOWNLOAD_URL={shlex.quote(rtunnel_download_url)}")
-
-    # Always set RTUNNEL_BIN_PATH (empty string if not configured)
-    cmd_lines.append(f"RTUNNEL_BIN_PATH={shlex.quote(rtunnel_bin or '')}")
     if rtunnel_bin:
-        cmd_lines.append(
-            'if [ -f "$RTUNNEL_BIN_PATH" ]; then cp "$RTUNNEL_BIN_PATH" /tmp/rtunnel '
-            "&& chmod +x /tmp/rtunnel; fi"
+        lines.append(
+            'if [ -x "$RTUNNEL_BIN_PATH" ]; then RTUNNEL_BIN="$RTUNNEL_BIN_PATH"; '
+            'elif [ -f "$RTUNNEL_BIN_PATH" ]; then cp "$RTUNNEL_BIN_PATH" /tmp/rtunnel '
+            "&& chmod +x /tmp/rtunnel && RTUNNEL_BIN=/tmp/rtunnel; fi"
         )
 
     if contents_api_filename:
-        import shlex as _shlex_inner
-
-        safe_name = _shlex_inner.quote(contents_api_filename)
-        # The Jupyter Contents API uploads to the server root directory,
-        # which is typically the notebook workdir — NOT necessarily $HOME.
-        # Check CWD first (matches Jupyter root for fresh terminals),
-        # then $HOME as fallback.
-        cmd_lines.append(
+        safe_name = shlex.quote(contents_api_filename)
+        lines.append(
             f'for _d in . "$HOME"; do '
-            f'if [ ! -x /tmp/rtunnel ] && [ -f "$_d"/{safe_name} ]; then '
-            f'cp "$_d"/{safe_name} /tmp/rtunnel && chmod +x /tmp/rtunnel; break; fi; done'
+            f'if [ ! -x "$RTUNNEL_BIN" ] && [ -f "$_d"/{safe_name} ]; then '
+            f'cp "$_d"/{safe_name} /tmp/rtunnel && chmod +x /tmp/rtunnel '
+            f"&& RTUNNEL_BIN=/tmp/rtunnel; break; fi; done"
         )
+    return lines
 
-    if sshd_deb_dir:
-        cmd_lines.append(f"SSHD_DEB_DIR={shlex.quote(sshd_deb_dir)}")
-    if dropbear_deb_dir:
-        cmd_lines.append(f"DROPBEAR_DEB_DIR={shlex.quote(dropbear_deb_dir)}")
-    apt_mirror_url = ssh_runtime.apt_mirror_url
-    if apt_mirror_url:
-        cmd_lines.append(f"APT_MIRROR_URL={shlex.quote(apt_mirror_url)}")
 
-    # Skip curl fallback when rtunnel was delivered via Contents API or when
-    # the notebook is known to have no internet (dropbear/apt-mirror config).
-    skip_curl = bool(contents_api_filename or dropbear_deb_dir or apt_mirror_url)
-
+def _build_curl_rtunnel_block(*, skip_curl: bool) -> str:
     if skip_curl:
-        curl_rtunnel_block = (
+        return (
             'if [ ! -x "$RTUNNEL_BIN" ]; then '
             'echo "ERROR: rtunnel binary not found at /tmp/rtunnel '
             '(no curl fallback for offline notebooks)" >&2; fi'
         )
-    else:
-        curl_rtunnel_block = (
-            'if [ ! -x "$RTUNNEL_BIN" ] && [ "$_INET" = 1 ]; then curl -fsSL '
-            "--connect-timeout 10 --max-time 30 "
-            '"$RTUNNEL_DOWNLOAD_URL" -o /tmp/rtunnel.tgz && '
-            "tar -xzf /tmp/rtunnel.tgz -C /tmp && chmod +x /tmp/rtunnel "
-            "2>/dev/null; fi"
-        )
+    return (
+        'if [ ! -x "$RTUNNEL_BIN" ] && [ "$_INET" = 1 ]; then curl -fsSL '
+        "--connect-timeout 10 --max-time 30 "
+        '"$RTUNNEL_DOWNLOAD_URL" -o /tmp/rtunnel.tgz && '
+        "tar -xzf /tmp/rtunnel.tgz -C /tmp && chmod +x /tmp/rtunnel "
+        "&& RTUNNEL_BIN=/tmp/rtunnel "
+        "2>/dev/null; fi"
+    )
 
-    # Quick TCP probe: set _INET=1 if archive.ubuntu.com:80 is reachable
-    # within 3s, else _INET=0.  Gates apt-get and curl on no-internet
-    # notebooks so they fail immediately instead of waiting for DNS timeout.
-    inet_probe = (
+
+def _inet_probe_command() -> str:
+    return (
         "_INET=0; timeout 3 bash -c "
         "'exec 3<>/dev/tcp/archive.ubuntu.com/80' 2>/dev/null && _INET=1"
     )
 
-    openssh_bootstrap_cmd = (
-        'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x /tmp/rtunnel ] '
+
+def _build_openssh_bootstrap_cmd(*, curl_rtunnel_block: str) -> str:
+    return (
+        'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x "$RTUNNEL_BIN" ] '
         "|| [ ! -x /usr/sbin/sshd ]; then "
-        f"{inet_probe}; "
+        f"{_inet_probe_command()}; "
         "if [ ! -x /usr/sbin/sshd ]; then "
         'if [ -n "${SSHD_DEB_DIR:-}" ] && ls "$SSHD_DEB_DIR"/*.deb >/dev/null 2>&1; then '
         'dpkg -i "$SSHD_DEB_DIR"/*.deb >/dev/null 2>&1 || true; '
@@ -134,21 +212,22 @@ def build_rtunnel_setup_commands(
         "timeout 30 apt-get -o Acquire::Retries=0 -o Acquire::http::Timeout=10 "
         "update -qq && "
         "timeout 30 apt-get install -y -qq openssh-server; fi; fi; "
-        "RTUNNEL_BIN=/tmp/rtunnel; "
-        'if [ -n "${RTUNNEL_BIN_PATH:-}" ] && [ -x "$RTUNNEL_BIN_PATH" ]; then '
-        'cp "$RTUNNEL_BIN_PATH" /tmp/rtunnel && chmod +x /tmp/rtunnel; fi; '
         f"{curl_rtunnel_block}; "
         'if [ -x /usr/sbin/sshd ] && [ -x "$RTUNNEL_BIN" ]; then '
         'touch "$BOOTSTRAP_SENTINEL"; else rm -f "$BOOTSTRAP_SENTINEL"; fi; fi'
     )
-    ensure_rtunnel_cmd = (
-        "RTUNNEL_BIN=/tmp/rtunnel; "
+
+
+def _build_ensure_rtunnel_cmd(*, curl_rtunnel_block: str) -> str:
+    return (
         'if [ ! -x "$RTUNNEL_BIN" ] && [ -n "${RTUNNEL_BIN_PATH:-}" ] '
-        '&& [ -x "$RTUNNEL_BIN_PATH" ]; then '
-        'cp "$RTUNNEL_BIN_PATH" /tmp/rtunnel && chmod +x /tmp/rtunnel; fi; '
+        '&& [ -x "$RTUNNEL_BIN_PATH" ]; then RTUNNEL_BIN="$RTUNNEL_BIN_PATH"; fi; '
         f"{curl_rtunnel_block}"
     )
-    start_sshd_cmd = (
+
+
+def _build_start_sshd_cmd() -> str:
+    return (
         'if [ -x /usr/sbin/sshd ] && ! ps -ef | grep -q "[s]shd -p $SSH_PORT"; then '
         "mkdir -p /run/sshd && chmod 0755 /run/sshd; "
         "ssh-keygen -A >/dev/null 2>&1 || true; "
@@ -156,7 +235,10 @@ def build_rtunnel_setup_commands(
         "-o PasswordAuthentication=no -o PubkeyAuthentication=yes "
         ">/dev/null 2>&1 & fi"
     )
-    start_dropbear_cmd = (
+
+
+def _build_start_dropbear_cmd() -> str:
+    return (
         'if [ -n "${DROPBEAR_DEB_DIR:-}" ] || [ -n "${APT_MIRROR_URL:-}" ]; then '
         'DB_BIN=""; '
         'if [ -n "${DROPBEAR_DEB_DIR:-}" ] && [ -x "$DROPBEAR_DEB_DIR/usr/sbin/dropbear" ]; then '
@@ -173,17 +255,31 @@ def build_rtunnel_setup_commands(
         'if [ -z "$DB_BIN" ] || [ ! -x "$DB_BIN" ]; then '
         "[ -x /usr/sbin/dropbear ] && DB_BIN=/usr/sbin/dropbear; fi; "
         'if { [ -z "$DB_BIN" ] || [ ! -x "$DB_BIN" ]; } && [ -n "${APT_MIRROR_URL:-}" ]; then '
+        'DISTRO_ID=$(. /etc/os-release 2>/dev/null && echo "${ID:-}"); '
+        'MIRROR_DISTRO="${DISTRO_ID:-ubuntu}"; '
+        '[ "$MIRROR_DISTRO" = "debian" ] || MIRROR_DISTRO="ubuntu"; '
         'CODENAME=$(. /etc/os-release 2>/dev/null && echo "${VERSION_CODENAME:-}"); '
         '[ -z "$CODENAME" ] && CODENAME=$(lsb_release -cs 2>/dev/null || true); '
         '[ -z "$CODENAME" ] && CODENAME=jammy; '
-        "for _f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do "
+        'MIRROR_COMPONENTS="main restricted universe multiverse"; '
+        '[ "${DISTRO_ID:-}" = "debian" ] && MIRROR_COMPONENTS="main"; '
+        'MIRROR_URL="${APT_MIRROR_URL%/}"; '
+        'case "$MIRROR_URL" in '
+        '*/repository) MIRROR_URL="$MIRROR_URL/$MIRROR_DISTRO" ;; '
+        "*/repository/debian|*/repository/ubuntu) true ;; "
+        "esac; "
+        'MIRROR_URL="$MIRROR_URL/"; '
+        "for _f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list "
+        "/etc/apt/sources.list.d/*.sources; do "
         '[ -f "$_f" ] && mv "$_f" "$_f.bak" 2>/dev/null; done; '
-        'echo "deb $APT_MIRROR_URL $CODENAME main restricted universe multiverse" '
+        'echo "deb $MIRROR_URL $CODENAME $MIRROR_COMPONENTS" '
         "> /etc/apt/sources.list.d/inspire-mirror.list; "
         "export DEBIAN_FRONTEND=noninteractive; "
-        "timeout 60 apt-get update -qq >/dev/null 2>&1 && "
+        "timeout 60 apt-get update -qq >/dev/null 2>&1 || true; "
+        "dpkg --remove --force-remove-reinstreq openssh-server >/dev/null 2>&1 || true; "
         "timeout 60 apt-get install -y -qq dropbear-bin >/dev/null 2>&1 || true; "
-        "for _f in /etc/apt/sources.list.bak /etc/apt/sources.list.d/*.list.bak; do "
+        "for _f in /etc/apt/sources.list.bak /etc/apt/sources.list.d/*.list.bak "
+        "/etc/apt/sources.list.d/*.sources.bak; do "
         '[ -f "$_f" ] && mv "$_f" "${_f%.bak}" 2>/dev/null; done; '
         "[ -x /usr/sbin/dropbear ] && DB_BIN=/usr/sbin/dropbear; fi; "
         'if [ -n "$DB_BIN" ] && [ -x "$DB_BIN" ] && ! ps -ef | grep -q "[d]ropbear.*-p.*$SSH_PORT"; then '
@@ -196,49 +292,120 @@ def build_rtunnel_setup_commands(
         "if [ -f /tmp/dropbear_ed25519_host_key ]; then "
         '"$DB_BIN" -E -s -g -p "127.0.0.1:$SSH_PORT" '
         "-r /tmp/dropbear_ed25519_host_key -P /tmp/dropbear.pid "
-        "2>>/tmp/dropbear.log; fi; fi; fi"
+        "2>>/tmp/dropbear.log & fi; fi; fi"
     )
-    start_rtunnel_cmd = (
-        "if [ -x /tmp/rtunnel ] && ! ps -ef | "
+
+
+def _build_start_rtunnel_cmd() -> str:
+    return (
+        'if [ -x "$RTUNNEL_BIN" ] && ! ps -ef | '
         'grep -Eq "[r]tunnel .*([[:space:]]|:)$PORT([[:space:]]|$)"; then '
-        'nohup /tmp/rtunnel "$SSH_PORT" "$PORT" '
+        'nohup "$RTUNNEL_BIN" "$SSH_PORT" "$PORT" '
         ">/tmp/rtunnel-server.log 2>&1 & fi"
     )
 
-    if dropbear_deb_dir or apt_mirror_url:
+
+def _build_ssh_server_status_cmd(*, include_sshd_marker: bool) -> str:
+    checks = [
+        'ps -ef | grep -q "[d]ropbear.*-p.*$SSH_PORT"',
+        'ps -ef | grep -q "[s]shd -p $SSH_PORT"',
+    ]
+    status_check = " || ".join(checks)
+    parts: list[str] = []
+    if include_sshd_marker:
+        parts.append(f'if [ ! -x /usr/sbin/sshd ]; then echo "{SSHD_MISSING_MARKER}"; fi')
+    parts.append(f'if {status_check}; then true; else echo "{SSH_SERVER_MISSING_MARKER}"; fi')
+    return " ".join(parts)
+
+
+def build_rtunnel_setup_commands(
+    *,
+    port: int,
+    ssh_port: int,
+    ssh_public_key: Optional[str],
+    ssh_runtime: Optional[SshRuntimeConfig] = None,
+    contents_api_filename: Optional[str] = None,
+) -> list[str]:
+    import shlex
+
+    if ssh_runtime is None:
+        ssh_runtime = resolve_ssh_runtime_config()
+
+    plan = resolve_rtunnel_setup_plan(
+        ssh_runtime=ssh_runtime,
+        contents_api_filename=contents_api_filename,
+    )
+    rtunnel_download_url = ssh_runtime.rtunnel_download_url or DEFAULT_RTUNNEL_DOWNLOAD_URL
+
+    cmd_lines = [
+        f"PORT={port}",
+        f"SSH_PORT={ssh_port}",
+        _build_key_setup_line(ssh_public_key),
+        f"BOOTSTRAP_SENTINEL={BOOTSTRAP_SENTINEL}",
+    ]
+
+    cmd_lines.append(rtunnel_download_url_shell_snippet())
+    try:
+        auto_url = default_rtunnel_download_url()
+    except ValueError:
+        auto_url = None
+    if auto_url is not None and rtunnel_download_url != auto_url:
+        cmd_lines.append(f"RTUNNEL_DOWNLOAD_URL={shlex.quote(rtunnel_download_url)}")
+
+    cmd_lines.extend(
+        _build_rtunnel_bin_lines(
+            rtunnel_bin=ssh_runtime.rtunnel_bin,
+            contents_api_filename=contents_api_filename,
+        )
+    )
+
+    if plan.bootstrap_strategy == "openssh_legacy_debs":
+        cmd_lines.append(f"SSHD_DEB_DIR={shlex.quote(ssh_runtime.sshd_deb_dir or '')}")
+    if plan.bootstrap_mode == "dropbear" and ssh_runtime.dropbear_deb_dir:
+        cmd_lines.append(f"DROPBEAR_DEB_DIR={shlex.quote(ssh_runtime.dropbear_deb_dir)}")
+    if plan.bootstrap_mode == "dropbear" and ssh_runtime.apt_mirror_url:
+        cmd_lines.append(f"APT_MIRROR_URL={shlex.quote(ssh_runtime.apt_mirror_url)}")
+
+    curl_rtunnel_block = _build_curl_rtunnel_block(skip_curl=plan.skip_curl)
+    openssh_bootstrap_cmd = _build_openssh_bootstrap_cmd(curl_rtunnel_block=curl_rtunnel_block)
+    ensure_rtunnel_cmd = _build_ensure_rtunnel_cmd(curl_rtunnel_block=curl_rtunnel_block)
+    start_sshd_cmd = _build_start_sshd_cmd()
+    start_dropbear_cmd = _build_start_dropbear_cmd()
+    start_rtunnel_cmd = _build_start_rtunnel_cmd()
+
+    if plan.bootstrap_mode == "dropbear":
         setup_script = ssh_runtime.setup_script
         if setup_script:
             cmd_lines.append(f"SETUP_SCRIPT={shlex.quote(setup_script)}")
             cmd_lines.append('RTUNNEL_URL="$RTUNNEL_DOWNLOAD_URL"')
             cmd_lines.append(
                 '[ -f "$SETUP_SCRIPT" ] || echo "WARN: setup script not found: $SETUP_SCRIPT '
-                '(falling back to openssh bootstrap)"'
+                '(falling back to dropbear bootstrap)"'
             )
             cmd_lines.append(
                 'if [ -f "$SETUP_SCRIPT" ]; then '
-                'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x /tmp/rtunnel ]; then '
+                'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x "$RTUNNEL_BIN" ]; then '
                 'bash "$SETUP_SCRIPT" "$DROPBEAR_DEB_DIR" "$RTUNNEL_BIN_PATH" '
                 '"$SSH_PORT" "$PORT" >/tmp/setup_ssh.log 2>&1; '
-                'if [ $? -eq 0 ] && [ -x /tmp/rtunnel ]; then touch "$BOOTSTRAP_SENTINEL"; '
+                'if [ $? -eq 0 ] && [ -x "$RTUNNEL_BIN" ]; then touch "$BOOTSTRAP_SENTINEL"; '
                 'else rm -f "$BOOTSTRAP_SENTINEL"; fi; fi; '
-                f"else {openssh_bootstrap_cmd}; fi"
+                "else true; fi"
             )
             cmd_lines.append("tail -40 /tmp/setup_ssh.log 2>/dev/null || true")
         else:
             cmd_lines.append('RTUNNEL_URL="$RTUNNEL_DOWNLOAD_URL"')
             cmd_lines.append(ensure_rtunnel_cmd)
         cmd_lines.append(start_dropbear_cmd)
-        cmd_lines.append(start_sshd_cmd)
         cmd_lines.append(start_rtunnel_cmd)
+        cmd_lines.append(_build_ssh_server_status_cmd(include_sshd_marker=False))
     else:
-        sshd_missing_check = f'if [ ! -x /usr/sbin/sshd ]; then echo "{SSHD_MISSING_MARKER}"; fi'
         cmd_lines.extend(
             [
                 'RTUNNEL_URL="$RTUNNEL_DOWNLOAD_URL"',
                 openssh_bootstrap_cmd,
-                sshd_missing_check,
                 start_sshd_cmd,
                 start_rtunnel_cmd,
+                _build_ssh_server_status_cmd(include_sshd_marker=True),
             ]
         )
 
@@ -250,3 +417,15 @@ def build_rtunnel_setup_commands(
     cmd_lines.append(f"echo {SETUP_DONE_MARKER}")
 
     return cmd_lines
+
+
+__all__ = [
+    "BOOTSTRAP_SENTINEL",
+    "SETUP_DONE_MARKER",
+    "SSHD_MISSING_MARKER",
+    "SSH_SERVER_MISSING_MARKER",
+    "RtunnelSetupPlan",
+    "build_rtunnel_setup_commands",
+    "describe_rtunnel_setup_plan",
+    "resolve_rtunnel_setup_plan",
+]

@@ -7,8 +7,10 @@ import pytest
 from inspire.config.ssh_runtime import SshRuntimeConfig
 from inspire.platform.web.browser_api.rtunnel import (
     BOOTSTRAP_SENTINEL,
+    SSH_SERVER_MISSING_MARKER,
     SSHD_MISSING_MARKER,
     build_rtunnel_setup_commands,
+    resolve_rtunnel_setup_plan,
 )
 
 
@@ -30,6 +32,7 @@ def test_build_commands_uses_explicit_runtime_config(monkeypatch: pytest.MonkeyP
     joined = "\n".join(commands)
 
     assert "RTUNNEL_BIN_PATH=/project/rtunnel" in joined
+    assert "RTUNNEL_BIN=/tmp/rtunnel" in joined
     assert "SSHD_DEB_DIR=/project/sshd" in joined
     assert "/env/rtunnel" not in joined
     assert "/env/sshd" not in joined
@@ -39,6 +42,10 @@ def test_build_commands_uses_explicit_runtime_config(monkeypatch: pytest.MonkeyP
     assert "RTUNNEL_DOWNLOAD_URL=" in joined
     # RTUNNEL_URL compat alias references RTUNNEL_DOWNLOAD_URL
     assert 'RTUNNEL_URL="$RTUNNEL_DOWNLOAD_URL"' in joined
+
+    plan = resolve_rtunnel_setup_plan(ssh_runtime=runtime)
+    assert plan.bootstrap_strategy == "openssh_legacy_debs"
+    assert plan.legacy_bootstrap is True
 
 
 def test_dropbear_without_setup_script_uses_dpkg() -> None:
@@ -91,11 +98,17 @@ def test_dropbear_apt_mirror_fallback() -> None:
     # dpkg path should still be tried first
     assert "dpkg -i" in joined
     # Codename detection via /etc/os-release (primary) then lsb_release (fallback)
+    assert "DISTRO_ID=$(. /etc/os-release" in joined
     assert "/etc/os-release" in joined
     assert "VERSION_CODENAME" in joined
     assert "lsb_release" in joined
+    assert 'MIRROR_COMPONENTS="main restricted universe multiverse"' in joined
+    assert 'MIRROR_COMPONENTS="main"' in joined
     # Existing sources moved aside to avoid timeout on unreachable mirrors
     assert "sources.list.bak" in joined
+    assert ".sources.bak" in joined
+    assert "force-remove-reinstreq openssh-server" in joined
+    assert 'MIRROR_COMPONENTS="main"' in joined
     # Dropbear launch should be guarded by host key existence
     assert "[ -f /tmp/dropbear_ed25519_host_key ]" in joined
 
@@ -121,6 +134,28 @@ def test_apt_mirror_only_without_dropbear_deb_dir() -> None:
     assert "dropbear" in joined
     # Should NOT have DROPBEAR_DEB_DIR set
     assert "DROPBEAR_DEB_DIR=" not in joined
+    assert SSH_SERVER_MISSING_MARKER in joined
+
+
+def test_apt_mirror_repository_root_is_normalized_on_notebook() -> None:
+    runtime = SshRuntimeConfig(
+        apt_mirror_url="http://nexus.example/repository/",
+    )
+
+    commands = build_rtunnel_setup_commands(
+        port=31337,
+        ssh_port=22222,
+        ssh_public_key=None,
+        ssh_runtime=runtime,
+    )
+    joined = "\n".join(commands)
+
+    assert "APT_MIRROR_URL=http://nexus.example/repository/" in joined
+    assert 'MIRROR_DISTRO="${DISTRO_ID:-ubuntu}"' in joined
+    assert '[ "$MIRROR_DISTRO" = "debian" ] || MIRROR_DISTRO="ubuntu"' in joined
+    assert 'MIRROR_URL="${APT_MIRROR_URL%/}"' in joined
+    assert '*/repository) MIRROR_URL="$MIRROR_URL/$MIRROR_DISTRO" ;;' in joined
+    assert 'echo "deb $MIRROR_URL $CODENAME $MIRROR_COMPONENTS" ' in joined
 
 
 def test_dropbear_command_contains_setup_script_and_args() -> None:
@@ -140,13 +175,13 @@ def test_dropbear_command_contains_setup_script_and_args() -> None:
     joined = "\n".join(commands)
     assert any(line.startswith("DROPBEAR_DEB_DIR=/project/dropbear") for line in commands)
     assert any(line.startswith("SETUP_SCRIPT=/project/setup_ssh.sh") for line in commands)
-    assert "falling back to openssh bootstrap" in joined
+    assert "falling back to dropbear bootstrap" in joined
     assert "RTUNNEL_URL=" in joined
     assert 'RTUNNEL_URL="$RTUNNEL_DOWNLOAD_URL"' in joined
-    assert 'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x /tmp/rtunnel ]; then ' in joined
+    assert 'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x "$RTUNNEL_BIN" ]; then ' in joined
     assert 'bash "$SETUP_SCRIPT" "$DROPBEAR_DEB_DIR" "$RTUNNEL_BIN_PATH"' in joined
-    assert "apt-get install -y -qq openssh-server" in joined
-    assert 'grep -q "[s]shd -p $SSH_PORT"' in joined
+    assert "dropbear" in joined
+    assert 'grep -q "[d]ropbear.*-p.*$SSH_PORT"' in joined
     assert 'rm -f "$BOOTSTRAP_SENTINEL"' in joined
     # Verify the long single-line command is gone — setup invocation should be its own line
     assert not any(
@@ -169,7 +204,7 @@ def test_non_dropbear_uses_bootstrap_sentinel_and_start_only_commands() -> None:
     joined = "\n".join(commands)
 
     assert f"BOOTSTRAP_SENTINEL={BOOTSTRAP_SENTINEL}" in joined
-    assert 'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x /tmp/rtunnel ] ' in joined
+    assert 'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x "$RTUNNEL_BIN" ] ' in joined
     assert "apt-get install -y -qq openssh-server" in joined
     assert 'touch "$BOOTSTRAP_SENTINEL"' in joined
     assert 'rm -f "$BOOTSTRAP_SENTINEL"' in joined
@@ -204,7 +239,7 @@ def test_contents_api_filename_inserts_copy_command() -> None:
     assert ".inspire_rtunnel_bin" in joined
     assert 'cp "$_d"/' in joined
     assert "chmod +x /tmp/rtunnel" in joined
-    assert "[ ! -x /tmp/rtunnel ]" in joined
+    assert '[ ! -x "$RTUNNEL_BIN" ]' in joined
     # Checks CWD first, then $HOME as fallback
     assert 'for _d in . "$HOME"' in joined
 
@@ -239,7 +274,10 @@ def test_contents_api_filename_does_not_override_rtunnel_bin_path() -> None:
     bin_path_idx = None
     contents_api_idx = None
     for i, line in enumerate(commands):
-        if bin_path_idx is None and 'cp "$RTUNNEL_BIN_PATH" /tmp/rtunnel' in line:
+        if (
+            bin_path_idx is None
+            and 'if [ -x "$RTUNNEL_BIN_PATH" ]; then RTUNNEL_BIN="$RTUNNEL_BIN_PATH"; ' in line
+        ):
             bin_path_idx = i
         if contents_api_idx is None and ".inspire_rtunnel_bin" in line and "cp" in line:
             contents_api_idx = i
@@ -270,6 +308,7 @@ def test_default_path_includes_sshd_missing_marker() -> None:
     assert SSHD_MISSING_MARKER in joined
     assert f'echo "{SSHD_MISSING_MARKER}"' in joined
     assert "[ ! -x /usr/sbin/sshd ]" in joined
+    assert SSH_SERVER_MISSING_MARKER in joined
 
 
 def test_dropbear_path_omits_sshd_missing_marker() -> None:
@@ -286,3 +325,18 @@ def test_dropbear_path_omits_sshd_missing_marker() -> None:
     joined = "\n".join(commands)
 
     assert SSHD_MISSING_MARKER not in joined
+    assert SSH_SERVER_MISSING_MARKER in joined
+
+
+def test_setup_plan_prefers_dropbear_and_ignores_sshd_deb_dir() -> None:
+    runtime = SshRuntimeConfig(
+        apt_mirror_url="http://mirror.example/debian/",
+        sshd_deb_dir="/legacy/sshd",
+    )
+
+    plan = resolve_rtunnel_setup_plan(ssh_runtime=runtime)
+
+    assert plan.bootstrap_mode == "dropbear"
+    assert plan.bootstrap_strategy == "dropbear_mirror"
+    assert plan.legacy_bootstrap is False
+    assert plan.sshd_deb_dir_ignored is True

@@ -13,12 +13,13 @@ except ImportError:  # pragma: no cover
         pass
 
 
-from .commands import SETUP_DONE_MARKER, SSHD_MISSING_MARKER
+from .commands import SETUP_DONE_MARKER, SSHD_MISSING_MARKER, SSH_SERVER_MISSING_MARKER
 from ._jupyter import (
     _build_jupyter_xsrf_headers,
     _extract_jupyter_token,
     _jupyter_server_base,
 )
+from .logging import trace_event, update_trace_summary
 
 import logging
 
@@ -38,8 +39,10 @@ def _create_terminal_via_api(context: Any, lab_url: str) -> str | None:
     try:
         headers = _build_jupyter_xsrf_headers(context)
         resp = context.request.post(api_url, headers=headers, timeout=10000)
+        trace_event("terminal_api_create_response", status=resp.status)
         if resp.status in (200, 201):
             data = resp.json()
+            trace_event("terminal_api_create_success", term_name=data.get("name"))
             return data.get("name")
     except (
         PlaywrightError,
@@ -49,7 +52,8 @@ def _create_terminal_via_api(context: Any, lab_url: str) -> str | None:
         TimeoutError,
         ValueError,
         TypeError,
-    ):
+    ) as exc:
+        trace_event("terminal_api_create_failed", error=exc)
         pass
     return None
 
@@ -72,6 +76,7 @@ def _delete_terminal_via_api(
     try:
         headers = _build_jupyter_xsrf_headers(context)
         resp = context.request.delete(api_url, headers=headers, timeout=5000)
+        trace_event("terminal_api_delete_response", term_name=safe_term_name, status=resp.status)
         return resp.status in (200, 204, 404)
     except (
         PlaywrightError,
@@ -81,7 +86,8 @@ def _delete_terminal_via_api(
         TimeoutError,
         ValueError,
         TypeError,
-    ):
+    ) as exc:
+        trace_event("terminal_api_delete_failed", term_name=safe_term_name, error=exc)
         return False
 
 
@@ -96,7 +102,9 @@ def _build_terminal_websocket_url(lab_url: str, term_name: str) -> str:
 
     token = _extract_jupyter_token(lab_url)
     query = urlencode({"token": token}) if token else ""
-    return urlunsplit((scheme, parsed.netloc, ws_path, query, ""))
+    ws_url = urlunsplit((scheme, parsed.netloc, ws_path, query, ""))
+    trace_event("terminal_ws_url_built", term_name=term_name, ws_url=ws_url)
+    return ws_url
 
 
 def _send_terminal_command_via_websocket(
@@ -275,14 +283,152 @@ def _send_terminal_command_via_websocket(
             if detected_errors is not None:
                 detected_errors.extend(result.get("errors", []))
             ok = bool(result.get("ok", False))
+            trace_event(
+                "terminal_ws_command_result",
+                ok=ok,
+                marker=completion_marker or "",
+                errors=",".join(result.get("errors", [])),
+            )
             if not ok:
                 diag = result.get("diagnostics")
                 if diag:
                     _log_ws_diagnostics(diag)
+            else:
+                update_trace_summary(terminal_transport="terminal_ws")
             return ok
         return bool(result)
-    except (PlaywrightError, AttributeError, RuntimeError, TypeError, ValueError):
+    except (PlaywrightError, AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        trace_event("terminal_ws_command_exception", error=exc)
         return False
+
+
+def _run_terminal_command_capture_via_websocket(
+    *,
+    context: Any,
+    lab_frame: Any,
+    batch_cmd: str,
+    timeout_ms: int,
+    completion_marker: str,
+) -> dict[str, Any]:
+    """Run a terminal command and capture bounded stdout until completion marker."""
+    term_name = _create_terminal_via_api(context, lab_frame.url)
+    if not term_name:
+        return {"ok": False, "output": ""}
+
+    stdin_payload = batch_cmd.rstrip("\r\n") + "\r"
+    try:
+        ws_url = _build_terminal_websocket_url(lab_frame.url, term_name)
+        result = lab_frame.evaluate(
+            """
+                async ({ wsUrl, stdinData, timeoutMs, promptTimeoutMs, marker, outputCap }) => {
+                  return await new Promise((resolve) => {
+                    let settled = false;
+                    let sent = false;
+                    let socket = null;
+                    let afterSendBuf = "";
+                    const startTime = Date.now();
+                    const finish = (ok) => {
+                      if (settled) return;
+                      settled = true;
+                      try {
+                        if (socket) socket.close();
+                      } catch (_) {}
+                      resolve({
+                        ok,
+                        output: afterSendBuf,
+                        diagnostics: { elapsed: Date.now() - startTime }
+                      });
+                    };
+                    const timer = setTimeout(() => finish(false), timeoutMs);
+                    const CHUNK = 2048;
+                    const DELAY = 50;
+                    const doSend = () => {
+                      if (sent || settled) return;
+                      sent = true;
+                      const chunks = [];
+                      for (let i = 0; i < stdinData.length; i += CHUNK)
+                        chunks.push(stdinData.slice(i, i + CHUNK));
+                      let idx = 0;
+                      const next = () => {
+                        if (settled) return;
+                        try {
+                          socket.send(JSON.stringify(["stdin", chunks[idx]]));
+                        } catch (_) {
+                          clearTimeout(timer);
+                          finish(false);
+                          return;
+                        }
+                        idx++;
+                        if (idx < chunks.length) {
+                          setTimeout(next, DELAY);
+                        }
+                      };
+                      next();
+                    };
+                    try {
+                      socket = new WebSocket(wsUrl);
+                    } catch (_) {
+                      clearTimeout(timer);
+                      finish(false);
+                      return;
+                    }
+                    let stdoutBuf = "";
+                    const promptRe = /[$#]\\s*$/;
+                    socket.addEventListener("message", (ev) => {
+                      try {
+                        const msg = JSON.parse(ev.data);
+                        if (Array.isArray(msg) && msg[0] === "stdout") {
+                          const text = String(msg[1]);
+                          if (!sent) {
+                            stdoutBuf += text;
+                            if (promptRe.test(stdoutBuf)) {
+                              doSend();
+                            }
+                          } else {
+                            afterSendBuf += text;
+                            if (afterSendBuf.length > outputCap) {
+                              afterSendBuf = afterSendBuf.slice(-outputCap);
+                            }
+                            if (marker && afterSendBuf.includes(marker)) {
+                              clearTimeout(timer);
+                              finish(true);
+                            }
+                          }
+                        }
+                      } catch (_) {}
+                    });
+                    socket.addEventListener("open", () => {
+                      setTimeout(() => doSend(), promptTimeoutMs);
+                    });
+                    socket.addEventListener("error", () => {
+                      clearTimeout(timer);
+                      finish(false);
+                    });
+                    socket.addEventListener("close", () => {
+                      if (!settled) {
+                        clearTimeout(timer);
+                        finish(false);
+                      }
+                    });
+                  });
+                }
+            """,
+            {
+                "wsUrl": ws_url,
+                "stdinData": stdin_payload,
+                "timeoutMs": int(timeout_ms),
+                "promptTimeoutMs": min(int(timeout_ms) - 500, 3000),
+                "marker": completion_marker,
+                "outputCap": 20000,
+            },
+        )
+        trace_event("terminal_ws_capture_command_result", ok=bool(result.get("ok")))
+        return result if isinstance(result, dict) else {"ok": False, "output": ""}
+    except (PlaywrightError, AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        trace_event("terminal_ws_capture_command_exception", error=exc)
+        return {"ok": False, "output": ""}
+    finally:
+        _delete_terminal_via_api(context, lab_url=lab_frame.url, term_name=term_name)
 
 
 def _send_setup_command_via_terminal_ws(
@@ -304,7 +450,7 @@ def _send_setup_command_via_terminal_ws(
             command=batch_cmd,
             timeout_ms=120000,
             completion_marker=SETUP_DONE_MARKER,
-            error_markers=[SSHD_MISSING_MARKER],
+            error_markers=[SSHD_MISSING_MARKER, SSH_SERVER_MISSING_MARKER],
             detected_errors=detected_errors,
         )
     finally:
@@ -552,6 +698,7 @@ def _log_ws_diagnostics(diag: dict) -> None:
         f"wsCloseReason={diag.get('wsCloseReason', '')!r}",
         f"elapsed={diag.get('elapsed', 0)}ms",
     ]
+    trace_event("terminal_ws_diagnostics", **diag)
     _log_terminal_status("  [ws-diagnostics] " + " | ".join(parts))
 
 
@@ -590,21 +737,26 @@ def _open_terminal_via_rest_api(
     lab_url = lab_frame.url
     term_name = _create_terminal_via_api(context, lab_url)
     if not term_name:
+        trace_event("terminal_rest_path_unavailable")
         return False, False, None
 
     _log_terminal_status(f"  Created terminal '{term_name}' via REST API.")
+    update_trace_summary(terminal_transport="rest_api_terminal")
     server_base = _jupyter_server_base(lab_url)
     term_url = f"{server_base}lab/terminals/{term_name}?reset"
     try:
         lab_frame.goto(term_url, timeout=15000, wait_until="domcontentloaded")
         if _wait_for_terminal_surface(lab_frame, timeout_ms=_FAST_API_XTERM_ATTACH_TIMEOUT_MS):
+            trace_event("terminal_rest_surface_ready", term_name=term_name)
             return True, True, term_name
     except (PlaywrightError, TimeoutError, RuntimeError, AttributeError, ValueError) as _nav_err:
+        trace_event("terminal_rest_navigation_failed", term_name=term_name, error=_nav_err)
         _log_terminal_status(
             f"  REST API terminal created but navigation failed ({type(_nav_err).__name__}: {str(_nav_err)[:150]}), trying DOM fallbacks..."
         )
         return False, True, term_name
 
+    trace_event("terminal_rest_surface_delayed", term_name=term_name)
     _log_terminal_status(
         "  REST API terminal created but xterm not yet visible; continuing with API terminal path."
     )
@@ -771,9 +923,12 @@ def _open_or_create_terminal(
         lab_frame=lab_frame,
     )
     if terminal_ready:
+        trace_event("terminal_open_ready", source="rest_api", term_name=term_name)
         return True, term_name
 
     if api_term_created and _recover_api_terminal_surface(lab_frame=lab_frame, page=page):
+        update_trace_summary(terminal_transport="rest_api_recovery")
+        trace_event("terminal_open_ready", source="rest_api_recovery", term_name=term_name)
         return True, term_name
 
     _wait_for_terminal_entry_point(lab_frame=lab_frame, api_term_created=api_term_created)
@@ -784,6 +939,7 @@ def _open_or_create_terminal(
         page=page,
         api_term_created=api_term_created,
     ):
+        trace_event("terminal_dom_fallback_failed", api_term_created=api_term_created)
         return False, None
 
     _click_terminal_tab(
@@ -793,6 +949,8 @@ def _open_or_create_terminal(
         settle_ms=80,
     )
     _dismiss_terminal_dialog_once(lab_frame=lab_frame, page=page, settle_ms=120)
+    update_trace_summary(terminal_transport="dom_fallback_terminal")
+    trace_event("terminal_open_ready", source="dom_fallback", term_name=term_name)
     return True, term_name
 
 
@@ -896,8 +1054,10 @@ def _attach_ws_output_listener(
                 "bufCap": _WS_CAPTURE_BUF_CAP,
             },
         )
+        trace_event("terminal_ws_listener_attach_result", ok=bool(result))
         return bool(result)
-    except (PlaywrightError, AttributeError, RuntimeError, TypeError, ValueError):
+    except (PlaywrightError, AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        trace_event("terminal_ws_listener_attach_exception", error=exc)
         return False
 
 
@@ -942,9 +1102,17 @@ def _wait_for_ws_capture(
     while True:
         state = _poll_ws_capture(page_or_frame)
         if state.get("done") or state.get("errors"):
+            trace_event(
+                "terminal_ws_capture_done",
+                marker_found=state.get("markerFound"),
+                errors=",".join(state.get("errors", [])),
+                ws_connected=state.get("wsConnected"),
+                stdout_received=state.get("stdoutReceived"),
+            )
             return state
         elapsed_ms = int((time.monotonic() - start) * 1000)
         if elapsed_ms >= timeout_ms:
+            trace_event("terminal_ws_capture_timeout", elapsed_ms=elapsed_ms)
             return state
         remaining = timeout_ms - elapsed_ms
         sleep_ms = min(poll_interval_ms, remaining)
@@ -969,5 +1137,7 @@ def _detach_ws_output_listener(page_or_frame: Any) -> None:
             }
             """
         )
-    except Exception:
+        trace_event("terminal_ws_listener_detached")
+    except Exception as exc:
+        trace_event("terminal_ws_listener_detach_failed", error=exc)
         pass

@@ -16,6 +16,8 @@ except ImportError:  # pragma: no cover
 
 import logging
 
+from .logging import trace_event
+
 _log = logging.getLogger("inspire.platform.web.browser_api.rtunnel")
 
 
@@ -128,6 +130,7 @@ def wait_for_rtunnel_reachable(
     import sys as _sys
 
     display_url = redact_proxy_url(proxy_url)
+    trace_event("proxy_poll_start", proxy_url=display_url, timeout_s=timeout_s)
     _sys.stderr.write(f"  Polling proxy URL: {display_url}\n")
     _sys.stderr.flush()
 
@@ -153,7 +156,10 @@ def wait_for_rtunnel_reachable(
             if attempt <= 3:
                 _sys.stderr.write(f"  Attempt {attempt}: {last_status}\n")
                 _sys.stderr.flush()
+            if attempt <= 5:
+                trace_event("proxy_poll_attempt", attempt=attempt, status=last_status)
             if _is_rtunnel_proxy_ready(status=resp.status, body=body):
+                trace_event("proxy_poll_ready", attempt=attempt, status=last_status)
                 return
             text = (body or "").strip().lower()
             if resp.status == 404 and "page not found" in text and "<html" not in text:
@@ -172,8 +178,15 @@ def wait_for_rtunnel_reachable(
             if attempt <= 3:
                 _sys.stderr.write(f"  Attempt {attempt}: {last_status}\n")
                 _sys.stderr.flush()
+            if attempt <= 5:
+                trace_event("proxy_poll_attempt_error", attempt=attempt, error=last_status)
 
         if consecutive_404 >= 3 and (time.time() - start) >= 2:
+            trace_event(
+                "proxy_poll_plain_text_404",
+                consecutive_404=consecutive_404,
+                elapsed=int(time.time() - start),
+            )
             raise ValueError(
                 f"rtunnel server returned plain-text 404 on {consecutive_404} "
                 f"consecutive attempts ({int(time.time() - start)}s elapsed).\n"
@@ -204,4 +217,5 @@ def wait_for_rtunnel_reachable(
         "  5. Try running with --debug-playwright to see the browser\n"
         "  6. Screenshot saved to /tmp/notebook_terminal_debug.png"
     )
+    trace_event("proxy_poll_timeout", timeout_s=timeout_s, last_status=last_status)
     raise ValueError(error_msg)

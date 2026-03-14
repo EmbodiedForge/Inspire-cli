@@ -5,7 +5,10 @@ from __future__ import annotations
 import pytest
 
 from inspire.platform.web.browser_api.rtunnel import flow as flow_module
-from inspire.platform.web.browser_api.rtunnel.commands import SSHD_MISSING_MARKER
+from inspire.platform.web.browser_api.rtunnel.commands import (
+    SSH_SERVER_MISSING_MARKER,
+    SSHD_MISSING_MARKER,
+)
 
 
 class DummyLocator:
@@ -317,6 +320,7 @@ def _setup_sync_mocks(
     monkeypatch.setattr(flow_module, "build_rtunnel_setup_commands", lambda **kw: ["echo test"])
     monkeypatch.setattr(flow_module, "_build_batch_setup_script", lambda _lines: "echo test")
     monkeypatch.setattr(flow_module, "_send_rtunnel_setup_script", lambda **kw: setup_return)
+    monkeypatch.setattr(flow_module, "collect_notebook_rtunnel_diagnostics", lambda **kw: None)
 
 
 def test_setup_raises_on_sshd_missing_marker(
@@ -328,8 +332,9 @@ def test_setup_raises_on_sshd_missing_marker(
         setup_return=(True, [SSHD_MISSING_MARKER]),
     )
 
-    with pytest.raises(RuntimeError, match="apt_mirror_url"):
+    with pytest.raises(RuntimeError, match="apt_mirror_url") as exc:
         flow_module._setup_notebook_rtunnel_sync(notebook_id="test-nb")
+    assert "dropbear" in str(exc.value)
 
 
 def test_setup_raises_on_sshd_missing_marker_ws_false(
@@ -341,8 +346,21 @@ def test_setup_raises_on_sshd_missing_marker_ws_false(
         setup_return=(False, [SSHD_MISSING_MARKER]),
     )
 
-    with pytest.raises(RuntimeError, match="sshd_deb_dir"):
+    with pytest.raises(RuntimeError, match="no SSH server was installed"):
         flow_module._setup_notebook_rtunnel_sync(notebook_id="test-nb")
+
+
+def test_setup_raises_on_generic_ssh_server_missing_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _setup_sync_mocks(
+        monkeypatch,
+        setup_return=(True, [SSH_SERVER_MISSING_MARKER]),
+    )
+
+    with pytest.raises(RuntimeError, match="no SSH server process is running") as exc:
+        flow_module._setup_notebook_rtunnel_sync(notebook_id="test-nb")
+    assert "RTunnel trace summary:" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------
