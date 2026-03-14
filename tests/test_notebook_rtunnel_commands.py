@@ -181,7 +181,7 @@ def test_dropbear_command_contains_setup_script_and_args() -> None:
     assert 'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x "$RTUNNEL_BIN" ]; then ' in joined
     assert 'bash "$SETUP_SCRIPT" "$DROPBEAR_DEB_DIR" "$RTUNNEL_BIN_PATH"' in joined
     assert "dropbear" in joined
-    assert 'grep -q "[d]ropbear.*-p.*$SSH_PORT"' in joined
+    assert 'ps -efww | grep -Eq "[d]ropbear.*-p.*$SSH_PORT([[:space:]]|$)|' in joined
     assert 'rm -f "$BOOTSTRAP_SENTINEL"' in joined
     # Verify the long single-line command is gone — setup invocation should be its own line
     assert not any(
@@ -210,7 +210,10 @@ def test_non_dropbear_uses_bootstrap_sentinel_and_start_only_commands() -> None:
     assert 'rm -f "$BOOTSTRAP_SENTINEL"' in joined
     assert "pkill -f 'sshd -p'" not in joined
     assert 'pkill -f "rtunnel.*:$PORT"' not in joined
-    assert 'grep -q "[s]shd -p ' in joined
+    assert 'ps -efww | grep -Eq "[d]ropbear.*-p.*$SSH_PORT([[:space:]]|$)|' in joined
+    assert "[s]shd: .*-p $SSH_PORT([[:space:]]|$)|" in joined
+    assert '[s]shd -p $SSH_PORT([[:space:]]|$)" )' in joined
+    assert 'ss -ltnp 2>/dev/null | grep -Eq "127\\\\.0\\\\.0\\\\.1:$SSH_PORT[[:space:]]|' in joined
     assert 'grep -Eq "[r]tunnel .*([[:space:]]|:)$PORT([[:space:]]|$)"' in joined
     # Shell snippet sets RTUNNEL_DOWNLOAD_URL dynamically
     assert "RTUNNEL_DOWNLOAD_URL=" in joined

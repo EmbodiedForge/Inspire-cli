@@ -1009,6 +1009,8 @@ def test_build_rtunnel_setup_commands_sshd_deb_dir_stays_on_openssh_path() -> No
     assert "dropbear-bin" not in script
     assert SSHD_MISSING_MARKER in script
     assert SSH_SERVER_MISSING_MARKER in script
+    assert 'ss -ltnp 2>/dev/null | grep -Eq "127\\\\.0\\\\.0\\\\.1:$SSH_PORT[[:space:]]|' in script
+    assert "[s]shd: .*-p $SSH_PORT([[:space:]]|$)|" in script
 
 
 def test_build_rtunnel_setup_commands_uses_configured_rtunnel_bin_in_place() -> None:

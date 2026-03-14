@@ -227,8 +227,9 @@ def _build_ensure_rtunnel_cmd(*, curl_rtunnel_block: str) -> str:
 
 
 def _build_start_sshd_cmd() -> str:
+    ssh_listener_check = _build_ssh_listener_check()
     return (
-        'if [ -x /usr/sbin/sshd ] && ! ps -ef | grep -q "[s]shd -p $SSH_PORT"; then '
+        f"if [ -x /usr/sbin/sshd ] && ! ({ssh_listener_check}); then "
         "mkdir -p /run/sshd && chmod 0755 /run/sshd; "
         "ssh-keygen -A >/dev/null 2>&1 || true; "
         '/usr/sbin/sshd -p "$SSH_PORT" -o ListenAddress=127.0.0.1 -o PermitRootLogin=yes '
@@ -238,6 +239,7 @@ def _build_start_sshd_cmd() -> str:
 
 
 def _build_start_dropbear_cmd() -> str:
+    ssh_listener_check = _build_ssh_listener_check()
     return (
         'if [ -n "${DROPBEAR_DEB_DIR:-}" ] || [ -n "${APT_MIRROR_URL:-}" ]; then '
         'DB_BIN=""; '
@@ -282,7 +284,7 @@ def _build_start_dropbear_cmd() -> str:
         "/etc/apt/sources.list.d/*.sources.bak; do "
         '[ -f "$_f" ] && mv "$_f" "${_f%.bak}" 2>/dev/null; done; '
         "[ -x /usr/sbin/dropbear ] && DB_BIN=/usr/sbin/dropbear; fi; "
-        'if [ -n "$DB_BIN" ] && [ -x "$DB_BIN" ] && ! ps -ef | grep -q "[d]ropbear.*-p.*$SSH_PORT"; then '
+        f'if [ -n "$DB_BIN" ] && [ -x "$DB_BIN" ] && ! ({ssh_listener_check}); then '
         'DB_KEY=""; '
         '[ -n "${DROPBEAR_DEB_DIR:-}" ] && [ -x "$DROPBEAR_DEB_DIR/usr/bin/dropbearkey" ] '
         '&& DB_KEY="$DROPBEAR_DEB_DIR/usr/bin/dropbearkey"; '
@@ -305,12 +307,18 @@ def _build_start_rtunnel_cmd() -> str:
     )
 
 
+def _build_ssh_listener_check() -> str:
+    return (
+        '(ss -ltnp 2>/dev/null | grep -Eq "127\\\\.0\\\\.0\\\\.1:$SSH_PORT[[:space:]]|'
+        '\\[::1\\]:$SSH_PORT[[:space:]]|[[:space:]]:$SSH_PORT[[:space:]]") '
+        '|| ps -efww | grep -Eq "[d]ropbear.*-p.*$SSH_PORT([[:space:]]|$)|'
+        "[s]shd: .*-p $SSH_PORT([[:space:]]|$)|"
+        '[s]shd -p $SSH_PORT([[:space:]]|$)" )'
+    )
+
+
 def _build_ssh_server_status_cmd(*, include_sshd_marker: bool) -> str:
-    checks = [
-        'ps -ef | grep -q "[d]ropbear.*-p.*$SSH_PORT"',
-        'ps -ef | grep -q "[s]shd -p $SSH_PORT"',
-    ]
-    status_check = " || ".join(checks)
+    status_check = _build_ssh_listener_check()
     parts: list[str] = []
     if include_sshd_marker:
         parts.append(f'if [ ! -x /usr/sbin/sshd ]; then echo "{SSHD_MISSING_MARKER}"; fi')
