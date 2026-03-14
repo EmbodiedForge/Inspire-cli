@@ -149,6 +149,6 @@ rm -rf /tmp/inspire-live-test
 ## Notes
 
 - GPU notebooks cost compute resources — always clean up after testing
-- The test validates the default openssh path (no `[ssh]` config). When `apt_mirror_url` or `sshd_deb_dir` is configured, the code takes the dropbear/mirror path and the sshd marker is never emitted — that is the expected happy path
+- The test validates the default openssh path (no `[ssh]` config). When `apt_mirror_url` or `dropbear_deb_dir` is configured, the code takes the dropbear/mirror path and the sshd marker is not expected. When `sshd_deb_dir` is configured, the code stays on the openssh path but can satisfy sshd installation from local `.deb` files, so the marker is also not expected.
 - The `ubuntu-inspire-base:22.04` image does NOT have openssh-server pre-installed, making it suitable for this test
 - The `[[compute_groups]]` and `[workspaces]` entries are auto-populated by `--discover`

@@ -17,6 +17,7 @@ from inspire.platform.web.browser_api.rtunnel import (
     _StepTimer,
     _attach_ws_output_listener,
     _build_batch_setup_script,
+    build_rtunnel_setup_commands,
     _build_terminal_websocket_url,
     _compute_rtunnel_hash,
     _create_terminal_via_api,
@@ -922,6 +923,70 @@ def test_build_batch_setup_script_empty() -> None:
     b64_payload = result[len("echo '") : result.index("' | base64 -d | bash")]
     decoded = base64.b64decode(b64_payload).decode()
     assert decoded == "\n"
+
+
+# ---------------------------------------------------------------------------
+# build_rtunnel_setup_commands
+# ---------------------------------------------------------------------------
+
+
+def test_build_rtunnel_setup_commands_gates_network_calls_on_inet_probe() -> None:
+    from inspire.config.ssh_runtime import SshRuntimeConfig
+
+    commands = build_rtunnel_setup_commands(
+        port=31337,
+        ssh_port=22222,
+        ssh_public_key=None,
+        ssh_runtime=SshRuntimeConfig(),
+    )
+    script = "\n".join(commands)
+
+    assert "_INET=0; timeout 3 bash -c 'exec 3<>/dev/tcp/archive.ubuntu.com/80'" in script
+    assert 'if [ ! -x "$RTUNNEL_BIN" ] && [ "$_INET" = 1 ]; then curl -fsSL ' in script
+    assert (
+        "timeout 30 apt-get -o Acquire::Retries=0 -o Acquire::http::Timeout=10 " "update -qq"
+    ) in script
+    assert "timeout 30 apt-get install -y -qq openssh-server" in script
+
+
+def test_build_rtunnel_setup_commands_apt_mirror_path_skips_curl_and_time_bounds_dropbear() -> None:
+    from inspire.config.ssh_runtime import SshRuntimeConfig
+
+    commands = build_rtunnel_setup_commands(
+        port=31337,
+        ssh_port=22222,
+        ssh_public_key=None,
+        ssh_runtime=SshRuntimeConfig(
+            apt_mirror_url="http://mirror.example/ubuntu/",
+            rtunnel_bin="/shared/bin/rtunnel",
+        ),
+    )
+    script = "\n".join(commands)
+
+    assert "APT_MIRROR_URL=http://mirror.example/ubuntu/" in script
+    assert "timeout 60 apt-get update -qq >/dev/null 2>&1" in script
+    assert "timeout 60 apt-get install -y -qq dropbear-bin >/dev/null 2>&1 || true" in script
+    assert "no curl fallback for offline notebooks" in script
+    assert "curl -fsSL" not in script
+
+
+def test_build_rtunnel_setup_commands_sshd_deb_dir_stays_on_openssh_path() -> None:
+    from inspire.config.ssh_runtime import SshRuntimeConfig
+
+    commands = build_rtunnel_setup_commands(
+        port=31337,
+        ssh_port=22222,
+        ssh_public_key=None,
+        ssh_runtime=SshRuntimeConfig(
+            sshd_deb_dir="/shared/sshd-debs",
+        ),
+    )
+    script = "\n".join(commands)
+
+    assert "SSHD_DEB_DIR=/shared/sshd-debs" in script
+    assert 'dpkg -i "$SSHD_DEB_DIR"/*.deb >/dev/null 2>&1 || true;' in script
+    assert "dropbear-bin" not in script
+    assert SSHD_MISSING_MARKER in script
 
 
 # ---------------------------------------------------------------------------
