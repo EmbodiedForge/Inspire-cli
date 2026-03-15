@@ -127,6 +127,9 @@ def _configure_create_happy_path(
         project_order=None,
         job_project_id="project-1111",
         notebook_image=None,
+        notebook_priority=None,
+        notebook_workspace_id=None,
+        notebook_shm_size=None,
         notebook_post_start=post_start_value,
         job_image="img-default",
         shm_size=32,
@@ -371,3 +374,64 @@ def test_maybe_wait_for_running_warns_when_no_wait_conflicts_with_post_start(
     assert "Notebook is now RUNNING." in captured.out
     assert calls["notebook_id"] == "nb-123"
     assert calls["timeout"] == 10
+
+
+def test_resolve_task_priority_prefers_notebook_priority_over_job_priority() -> None:
+    config = SimpleNamespace(notebook_priority=5, job_priority=9)
+
+    assert flow_module._resolve_task_priority(None, config) == 5
+
+
+def test_resolve_create_inputs_prefers_notebook_shm_size_over_job_shm_size() -> None:
+    config = SimpleNamespace(
+        notebook_resource="1xH100",
+        project_order=None,
+        job_project_id=None,
+        notebook_image=None,
+        job_image=None,
+        notebook_shm_size=64,
+        shm_size=32,
+    )
+
+    resource, project, image, shm_size = flow_module._resolve_create_inputs(
+        config=config,
+        resource=None,
+        project=None,
+        image=None,
+        shm_size=None,
+    )
+
+    assert resource == "1xH100"
+    assert project is None
+    assert image is None
+    assert shm_size == 64
+
+
+def test_resolve_notebook_workspace_id_prefers_notebook_workspace_id(
+    monkeypatch,
+) -> None:  # noqa: ANN001
+    captured: dict[str, object] = {}
+
+    def fake_select_workspace_id(config, **kwargs):  # noqa: ANN001, ANN201
+        captured["config"] = config
+        captured.update(kwargs)
+        return kwargs["explicit_workspace_id"]
+
+    monkeypatch.setattr(flow_module, "select_workspace_id", fake_select_workspace_id)
+
+    config = SimpleNamespace(notebook_workspace_id="ws-11111111-1111-1111-1111-111111111111")
+    session = SimpleNamespace(workspace_id=None)
+
+    resolved = flow_module.resolve_notebook_workspace_id(
+        Context(),
+        config=config,
+        session=session,
+        workspace=None,
+        workspace_id=None,
+        gpu_count=1,
+        gpu_pattern="H100",
+    )
+
+    assert resolved == "ws-11111111-1111-1111-1111-111111111111"
+    assert captured["explicit_workspace_id"] == "ws-11111111-1111-1111-1111-111111111111"
+    assert captured["explicit_workspace_name"] is None

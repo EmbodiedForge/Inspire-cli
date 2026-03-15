@@ -56,7 +56,7 @@ from inspire.platform.web.browser_api import NotebookFailedError
 )
 @click.option(
     "--workspace-id",
-    help="Workspace ID (overrides auto-selection)",
+    help="Workspace ID (default from config [notebook].workspace_id; overrides auto-selection)",
 )
 @click.option(
     "--resource",
@@ -83,7 +83,7 @@ from inspire.platform.web.browser_api import NotebookFailedError
     "--shm-size",
     type=int,
     default=None,
-    help="Shared memory size in GB (default: INSPIRE_SHM_SIZE/job.shm_size, else 32)",
+    help="Shared memory size in GB (default from config [notebook].shm_size or [job].shm_size, else 32)",
 )
 @click.option(
     "--auto-stop/--no-auto-stop",
@@ -125,7 +125,7 @@ from inspire.platform.web.browser_api import NotebookFailedError
     "--priority",
     type=click.IntRange(1, 10),
     default=None,
-    help="Task priority (1-10, default from config [job].priority or 6)",
+    help="Task priority (1-10, default from config [notebook].priority or [job].priority or 6)",
 )
 @pass_context
 def create_notebook_cmd(

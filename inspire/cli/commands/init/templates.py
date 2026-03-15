@@ -81,6 +81,9 @@ denylist = ["*.tmp", ".git/*"]
 [notebook]
 resource = "1xH200"
 # image = "pytorch:latest"
+# priority = 6
+# workspace_id = "ws-..."
+# shm_size = 32
 # post_start = "bash /workspace/bootstrap.sh"  # none | shell command
 
 [remote_env]

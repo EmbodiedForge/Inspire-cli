@@ -104,11 +104,14 @@ def resolve_notebook_workspace_id(
     gpu_pattern: str,
 ) -> str | None:
     try:
+        default_workspace_id = workspace_id
+        if default_workspace_id is None and workspace is None:
+            default_workspace_id = getattr(config, "notebook_workspace_id", None)
         auto_workspace_id = select_workspace_id(
             config,
             gpu_type=gpu_pattern if gpu_count > 0 else None,
             cpu_only=(gpu_count == 0),
-            explicit_workspace_id=workspace_id,
+            explicit_workspace_id=default_workspace_id,
             explicit_workspace_name=workspace,
         )
     except ConfigError as e:
@@ -123,9 +126,11 @@ def resolve_notebook_workspace_id(
 
     if not auto_workspace_id:
         hint = (
-            "Use --workspace-id, set [workspaces].cpu in config.toml, or set INSPIRE_WORKSPACE_ID."
+            "Use --workspace-id, set [notebook].workspace_id or [workspaces].cpu in config.toml, "
+            "or set INSPIRE_WORKSPACE_ID."
             if gpu_count == 0
-            else "Use --workspace-id, set [workspaces].gpu in config.toml, or set INSPIRE_WORKSPACE_ID."
+            else "Use --workspace-id, set [notebook].workspace_id or [workspaces].gpu in "
+            "config.toml, or set INSPIRE_WORKSPACE_ID."
         )
         _handle_error(
             ctx, "ConfigError", "No workspace_id configured.", EXIT_CONFIG_ERROR, hint=hint
@@ -881,7 +886,11 @@ def _resolve_create_inputs(
     if not image:
         image = config.notebook_image or config.job_image
     if shm_size is None:
-        shm_size = config.shm_size if config.shm_size is not None else 32
+        notebook_shm_size = getattr(config, "notebook_shm_size", None)
+        if notebook_shm_size is not None:
+            shm_size = notebook_shm_size
+        else:
+            shm_size = config.shm_size if config.shm_size is not None else 32
     if shm_size < 1:
         raise ValueError("Shared memory size must be >= 1.")
     return resource, project, image, shm_size
@@ -925,6 +934,9 @@ def _fetch_resource_prices(
 def _resolve_task_priority(priority: Optional[int], config: Config) -> Optional[int]:
     if priority is not None:
         return priority
+    notebook_priority = getattr(config, "notebook_priority", None)
+    if notebook_priority is not None:
+        return notebook_priority
     return config.job_priority if hasattr(config, "job_priority") else None
 
 

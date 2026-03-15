@@ -126,6 +126,9 @@ class Config:
     # Notebook settings
     notebook_resource: str = "1xH200"
     notebook_image: Optional[str] = None
+    notebook_priority: Optional[int] = None
+    notebook_workspace_id: Optional[str] = None
+    notebook_shm_size: Optional[int] = None
     notebook_post_start: Optional[str] = None
 
     # SSH settings

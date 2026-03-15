@@ -136,6 +136,9 @@ class TestConfigSchema:
         # Job/Notebook settings should be project
         assert "INSP_PRIORITY" in project_env_vars
         assert "INSPIRE_NOTEBOOK_RESOURCE" in project_env_vars
+        assert "INSPIRE_NOTEBOOK_PRIORITY" in project_env_vars
+        assert "INSPIRE_NOTEBOOK_WORKSPACE_ID" in project_env_vars
+        assert "INSPIRE_NOTEBOOK_SHM_SIZE" in project_env_vars
 
         # Bridge/Sync settings should be project
         assert "INSPIRE_BRIDGE_DENYLIST" in project_env_vars
@@ -206,6 +209,9 @@ timeout = 60
         assert Config._toml_key_to_field("workspaces.cpu") == "workspace_cpu_id"
         assert Config._toml_key_to_field("workspaces.gpu") == "workspace_gpu_id"
         assert Config._toml_key_to_field("workspaces.internet") == "workspace_internet_id"
+        assert Config._toml_key_to_field("notebook.priority") == "notebook_priority"
+        assert Config._toml_key_to_field("notebook.workspace_id") == "notebook_workspace_id"
+        assert Config._toml_key_to_field("notebook.shm_size") == "notebook_shm_size"
         assert Config._toml_key_to_field("nonexistent.key") is None
 
 
