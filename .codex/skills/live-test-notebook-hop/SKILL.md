@@ -39,6 +39,7 @@ Do not use this skill for pure code review or unit-test-only work.
 - Set `INSPIRE_GLOBAL_CONFIG_PATH` to a temp file.
 - Set the shell cwd to the temp project dir before running `inspire init --discover`.
 - Never run `inspire init --discover` from the repo root unless you intentionally want to rewrite that repo's `./.inspire/config.toml`.
+- Make sure no parent directory above the temp project has its own `.inspire/config.toml` layer.
 
 3. Reuse existing running notebooks.
 - The cold part is the local tunnel/bootstrap state, not notebook creation.
@@ -66,6 +67,11 @@ Inside each root:
 home/
 project/
 ```
+
+Parent-layer guardrail:
+- Config loading walks up parent directories for `./.inspire/config.toml`.
+- If `/tmp/.inspire/config.toml` or another parent-level project config exists, it will contaminate the temp test.
+- Before the run, verify the temp root's parents do not contain a stray `.inspire` layer you did not intend to test.
 
 Important temp paths:
 - global config: `HOME/.config/inspire/config.toml`
