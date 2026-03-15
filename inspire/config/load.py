@@ -37,6 +37,9 @@ def _warn_legacy_project_context_keys(
         legacy_keys.append("[context].account")
     if str(project_context.get("project") or "").strip():
         legacy_keys.append("[context].project")
+    for key in ("workspace", "workspace_cpu", "workspace_gpu", "workspace_internet"):
+        if str(project_context.get(key) or "").strip():
+            legacy_keys.append(f"[context].{key}")
     if not legacy_keys:
         return
 
@@ -46,6 +49,8 @@ def _warn_legacy_project_context_keys(
         replacements.append("[auth].username")
     if "[context].project" in legacy_keys:
         replacements.append("[job].project_id or [defaults].project_order")
+    if any(key.startswith("[context].workspace") for key in legacy_keys):
+        replacements.append("[workspaces] aliases plus --workspace")
     replacements_label = " and ".join(replacements)
 
     warnings.warn(

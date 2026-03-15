@@ -1808,16 +1808,19 @@ def _write_discovered_project_config(
     auth_section = _get_or_create_dict_table(container=project_data, key="auth")
     auth_section["username"] = account_key
 
-    context = _get_or_create_dict_table(container=project_data, key="context")
-    context.pop("account", None)
-    context.pop("project", None)
-    context.update(
-        {
-            "workspace_cpu": "cpu",
-            "workspace_gpu": "gpu",
-            "workspace_internet": "internet",
-        }
-    )
+    context = project_data.get("context")
+    if isinstance(context, dict):
+        for key in (
+            "account",
+            "project",
+            "workspace",
+            "workspace_cpu",
+            "workspace_gpu",
+            "workspace_internet",
+        ):
+            context.pop(key, None)
+        if not context:
+            project_data.pop("context", None)
 
     defaults = _get_or_create_dict_table(container=project_data, key="defaults")
     _populate_project_defaults_from_config(defaults=defaults, config=config)

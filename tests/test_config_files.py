@@ -1059,11 +1059,7 @@ class TestInitCommand:
 
         project_data = Config._load_toml(project_config)
         assert project_data["auth"]["username"] == "testuser"
-        assert "account" not in project_data["context"]
-        assert "project" not in project_data["context"]
-        assert project_data["context"]["workspace_cpu"] == "cpu"
-        assert project_data["context"]["workspace_gpu"] == "gpu"
-        assert project_data["context"]["workspace_internet"] == "internet"
+        assert "context" not in project_data
 
     def test_init_discover_collects_projects_across_discovered_workspaces(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
@@ -2298,6 +2294,34 @@ project_id = "project-explicit"
 
         assert cfg.job_project_id == "project-explicit"
 
+    def test_legacy_context_workspace_alias_warns_and_resolves(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        project_dir = tmp_path / ".inspire"
+        project_dir.mkdir()
+        project_config = project_dir / "config.toml"
+        project_config.write_text(
+            """
+[workspaces]
+gpu = "ws-12345678-1234-1234-1234-123456789012"
+
+[context]
+workspace_gpu = "gpu"
+"""
+        )
+
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "missing" / "config.toml")
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.warns(ConfigDeprecationWarning, match=r"\[context\]\.workspace_gpu"):
+            cfg, sources = Config.from_files_and_env(
+                require_credentials=False,
+                require_target_dir=False,
+            )
+
+        assert cfg.workspace_gpu_id == "ws-12345678-1234-1234-1234-123456789012"
+        assert sources["workspace_gpu_id"] == SOURCE_PROJECT
+
     def test_discover_writer_removes_legacy_context_account_and_project(
         self, tmp_path: Path
     ) -> None:
@@ -2325,9 +2349,10 @@ workspace_cpu = "old-cpu"
         assert 'username = "new-user"' in content
         assert "account =" not in content
         assert "project =" not in content
-        assert 'workspace_cpu = "cpu"' in content
-        assert 'workspace_gpu = "gpu"' in content
-        assert 'workspace_internet = "internet"' in content
+        assert "workspace_cpu =" not in content
+        assert "workspace_gpu =" not in content
+        assert "workspace_internet =" not in content
+        assert "[context]" not in content
 
     def test_password_env_used_when_global_account_missing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
