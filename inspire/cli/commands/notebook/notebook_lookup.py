@@ -255,7 +255,6 @@ def _collect_workspace_ids_for_lookup(
         getattr(config, "workspace_cpu_id", None),
         getattr(config, "workspace_gpu_id", None),
         getattr(config, "workspace_internet_id", None),
-        getattr(config, "job_workspace_id", None),
     ):
         if ws_id:
             candidates.append(str(ws_id))
@@ -272,7 +271,12 @@ def _collect_workspace_ids_for_lookup(
 
     resolved_ws = None
     try:
-        resolved_ws = select_workspace_id(config)
+        resolved_ws = select_workspace_id(
+            config,
+            legacy_workspace_id=getattr(config, "job_workspace_id", None)
+            or getattr(config, "default_workspace_id", None)
+            or getattr(config, "notebook_workspace_id", None),
+        )
     except Exception:
         resolved_ws = None
 
@@ -366,7 +370,7 @@ def _resolve_notebook_id(
             "No workspace_id configured or available for notebook lookup.",
             EXIT_CONFIG_ERROR,
             hint=(
-                "Set [workspaces].cpu/[workspaces].gpu in config.toml, set INSPIRE_WORKSPACE_ID, "
+                "Set [workspaces].cpu/[workspaces].gpu in config.toml, use --workspace, "
                 "or pass a notebook ID directly."
             ),
         )

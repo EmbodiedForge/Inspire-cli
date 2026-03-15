@@ -5,7 +5,13 @@ from __future__ import annotations
 import warnings
 from pathlib import Path
 
-from inspire.config.models import Config, ConfigDeprecationWarning, SOURCE_PROJECT
+from inspire.config.models import (
+    Config,
+    ConfigDeprecationWarning,
+    SOURCE_ENV,
+    SOURCE_GLOBAL,
+    SOURCE_PROJECT,
+)
 from inspire.config.toml import _find_project_config
 
 from .load_accounts import (
@@ -51,6 +57,50 @@ def _warn_legacy_project_context_keys(
         ConfigDeprecationWarning,
         stacklevel=3,
     )
+
+
+def _warn_legacy_workspace_id_keys(
+    *,
+    config_dict: dict[str, object],
+    sources: dict[str, str],
+    global_config_path: Path | None,
+    project_config_path: Path | None,
+) -> None:
+    key_specs = (
+        ("default_workspace_id", "[defaults].workspace_id", "INSPIRE_DEFAULT_WORKSPACE_ID"),
+        ("job_workspace_id", "[job].workspace_id", "INSPIRE_WORKSPACE_ID"),
+        (
+            "notebook_workspace_id",
+            "[notebook].workspace_id",
+            "INSPIRE_NOTEBOOK_WORKSPACE_ID",
+        ),
+    )
+    for field_name, toml_key, env_var in key_specs:
+        value = str(config_dict.get(field_name) or "").strip()
+        source = sources.get(field_name)
+        if not value or source not in {SOURCE_GLOBAL, SOURCE_PROJECT, SOURCE_ENV}:
+            continue
+
+        if source == SOURCE_PROJECT:
+            location = str(project_config_path) if project_config_path else "project config"
+            subject = toml_key
+        elif source == SOURCE_GLOBAL:
+            location = str(global_config_path) if global_config_path else "global config"
+            subject = toml_key
+        else:
+            location = "environment"
+            subject = env_var
+
+        warnings.warn(
+            (
+                f"{location} uses deprecated workspace pin {subject}. "
+                "Prefer [workspaces] aliases plus --workspace, and reserve "
+                "--workspace-id for one-off explicit overrides. Legacy workspace_id "
+                "pins still work for now, but will be removed in a future release."
+            ),
+            ConfigDeprecationWarning,
+            stacklevel=3,
+        )
 
 
 def config_from_files_and_env(
@@ -111,6 +161,12 @@ def config_from_files_and_env(
         sources=sources,
         project_accounts=project_accounts,
         env_password=env_password,
+    )
+    _warn_legacy_workspace_id_keys(
+        config_dict=config_dict,
+        sources=sources,
+        global_config_path=global_config_path,
+        project_config_path=project_config_path,
     )
     _validate_required_config(
         config_dict=config_dict,

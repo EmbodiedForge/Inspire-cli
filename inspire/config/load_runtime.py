@@ -46,6 +46,19 @@ def _apply_env_layer(
         config_dict[field_name] = new_value
         sources[field_name] = SOURCE_ENV
 
+    for env_var, field_name in (
+        ("INSPIRE_DEFAULT_WORKSPACE_ID", "default_workspace_id"),
+        ("INSPIRE_WORKSPACE_ID", "job_workspace_id"),
+        ("INSPIRE_NOTEBOOK_WORKSPACE_ID", "notebook_workspace_id"),
+    ):
+        value = os.getenv(env_var)
+        if value is None:
+            continue
+        if prefer_source == "toml" and sources.get(field_name) == SOURCE_PROJECT:
+            continue
+        config_dict[field_name] = value
+        sources[field_name] = SOURCE_ENV
+
     return env_password
 
 

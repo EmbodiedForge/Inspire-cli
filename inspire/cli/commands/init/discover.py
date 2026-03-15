@@ -1757,12 +1757,6 @@ def _populate_project_defaults_from_config(
         defaults.setdefault("priority", int(config.job_priority))
     elif getattr(config, "notebook_priority", None) is not None:
         defaults.setdefault("priority", int(config.notebook_priority))
-    if getattr(config, "default_workspace_id", None):
-        defaults.setdefault("workspace_id", config.default_workspace_id)
-    elif getattr(config, "notebook_workspace_id", None):
-        defaults.setdefault("workspace_id", config.notebook_workspace_id)
-    elif config.job_workspace_id:
-        defaults.setdefault("workspace_id", config.job_workspace_id)
     if config.shm_size is not None:
         defaults.setdefault("shm_size", int(config.shm_size))
     if config.project_order:

@@ -44,6 +44,12 @@ def test_select_cpu_for_cpu_only_requests() -> None:
     assert select_workspace_id(cfg, cpu_only=True) == WS_CPU
 
 
+def test_legacy_workspace_id_fallback_is_used_only_when_routed_alias_missing() -> None:
+    cfg = _cfg(workspace_cpu_id=None, workspace_gpu_id=None, workspace_internet_id=None)
+    explicit = "ws-11111111-1111-1111-1111-111111111111"
+    assert select_workspace_id(cfg, gpu_type="H200", legacy_workspace_id=explicit) == explicit
+
+
 def test_explicit_workspace_id_overrides() -> None:
     cfg = _cfg(workspace_cpu_id=WS_CPU)
     explicit = "ws-11111111-1111-1111-1111-111111111111"

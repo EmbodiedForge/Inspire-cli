@@ -157,14 +157,12 @@ action_timeout = 600
 # resource = "1xH200"
 # image = "pytorch:latest"
 # priority = 6
-# workspace_id = "ws-..."
 # shm_size = 32
 # project_order = ["cq", "ci"]
 
 [job]
 # resource = "4xH200"
 # project_id = "project-..."
-# workspace_id = "ws-..."
 # image = "pytorch:latest"
 # priority = 6
 # shm_size = 32
@@ -174,7 +172,6 @@ action_timeout = 600
 # project_id = "project-..."
 # image = "pytorch:latest"
 # priority = 6
-# workspace_id = "ws-..."
 # shm_size = 32
 # post_start = "bash /workspace/bootstrap.sh"
 
@@ -219,10 +216,8 @@ inspire init --json --template --project --force
 | `INSPIRE_DEFAULT_RESOURCE` | Shared default resource for jobs and notebooks |
 | `INSPIRE_DEFAULT_IMAGE` | Shared default image for jobs and notebooks |
 | `INSPIRE_DEFAULT_PRIORITY` | Shared default priority for jobs and notebooks |
-| `INSPIRE_DEFAULT_WORKSPACE_ID` | Shared default workspace ID for jobs and notebooks |
 | `INSPIRE_PROJECT_ORDER` | Project preference order for automatic selection |
 | `INSPIRE_SHM_SIZE` | Shared default shared memory size |
-| `INSPIRE_WORKSPACE_ID` | Default workspace ID |
 | `INSPIRE_WORKSPACE_CPU_ID` | CPU workspace ID (default workspace) |
 | `INSPIRE_WORKSPACE_GPU_ID` | GPU workspace ID (H100/H200) |
 | `INSPIRE_WORKSPACE_INTERNET_ID` | Internet-enabled workspace ID (e.g. RTX 4090) |

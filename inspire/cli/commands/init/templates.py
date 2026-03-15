@@ -70,7 +70,6 @@ denylist = ["*.tmp", ".git/*"]
 # resource = "1xH200"
 # image = "pytorch:latest"
 # priority = 6
-# workspace_id = "ws-..."
 # shm_size = 32
 # project_order = ["cq", "ci"]
 
@@ -83,7 +82,6 @@ denylist = ["*.tmp", ".git/*"]
 [job]
 # resource = "4xH200"
 # project_id = "project-..."
-# workspace_id = "ws-..."
 # image = "pytorch:latest"
 # priority = 6
 # shm_size = 32
@@ -93,7 +91,6 @@ denylist = ["*.tmp", ".git/*"]
 # image = "pytorch:latest"
 # project_id = "project-..."
 # priority = 6
-# workspace_id = "ws-..."
 # shm_size = 32
 # post_start = "bash /workspace/bootstrap.sh"  # none | shell command
 

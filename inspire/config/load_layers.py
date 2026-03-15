@@ -22,6 +22,27 @@ from .load_common import (
 )
 
 
+def _apply_legacy_workspace_id_section(
+    *,
+    raw_data: dict[str, Any],
+    config_dict: dict[str, Any],
+    sources: dict[str, str],
+    source_name: str,
+) -> None:
+    for section_name, field_name in (
+        ("job", "job_workspace_id"),
+        ("notebook", "notebook_workspace_id"),
+    ):
+        section = raw_data.get(section_name)
+        if not isinstance(section, dict):
+            continue
+        raw_value = section.get("workspace_id")
+        if raw_value is None or raw_value == "":
+            continue
+        config_dict[field_name] = str(raw_value)
+        sources[field_name] = source_name
+
+
 def _apply_global_layer(
     *,
     config_dict: dict[str, Any],
@@ -71,6 +92,13 @@ def _apply_global_layer(
     if global_accounts:
         config_dict["accounts"] = global_accounts
         sources["accounts"] = SOURCE_GLOBAL
+
+    _apply_legacy_workspace_id_section(
+        raw_data=global_raw,
+        config_dict=config_dict,
+        sources=sources,
+        source_name=SOURCE_GLOBAL,
+    )
 
     _apply_defaults_overrides(
         defaults=global_defaults,
@@ -157,6 +185,13 @@ def _apply_project_layer(
         merged_accounts.update(project_accounts)
         config_dict["accounts"] = merged_accounts
         sources["accounts"] = SOURCE_PROJECT
+
+    _apply_legacy_workspace_id_section(
+        raw_data=project_raw,
+        config_dict=config_dict,
+        sources=sources,
+        source_name=SOURCE_PROJECT,
+    )
 
     return layer_state
 

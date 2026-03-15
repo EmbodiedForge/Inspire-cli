@@ -137,7 +137,6 @@ class TestConfigSchema:
         assert "INSPIRE_DEFAULT_RESOURCE" in project_env_vars
         assert "INSPIRE_DEFAULT_IMAGE" in project_env_vars
         assert "INSPIRE_DEFAULT_PRIORITY" in project_env_vars
-        assert "INSPIRE_DEFAULT_WORKSPACE_ID" in project_env_vars
         assert "INSPIRE_PROJECT_ORDER" in project_env_vars
         assert "INSPIRE_SHM_SIZE" in project_env_vars
         assert "INSPIRE_JOB_RESOURCE" in project_env_vars
@@ -145,7 +144,6 @@ class TestConfigSchema:
         assert "INSPIRE_NOTEBOOK_RESOURCE" in project_env_vars
         assert "INSPIRE_NOTEBOOK_PROJECT_ID" in project_env_vars
         assert "INSPIRE_NOTEBOOK_PRIORITY" in project_env_vars
-        assert "INSPIRE_NOTEBOOK_WORKSPACE_ID" in project_env_vars
         assert "INSPIRE_NOTEBOOK_SHM_SIZE" in project_env_vars
 
         # Bridge/Sync settings should be project
@@ -217,7 +215,6 @@ timeout = 60
         assert Config._toml_key_to_field("defaults.resource") == "default_resource"
         assert Config._toml_key_to_field("defaults.image") == "default_image"
         assert Config._toml_key_to_field("defaults.priority") == "default_priority"
-        assert Config._toml_key_to_field("defaults.workspace_id") == "default_workspace_id"
         assert Config._toml_key_to_field("defaults.project_order") == "project_order"
         assert Config._toml_key_to_field("defaults.shm_size") == "shm_size"
         assert Config._toml_key_to_field("job.resource") == "job_resource"
@@ -226,7 +223,6 @@ timeout = 60
         assert Config._toml_key_to_field("workspaces.internet") == "workspace_internet_id"
         assert Config._toml_key_to_field("notebook.project_id") == "notebook_project_id"
         assert Config._toml_key_to_field("notebook.priority") == "notebook_priority"
-        assert Config._toml_key_to_field("notebook.workspace_id") == "notebook_workspace_id"
         assert Config._toml_key_to_field("notebook.shm_size") == "notebook_shm_size"
         assert Config._toml_key_to_field("nonexistent.key") is None
 
@@ -250,6 +246,9 @@ class TestLayeredConfig:
             "INSPIRE_PROJECT_ID",
             "INSPIRE_SHM_SIZE",
             "INSPIRE_TARGET_DIR",
+            "INSPIRE_DEFAULT_WORKSPACE_ID",
+            "INSPIRE_WORKSPACE_ID",
+            "INSPIRE_NOTEBOOK_WORKSPACE_ID",
             "INSP_GITEA_SERVER",
         ]
         for var in env_vars:
@@ -339,7 +338,6 @@ timeout = 120
 resource = "1xH200"
 image = "shared-image"
 priority = 5
-workspace_id = "ws-11111111-1111-1111-1111-111111111111"
 shm_size = 64
 project_order = ["alpha", "beta"]
 """
@@ -352,13 +350,42 @@ project_order = ["alpha", "beta"]
         assert cfg.default_resource == "1xH200"
         assert cfg.default_image == "shared-image"
         assert cfg.default_priority == 5
-        assert cfg.default_workspace_id == "ws-11111111-1111-1111-1111-111111111111"
         assert cfg.shm_size == 64
         assert cfg.project_order == ["alpha", "beta"]
         assert sources["default_resource"] == SOURCE_PROJECT
         assert sources["default_image"] == SOURCE_PROJECT
         assert sources["default_priority"] == SOURCE_PROJECT
+
+    def test_legacy_workspace_id_pins_warn_but_still_load(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        project_dir = tmp_path / ".inspire"
+        project_dir.mkdir()
+        project_config = project_dir / "config.toml"
+        project_config.write_text(
+            """
+[defaults]
+workspace_id = "ws-11111111-1111-1111-1111-111111111111"
+
+[job]
+workspace_id = "ws-22222222-2222-2222-2222-222222222222"
+
+[notebook]
+workspace_id = "ws-33333333-3333-3333-3333-333333333333"
+"""
+        )
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "nonexistent" / "config.toml")
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.warns(ConfigDeprecationWarning, match="deprecated workspace pin"):
+            cfg, sources = Config.from_files_and_env(require_credentials=False)
+
+        assert cfg.default_workspace_id == "ws-11111111-1111-1111-1111-111111111111"
+        assert cfg.job_workspace_id == "ws-22222222-2222-2222-2222-222222222222"
+        assert cfg.notebook_workspace_id == "ws-33333333-3333-3333-3333-333333333333"
         assert sources["default_workspace_id"] == SOURCE_PROJECT
+        assert sources["job_workspace_id"] == SOURCE_PROJECT
+        assert sources["notebook_workspace_id"] == SOURCE_PROJECT
 
     def test_from_files_and_env_precedence(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
@@ -1836,7 +1863,9 @@ class TestPreferSource:
             "INSPIRE_TIMEOUT",
             "INSPIRE_PROJECT_ID",
             "INSPIRE_TARGET_DIR",
+            "INSPIRE_DEFAULT_WORKSPACE_ID",
             "INSPIRE_WORKSPACE_ID",
+            "INSPIRE_NOTEBOOK_WORKSPACE_ID",
             "INSP_GITEA_SERVER",
         ]
         for var in env_vars:

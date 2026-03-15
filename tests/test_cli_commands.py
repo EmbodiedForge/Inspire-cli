@@ -339,7 +339,7 @@ def test_job_create_uses_shared_defaults_for_resource_and_overrides(
     config.default_resource = "H200"
     config.default_image = "shared-image"
     config.default_priority = 7
-    config.default_workspace_id = "ws-22222222-2222-2222-2222-222222222222"
+    config.workspace_gpu_id = "ws-22222222-2222-2222-2222-222222222222"
     config.job_priority = None
     config.job_image = None
     config.job_workspace_id = None

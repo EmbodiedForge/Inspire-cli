@@ -465,7 +465,7 @@ def test_resolve_create_inputs_prefers_notebook_project_id_over_project_order() 
     assert project == "project-notebook"
 
 
-def test_resolve_notebook_workspace_id_prefers_notebook_workspace_id(
+def test_resolve_notebook_workspace_id_routes_through_alias_selection(
     monkeypatch,
 ) -> None:  # noqa: ANN001
     captured: dict[str, object] = {}
@@ -473,11 +473,11 @@ def test_resolve_notebook_workspace_id_prefers_notebook_workspace_id(
     def fake_select_workspace_id(config, **kwargs):  # noqa: ANN001, ANN201
         captured["config"] = config
         captured.update(kwargs)
-        return kwargs["explicit_workspace_id"]
+        return "ws-routed"
 
     monkeypatch.setattr(flow_module, "select_workspace_id", fake_select_workspace_id)
 
-    config = SimpleNamespace(notebook_workspace_id="ws-11111111-1111-1111-1111-111111111111")
+    config = SimpleNamespace(notebook_workspace_id=None, default_workspace_id=None)
     session = SimpleNamespace(workspace_id=None)
 
     resolved = flow_module.resolve_notebook_workspace_id(
@@ -490,12 +490,13 @@ def test_resolve_notebook_workspace_id_prefers_notebook_workspace_id(
         gpu_pattern="H100",
     )
 
-    assert resolved == "ws-11111111-1111-1111-1111-111111111111"
-    assert captured["explicit_workspace_id"] == "ws-11111111-1111-1111-1111-111111111111"
+    assert resolved == "ws-routed"
+    assert captured["explicit_workspace_id"] is None
     assert captured["explicit_workspace_name"] is None
+    assert captured["legacy_workspace_id"] is None
 
 
-def test_resolve_notebook_workspace_id_falls_back_to_shared_default_workspace_id(
+def test_resolve_notebook_workspace_id_uses_legacy_workspace_id_as_fallback(
     monkeypatch,
 ) -> None:  # noqa: ANN001
     captured: dict[str, object] = {}
@@ -503,7 +504,7 @@ def test_resolve_notebook_workspace_id_falls_back_to_shared_default_workspace_id
     def fake_select_workspace_id(config, **kwargs):  # noqa: ANN001, ANN201
         captured["config"] = config
         captured.update(kwargs)
-        return kwargs["explicit_workspace_id"]
+        return kwargs["legacy_workspace_id"]
 
     monkeypatch.setattr(flow_module, "select_workspace_id", fake_select_workspace_id)
 
@@ -524,4 +525,5 @@ def test_resolve_notebook_workspace_id_falls_back_to_shared_default_workspace_id
     )
 
     assert resolved == "ws-22222222-2222-2222-2222-222222222222"
-    assert captured["explicit_workspace_id"] == "ws-22222222-2222-2222-2222-222222222222"
+    assert captured["explicit_workspace_id"] is None
+    assert captured["legacy_workspace_id"] == "ws-22222222-2222-2222-2222-222222222222"

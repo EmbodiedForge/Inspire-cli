@@ -212,20 +212,18 @@ def _run_flow(
         selected_workspace_id = select_workspace_id(
             config,
             gpu_type=gpu_type,
-            explicit_workspace_id=(
-                workspace_id_override
-                or config.job_workspace_id
-                or getattr(config, "default_workspace_id", None)
-            ),
+            explicit_workspace_id=workspace_id_override,
             explicit_workspace_name=workspace,
+            legacy_workspace_id=config.job_workspace_id
+            or getattr(config, "default_workspace_id", None),
         )
         if not selected_workspace_id:
             _handle_error(
                 ctx,
                 "ConfigError",
                 "No workspace_id configured for GPU workloads. "
-                "Set [job].workspace_id, [defaults].workspace_id, [workspaces].gpu, "
-                "or INSPIRE_WORKSPACE_ID.",
+                "Set [workspaces].gpu (or [workspaces].internet for 4090), "
+                "or pass --workspace/--workspace-id.",
                 EXIT_CONFIG_ERROR,
             )
             return
@@ -408,7 +406,7 @@ def _run_flow(
 @click.option(
     "--workspace-id",
     "workspace_id_override",
-    help="Workspace ID override (default from config [job].workspace_id or [defaults].workspace_id; highest precedence)",
+    help="Workspace ID override (escape hatch; highest precedence)",
 )
 @click.option("--max-time", type=float, default=100.0, help="Max runtime in hours (default: 100)")
 @click.option(

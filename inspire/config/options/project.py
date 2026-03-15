@@ -34,15 +34,6 @@ DEFAULTS_OPTIONS: list[ConfigOption] = [
         scope="project",
     ),
     ConfigOption(
-        env_var="INSPIRE_DEFAULT_WORKSPACE_ID",
-        toml_key="defaults.workspace_id",
-        field_name="default_workspace_id",
-        description="Shared default workspace ID for jobs and notebooks",
-        default=None,
-        category="Defaults",
-        scope="project",
-    ),
-    ConfigOption(
         env_var="INSPIRE_PROJECT_ORDER",
         toml_key="defaults.project_order",
         field_name="project_order",
@@ -103,15 +94,6 @@ JOB_OPTIONS: list[ConfigOption] = [
         scope="project",
     ),
     ConfigOption(
-        env_var="INSPIRE_WORKSPACE_ID",
-        toml_key="job.workspace_id",
-        field_name="job_workspace_id",
-        description="Default workspace ID for jobs",
-        default=None,
-        category="Job",
-        scope="project",
-    ),
-    ConfigOption(
         env_var="INSPIRE_JOB_SHM_SIZE",
         toml_key="job.shm_size",
         field_name="job_shm_size",
@@ -159,15 +141,6 @@ NOTEBOOK_OPTIONS: list[ConfigOption] = [
         default=None,
         category="Notebook",
         parser=_parse_int,
-        scope="project",
-    ),
-    ConfigOption(
-        env_var="INSPIRE_NOTEBOOK_WORKSPACE_ID",
-        toml_key="notebook.workspace_id",
-        field_name="notebook_workspace_id",
-        description="Default workspace ID for notebooks",
-        default=None,
-        category="Notebook",
         scope="project",
     ),
     ConfigOption(

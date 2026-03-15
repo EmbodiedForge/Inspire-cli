@@ -56,7 +56,7 @@ from inspire.platform.web.browser_api import NotebookFailedError
 )
 @click.option(
     "--workspace-id",
-    help="Workspace ID (default from config [notebook].workspace_id; overrides auto-selection)",
+    help="Workspace ID override (escape hatch; overrides auto-selection)",
 )
 @click.option(
     "--resource",
@@ -584,7 +584,6 @@ def list_notebooks(
             config.workspace_cpu_id,
             config.workspace_gpu_id,
             config.workspace_internet_id,
-            config.job_workspace_id,
         ):
             if ws_id:
                 candidates.append(ws_id)
@@ -603,7 +602,12 @@ def list_notebooks(
 
     if not workspace_ids:
         try:
-            resolved = select_workspace_id(config)
+            resolved = select_workspace_id(
+                config,
+                legacy_workspace_id=config.job_workspace_id
+                or getattr(config, "default_workspace_id", None)
+                or getattr(config, "notebook_workspace_id", None),
+            )
         except ConfigError as e:
             _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
             return
@@ -617,8 +621,8 @@ def list_notebooks(
                 "No workspace_id configured or provided.",
                 EXIT_CONFIG_ERROR,
                 hint=(
-                    "Use --workspace-id, set [workspaces].cpu/[workspaces].gpu in config.toml, "
-                    "or set INSPIRE_WORKSPACE_ID."
+                    "Use --workspace-id, pass --workspace cpu/gpu/internet, or set "
+                    "[workspaces].cpu/[workspaces].gpu in config.toml."
                 ),
             )
             return

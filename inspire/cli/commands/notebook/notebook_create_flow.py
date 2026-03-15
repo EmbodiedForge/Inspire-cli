@@ -104,17 +104,14 @@ def resolve_notebook_workspace_id(
     gpu_pattern: str,
 ) -> str | None:
     try:
-        default_workspace_id = workspace_id
-        if default_workspace_id is None and workspace is None:
-            default_workspace_id = getattr(config, "notebook_workspace_id", None) or getattr(
-                config, "default_workspace_id", None
-            )
         auto_workspace_id = select_workspace_id(
             config,
             gpu_type=gpu_pattern if gpu_count > 0 else None,
             cpu_only=(gpu_count == 0),
-            explicit_workspace_id=default_workspace_id,
+            explicit_workspace_id=workspace_id,
             explicit_workspace_name=workspace,
+            legacy_workspace_id=getattr(config, "notebook_workspace_id", None)
+            or getattr(config, "default_workspace_id", None),
         )
     except ConfigError as e:
         _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
@@ -128,11 +125,10 @@ def resolve_notebook_workspace_id(
 
     if not auto_workspace_id:
         hint = (
-            "Use --workspace-id, set [notebook].workspace_id or [workspaces].cpu in config.toml, "
-            "or set INSPIRE_WORKSPACE_ID."
+            "Use --workspace-id, pass --workspace cpu, or set [workspaces].cpu in config.toml."
             if gpu_count == 0
-            else "Use --workspace-id, set [notebook].workspace_id or [workspaces].gpu in "
-            "config.toml, or set INSPIRE_WORKSPACE_ID."
+            else "Use --workspace-id, pass --workspace gpu, or set [workspaces].gpu "
+            "in config.toml."
         )
         _handle_error(
             ctx, "ConfigError", "No workspace_id configured.", EXIT_CONFIG_ERROR, hint=hint
