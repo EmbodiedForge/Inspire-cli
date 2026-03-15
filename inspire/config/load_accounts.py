@@ -151,8 +151,8 @@ def _apply_account_catalog_layer(
     project_account_catalogs: dict[str, dict[str, Any]],
 ) -> None:
     selected_account = (
-        context_account
-        or str(config_dict.get("username") or "").strip()
+        str(config_dict.get("username") or "").strip()
+        or context_account
         or str(os.getenv("INSPIRE_USERNAME") or "").strip()
     )
     merged_account_catalogs = _merge_account_catalogs(
@@ -263,7 +263,7 @@ def _apply_project_context_and_defaults(
         config_dict.get("projects", {}),
         id_prefix="project-",
     )
-    if project_ref:
+    if project_ref and not config_dict.get("job_project_id"):
         config_dict["job_project_id"] = project_ref
         sources["job_project_id"] = SOURCE_PROJECT
 

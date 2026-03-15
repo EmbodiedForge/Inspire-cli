@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
-from inspire.config.models import SOURCE_PROJECT, Config
+from inspire.config.models import Config, ConfigDeprecationWarning, SOURCE_PROJECT
 from inspire.config.toml import _find_project_config
 
 from .load_accounts import (
@@ -18,6 +19,38 @@ from .load_runtime import (
     _apply_password_and_token_fallbacks,
     _validate_required_config,
 )
+
+
+def _warn_legacy_project_context_keys(
+    *,
+    project_context: dict[str, object],
+    project_config_path: Path | None,
+) -> None:
+    legacy_keys: list[str] = []
+    if str(project_context.get("account") or "").strip():
+        legacy_keys.append("[context].account")
+    if str(project_context.get("project") or "").strip():
+        legacy_keys.append("[context].project")
+    if not legacy_keys:
+        return
+
+    path_label = str(project_config_path) if project_config_path else "project config"
+    replacements: list[str] = []
+    if "[context].account" in legacy_keys:
+        replacements.append("[auth].username")
+    if "[context].project" in legacy_keys:
+        replacements.append("[job].project_id or [defaults].project_order")
+    replacements_label = " and ".join(replacements)
+
+    warnings.warn(
+        (
+            f"{path_label} uses deprecated legacy keys {', '.join(legacy_keys)}. "
+            f"Use {replacements_label} instead. Legacy keys still work for now, "
+            "but will be removed in a future release."
+        ),
+        ConfigDeprecationWarning,
+        stacklevel=3,
+    )
 
 
 def config_from_files_and_env(
@@ -41,6 +74,11 @@ def config_from_files_and_env(
     project_account_catalogs = project_layer_state.project_account_catalogs
     project_accounts = project_layer_state.project_accounts
     prefer_source = project_layer_state.prefer_source
+
+    _warn_legacy_project_context_keys(
+        project_context=project_context,
+        project_config_path=project_config_path,
+    )
 
     context_account = str(project_context.get("account") or "").strip()
     if context_account:

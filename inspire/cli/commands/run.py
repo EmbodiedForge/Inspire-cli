@@ -392,7 +392,7 @@ def _run_flow(
     "--project",
     "-p",
     default=None,
-    help="Project name or ID (default from config [context].project or [job].project_id)",
+    help="Project name or ID (default from config [job].project_id or [defaults].project_order)",
 )
 @click.option("--location", help="Preferred datacenter location (overrides auto-selection)")
 @click.option("--workspace", help="Workspace name (from [workspaces])")

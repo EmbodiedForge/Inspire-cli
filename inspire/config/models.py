@@ -16,6 +16,10 @@ class ConfigError(Exception):
     """Configuration error - missing or invalid settings."""
 
 
+class ConfigDeprecationWarning(UserWarning):
+    """Configuration deprecation warning."""
+
+
 # Source tracking for config values
 SOURCE_DEFAULT = "default"
 SOURCE_GLOBAL = "global"
@@ -116,7 +120,7 @@ class Config:
     # Account-level train job workdir (if available)
     account_train_job_workdir: Optional[str] = None
 
-    # Project context account binding (from [context].account)
+    # Legacy project context account binding (from deprecated [context].account)
     context_account: Optional[str] = None
 
     # Notebook settings

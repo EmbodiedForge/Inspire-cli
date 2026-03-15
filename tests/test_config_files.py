@@ -11,6 +11,7 @@ from click.testing import CliRunner
 
 from inspire.config import (
     Config,
+    ConfigDeprecationWarning,
     ConfigError,
     SOURCE_DEFAULT,
     SOURCE_GLOBAL,
@@ -33,6 +34,7 @@ from inspire.cli.commands.init import (
     _derive_shared_path_group,
     _generate_toml_content,
 )
+from inspire.cli.commands.init.discover import _write_discovered_project_config
 from inspire.cli.commands.config import config as config_command
 
 # ===========================================================================
@@ -223,6 +225,7 @@ class TestLayeredConfig:
             "INSPIRE_PASSWORD",
             "INSPIRE_BASE_URL",
             "INSPIRE_TIMEOUT",
+            "INSPIRE_PROJECT_ID",
             "INSPIRE_TARGET_DIR",
             "INSP_GITEA_SERVER",
         ]
@@ -950,6 +953,7 @@ class TestInitCommand:
         result = runner.invoke(init, ["--discover", "--force"])
 
         assert result.exit_code == 0
+        assert "Note: prompted account password was stored in global config" not in result.output
 
         assert global_config.exists()
         project_config = tmp_path / PROJECT_CONFIG_DIR / CONFIG_FILENAME
@@ -970,9 +974,9 @@ class TestInitCommand:
         assert global_data["compute_groups"][0]["gpu_type"] == "H100"
 
         project_data = Config._load_toml(project_config)
-        assert project_data["context"]["account"] == "testuser"
-        # Defaults to the best in-quota project
-        assert project_data["context"]["project"] == "good-project"
+        assert project_data["auth"]["username"] == "testuser"
+        assert "account" not in project_data["context"]
+        assert "project" not in project_data["context"]
         assert project_data["context"]["workspace_cpu"] == "cpu"
         assert project_data["context"]["workspace_gpu"] == "gpu"
         assert project_data["context"]["workspace_internet"] == "internet"
@@ -1773,7 +1777,9 @@ class TestPreferSource:
             "INSPIRE_PASSWORD",
             "INSPIRE_BASE_URL",
             "INSPIRE_TIMEOUT",
+            "INSPIRE_PROJECT_ID",
             "INSPIRE_TARGET_DIR",
+            "INSPIRE_WORKSPACE_ID",
             "INSP_GITEA_SERVER",
         ]
         for var in env_vars:
@@ -2124,7 +2130,8 @@ workdir = "/project/only"
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("INSPIRE_PASSWORD", "env-pass")
 
-        cfg, sources = Config.from_files_and_env(require_credentials=False)
+        with pytest.warns(ConfigDeprecationWarning, match=r"\[context\]\.account"):
+            cfg, sources = Config.from_files_and_env(require_credentials=False)
 
         assert cfg.password == "project-pass"
         assert cfg.timeout == 99
@@ -2146,6 +2153,95 @@ workdir = "/project/only"
         assert sources["project_workdirs"] == SOURCE_PROJECT
         assert sources["account_shared_path_group"] == SOURCE_PROJECT
         assert sources["account_train_job_workdir"] == SOURCE_PROJECT
+
+    def test_legacy_context_project_warns_and_resolves_job_project_id(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        project_dir = tmp_path / ".inspire"
+        project_dir.mkdir()
+        project_config = project_dir / "config.toml"
+        project_config.write_text(
+            """
+[projects]
+cq = "project-123"
+
+[context]
+project = "cq"
+"""
+        )
+
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "missing" / "config.toml")
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.warns(ConfigDeprecationWarning, match=r"\[context\]\.project"):
+            cfg, sources = Config.from_files_and_env(
+                require_credentials=False,
+                require_target_dir=False,
+            )
+
+        assert cfg.job_project_id == "project-123"
+        assert sources["job_project_id"] == SOURCE_PROJECT
+
+    def test_job_project_id_overrides_legacy_context_project(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        project_dir = tmp_path / ".inspire"
+        project_dir.mkdir()
+        project_config = project_dir / "config.toml"
+        project_config.write_text(
+            """
+[projects]
+legacy = "project-legacy"
+
+[context]
+project = "legacy"
+
+[job]
+project_id = "project-explicit"
+"""
+        )
+
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "missing" / "config.toml")
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.warns(ConfigDeprecationWarning, match=r"\[context\]\.project"):
+            cfg, _sources = Config.from_files_and_env(
+                require_credentials=False,
+                require_target_dir=False,
+            )
+
+        assert cfg.job_project_id == "project-explicit"
+
+    def test_discover_writer_removes_legacy_context_account_and_project(
+        self, tmp_path: Path
+    ) -> None:
+        project_path = tmp_path / ".inspire" / "config.toml"
+        project_path.parent.mkdir()
+        project_path.write_text(
+            """
+[context]
+account = "old-user"
+project = "old-project"
+workspace_cpu = "old-cpu"
+"""
+        )
+
+        cfg = Config(username="new-user", password="secret", target_dir="/shared/project")
+
+        _write_discovered_project_config(
+            project_path=project_path,
+            config=cfg,
+            account_key="new-user",
+            target_dir="/shared/project",
+        )
+
+        content = project_path.read_text()
+        assert 'username = "new-user"' in content
+        assert "account =" not in content
+        assert "project =" not in content
+        assert 'workspace_cpu = "cpu"' in content
+        assert 'workspace_gpu = "gpu"' in content
+        assert 'workspace_internet = "internet"' in content
 
     def test_password_env_used_when_global_account_missing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None

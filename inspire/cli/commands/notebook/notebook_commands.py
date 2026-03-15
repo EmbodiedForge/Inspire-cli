@@ -68,7 +68,7 @@ from inspire.platform.web.browser_api import NotebookFailedError
     "--project",
     "-p",
     default=None,
-    help="Project name or ID (default from config [context].project or [job].project_id)",
+    help="Project name or ID (default from config [job].project_id or [defaults].project_order)",
 )
 @click.option(
     "--image",

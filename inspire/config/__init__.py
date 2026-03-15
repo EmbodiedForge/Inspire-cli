@@ -8,6 +8,7 @@ from inspire.config.load_env import config_from_env, config_from_env_for_sync
 from inspire.config.models import (
     CONFIG_FILENAME,
     PROJECT_CONFIG_DIR,
+    ConfigDeprecationWarning,
     SOURCE_DEFAULT,
     SOURCE_ENV,
     SOURCE_GLOBAL,
@@ -43,6 +44,7 @@ from inspire.config.schema_models import (  # noqa: F401
 __all__ = [
     "CATEGORY_ORDER",
     "CONFIG_FILENAME",
+    "ConfigDeprecationWarning",
     "CONFIG_OPTIONS",
     "PROJECT_CONFIG_DIR",
     "SOURCE_DEFAULT",
