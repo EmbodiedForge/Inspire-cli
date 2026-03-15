@@ -54,7 +54,7 @@ Do not use this skill for pure code review or unit-test-only work.
 
 ## Preferred local layout
 
-Use a dedicated temp root per run, for example:
+Use a dedicated temp root per run under `/tmp`, for example:
 
 ```bash
 /tmp/inspire-cold-cpu-XXXXXX
@@ -71,7 +71,12 @@ project/
 Parent-layer guardrail:
 - Config loading walks up parent directories for `./.inspire/config.toml`.
 - If `/tmp/.inspire/config.toml` or another parent-level project config exists, it will contaminate the temp test.
+- Do not use temp roots under `/home/ubuntu/...` for this workflow unless you have already verified there is no inherited `/home/ubuntu/.inspire/config.toml`.
 - Before the run, verify the temp root's parents do not contain a stray `.inspire` layer you did not intend to test.
+
+Practical rule:
+- Prefer `mktemp -d /tmp/inspire-...-XXXXXX`.
+- Avoid `$HOME/tmp/...` and other temp roots under directories that may already have a project config above them.
 
 Important temp paths:
 - global config: `HOME/.config/inspire/config.toml`
@@ -104,6 +109,18 @@ Bootstrap steps:
 ```bash
 mkdir -p "$HOME/.config/inspire" "$PROJECT_DIR"
 ```
+
+Recommended:
+
+```bash
+RUN_ROOT="$(mktemp -d /tmp/inspire-cold-XXXXXX)"
+HOME="$RUN_ROOT/home"
+PROJECT_DIR="$RUN_ROOT/project"
+mkdir -p "$HOME/.config/inspire" "$PROJECT_DIR"
+test ! -f /tmp/.inspire/config.toml
+```
+
+If `test ! -f /tmp/.inspire/config.toml` fails, stop and choose a different clean parent or remove the stray temp-layer only if that cleanup is intentional.
 
 2. Run discovery.
 
