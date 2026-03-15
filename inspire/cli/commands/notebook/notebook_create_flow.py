@@ -106,7 +106,9 @@ def resolve_notebook_workspace_id(
     try:
         default_workspace_id = workspace_id
         if default_workspace_id is None and workspace is None:
-            default_workspace_id = getattr(config, "notebook_workspace_id", None)
+            default_workspace_id = getattr(config, "notebook_workspace_id", None) or getattr(
+                config, "default_workspace_id", None
+            )
         auto_workspace_id = select_workspace_id(
             config,
             gpu_type=gpu_pattern if gpu_count > 0 else None,
@@ -880,11 +882,9 @@ def _resolve_create_inputs(
     shm_size: int | None,
 ) -> tuple[str, str | None, str | None, int]:
     if not resource:
-        resource = config.notebook_resource
-    if not project and not config.project_order:
-        project = config.job_project_id
+        resource = config.notebook_resource or getattr(config, "default_resource", None) or "1xH200"
     if not image:
-        image = config.notebook_image or config.job_image
+        image = config.notebook_image or getattr(config, "default_image", None)
     if shm_size is None:
         notebook_shm_size = getattr(config, "notebook_shm_size", None)
         if notebook_shm_size is not None:
@@ -937,7 +937,10 @@ def _resolve_task_priority(priority: Optional[int], config: Config) -> Optional[
     notebook_priority = getattr(config, "notebook_priority", None)
     if notebook_priority is not None:
         return notebook_priority
-    return config.job_priority if hasattr(config, "job_priority") else None
+    default_priority = getattr(config, "default_priority", None)
+    if default_priority is not None:
+        return default_priority
+    return 6
 
 
 def _fetch_workspace_projects(

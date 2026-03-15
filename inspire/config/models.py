@@ -92,10 +92,16 @@ class Config:
     docker_registry: Optional[str] = None
 
     # Job settings
-    job_priority: int = 6
+    job_priority: Optional[int] = None
     job_image: Optional[str] = None
     job_project_id: Optional[str] = None
     job_workspace_id: Optional[str] = None
+
+    # Shared command defaults ([defaults])
+    default_resource: Optional[str] = None
+    default_image: Optional[str] = None
+    default_priority: Optional[int] = None
+    default_workspace_id: Optional[str] = None
 
     # Workspace routing (optional)
     workspace_cpu_id: Optional[str] = None
@@ -124,7 +130,7 @@ class Config:
     context_account: Optional[str] = None
 
     # Notebook settings
-    notebook_resource: str = "1xH200"
+    notebook_resource: Optional[str] = None
     notebook_image: Optional[str] = None
     notebook_priority: Optional[int] = None
     notebook_workspace_id: Optional[str] = None

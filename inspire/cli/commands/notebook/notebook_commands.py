@@ -62,28 +62,28 @@ from inspire.platform.web.browser_api import NotebookFailedError
     "--resource",
     "-r",
     default=None,
-    help="Resource spec (e.g., 1xH200, 4xH100, 4CPU) (default from config [notebook].resource)",
+    help="Resource spec (e.g., 1xH200, 4xH100, 4CPU) (default from config [notebook].resource or [defaults].resource)",
 )
 @click.option(
     "--project",
     "-p",
     default=None,
-    help="Project name or ID (default from config [job].project_id or [defaults].project_order)",
+    help="Project name or ID (default from config [defaults].project_order)",
 )
 @click.option(
     "--image",
     "-i",
     default=None,
     help=(
-        "Image name/URL (default from config [notebook].image or [job].image; prompts interactively "
-        "if still omitted)"
+        "Image name/URL (default from config [notebook].image or [defaults].image; prompts "
+        "interactively if still omitted)"
     ),
 )
 @click.option(
     "--shm-size",
     type=int,
     default=None,
-    help="Shared memory size in GB (default from config [notebook].shm_size or [job].shm_size, else 32)",
+    help="Shared memory size in GB (default from config [notebook].shm_size or [defaults].shm_size, else 32)",
 )
 @click.option(
     "--auto-stop/--no-auto-stop",
@@ -125,7 +125,7 @@ from inspire.platform.web.browser_api import NotebookFailedError
     "--priority",
     type=click.IntRange(1, 10),
     default=None,
-    help="Task priority (1-10, default from config [notebook].priority or [job].priority or 6)",
+    help="Task priority (1-10, default from config [notebook].priority or [defaults].priority or 6)",
 )
 @pass_context
 def create_notebook_cmd(

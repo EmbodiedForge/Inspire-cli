@@ -232,6 +232,7 @@ class TestLayeredConfig:
             "INSPIRE_BASE_URL",
             "INSPIRE_TIMEOUT",
             "INSPIRE_PROJECT_ID",
+            "INSPIRE_SHM_SIZE",
             "INSPIRE_TARGET_DIR",
             "INSP_GITEA_SERVER",
         ]
@@ -308,6 +309,40 @@ timeout = 120
         assert cfg.timeout == 120
         assert sources["username"] == SOURCE_PROJECT
         assert sources["timeout"] == SOURCE_PROJECT
+
+    def test_from_files_and_env_shared_defaults_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Test loading shared defaults from project config."""
+        project_dir = tmp_path / ".inspire"
+        project_dir.mkdir()
+        project_config = project_dir / "config.toml"
+        project_config.write_text(
+            """
+[defaults]
+resource = "1xH200"
+image = "shared-image"
+priority = 5
+workspace_id = "ws-11111111-1111-1111-1111-111111111111"
+shm_size = 64
+project_order = ["alpha", "beta"]
+"""
+        )
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", tmp_path / "nonexistent" / "config.toml")
+        monkeypatch.chdir(tmp_path)
+
+        cfg, sources = Config.from_files_and_env(require_credentials=False)
+
+        assert cfg.default_resource == "1xH200"
+        assert cfg.default_image == "shared-image"
+        assert cfg.default_priority == 5
+        assert cfg.default_workspace_id == "ws-11111111-1111-1111-1111-111111111111"
+        assert cfg.shm_size == 64
+        assert cfg.project_order == ["alpha", "beta"]
+        assert sources["default_resource"] == SOURCE_PROJECT
+        assert sources["default_image"] == SOURCE_PROJECT
+        assert sources["default_priority"] == SOURCE_PROJECT
+        assert sources["default_workspace_id"] == SOURCE_PROJECT
 
     def test_from_files_and_env_precedence(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None

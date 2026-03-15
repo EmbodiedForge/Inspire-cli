@@ -202,13 +202,21 @@ def _run_flow(
 
         if priority is None:
             priority = config.job_priority
+            if priority is None:
+                priority = getattr(config, "default_priority", None)
+            if priority is None:
+                priority = 6
         if image is None:
-            image = config.job_image
+            image = config.job_image or getattr(config, "default_image", None)
 
         selected_workspace_id = select_workspace_id(
             config,
             gpu_type=gpu_type,
-            explicit_workspace_id=workspace_id_override,
+            explicit_workspace_id=(
+                workspace_id_override
+                or config.job_workspace_id
+                or getattr(config, "default_workspace_id", None)
+            ),
             explicit_workspace_name=workspace,
         )
         if not selected_workspace_id:
@@ -216,7 +224,8 @@ def _run_flow(
                 ctx,
                 "ConfigError",
                 "No workspace_id configured for GPU workloads. "
-                "Set [workspaces].gpu or INSPIRE_WORKSPACE_ID.",
+                "Set [job].workspace_id, [defaults].workspace_id, [workspaces].gpu, "
+                "or INSPIRE_WORKSPACE_ID.",
                 EXIT_CONFIG_ERROR,
             )
             return
@@ -386,7 +395,7 @@ def _run_flow(
     "--priority",
     type=int,
     default=None,
-    help="Task priority 1-10 (default from config [job].priority or 6)",
+    help="Task priority 1-10 (default from config [job].priority or [defaults].priority or 6)",
 )
 @click.option(
     "--project",
@@ -399,13 +408,13 @@ def _run_flow(
 @click.option(
     "--workspace-id",
     "workspace_id_override",
-    help="Workspace ID override (highest precedence)",
+    help="Workspace ID override (default from config [job].workspace_id or [defaults].workspace_id; highest precedence)",
 )
 @click.option("--max-time", type=float, default=100.0, help="Max runtime in hours (default: 100)")
 @click.option(
     "--image",
     default=None,
-    help="Custom Docker image (default from config [job].image)",
+    help="Custom Docker image (default from config [job].image or [defaults].image)",
 )
 @click.option(
     "--nodes", type=int, default=1, help="Number of nodes for multi-node training (default: 1)"

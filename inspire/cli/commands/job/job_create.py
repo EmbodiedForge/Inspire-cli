@@ -27,7 +27,7 @@ def run_job_create(
     ctx: Context,
     *,
     name: str,
-    resource: str,
+    resource: Optional[str],
     command: str,
     framework: str,
     priority: int | None,
@@ -48,8 +48,19 @@ def run_job_create(
 
         if priority is None:
             priority = config.job_priority
+            if priority is None:
+                priority = getattr(config, "default_priority", None)
+            if priority is None:
+                priority = 6
         if image is None:
-            image = config.job_image
+            image = config.job_image or getattr(config, "default_image", None)
+        if not resource:
+            resource = getattr(config, "default_resource", None)
+        if not resource:
+            raise ConfigError(
+                "Missing resource specification.\n"
+                "Pass --resource or set [defaults].resource in config.toml."
+            )
 
         try:
             requested_gpu_type, requested_gpu_count = api.resource_manager.parse_resource_request(
@@ -67,7 +78,11 @@ def run_job_create(
         selected_workspace_id = select_workspace_id(
             config,
             gpu_type=requested_gpu_type.value,
-            explicit_workspace_id=workspace_id_override,
+            explicit_workspace_id=(
+                workspace_id_override
+                or config.job_workspace_id
+                or getattr(config, "default_workspace_id", None)
+            ),
             explicit_workspace_name=workspace,
         )
         if not selected_workspace_id:
@@ -75,7 +90,8 @@ def run_job_create(
                 ctx,
                 "ConfigError",
                 "No workspace_id configured for GPU workloads. "
-                "Set [workspaces].gpu or INSPIRE_WORKSPACE_ID.",
+                "Set [job].workspace_id, [defaults].workspace_id, [workspaces].gpu, "
+                "or INSPIRE_WORKSPACE_ID.",
                 EXIT_CONFIG_ERROR,
             )
             return
@@ -252,14 +268,19 @@ def run_job_create(
 
 @click.command("create")
 @click.option("--name", "-n", required=True, help="Job name")
-@click.option("--resource", "-r", required=True, help="Resource spec (e.g., '4xH200')")
+@click.option(
+    "--resource",
+    "-r",
+    required=False,
+    help="Resource spec (e.g., '4xH200') (default from config [defaults].resource)",
+)
 @click.option("--command", "-c", required=True, help="Start command")
 @click.option("--framework", default="pytorch", help="Training framework (default: pytorch)")
 @click.option(
     "--priority",
     type=int,
     default=None,
-    help="Task priority 1-10 (default from config [job].priority or 6)",
+    help="Task priority 1-10 (default from config [job].priority or [defaults].priority or 6)",
 )
 @click.option("--max-time", type=float, default=100.0, help="Max runtime in hours (default: 100)")
 @click.option("--location", help="Preferred datacenter location")
@@ -267,7 +288,7 @@ def run_job_create(
 @click.option(
     "--workspace-id",
     "workspace_id_override",
-    help="Workspace ID override (highest precedence)",
+    help="Workspace ID override (default from config [job].workspace_id or [defaults].workspace_id; highest precedence)",
 )
 @click.option(
     "--auto/--no-auto",
@@ -277,7 +298,7 @@ def run_job_create(
 @click.option(
     "--image",
     default=None,
-    help="Custom Docker image (default from config [job].image)",
+    help="Custom Docker image (default from config [job].image or [defaults].image)",
 )
 @click.option(
     "--project",
@@ -300,7 +321,7 @@ def run_job_create(
 def create(
     ctx: Context,
     name: str,
-    resource: str,
+    resource: Optional[str],
     command: str,
     framework: str,
     priority: Optional[int],

@@ -332,6 +332,86 @@ def test_job_create_json_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert data["data"]["job_id"] == TEST_JOB_ID
 
 
+def test_job_create_uses_shared_defaults_for_resource_and_overrides(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    config = make_test_config(tmp_path)
+    config.default_resource = "H200"
+    config.default_image = "shared-image"
+    config.default_priority = 7
+    config.default_workspace_id = "ws-22222222-2222-2222-2222-222222222222"
+    config.job_priority = None
+    config.job_image = None
+    config.job_workspace_id = None
+
+    def fake_from_files_and_env(
+        cls, require_target_dir: bool = False, require_credentials: bool = True
+    ):  # type: ignore[override]
+        if require_target_dir and not config.target_dir:
+            raise ConfigError("Missing INSPIRE_TARGET_DIR")
+        return config, {}
+
+    monkeypatch.setattr(
+        config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env)
+    )
+
+    api = DummyAPI()
+
+    def fake_get_api(self_or_cls, cfg: Optional[config_module.Config] = None) -> DummyAPI:  # type: ignore[override]
+        assert cfg is config or cfg is None
+        return api
+
+    monkeypatch.setattr(auth_module.AuthManager, "get_api", fake_get_api)
+    auth_module.AuthManager.clear_cache()
+
+    class FakeWebSession:
+        workspace_id = "ws-test-workspace"
+        storage_state = {}
+
+    monkeypatch.setattr(web_session_module, "get_web_session", lambda: FakeWebSession())
+
+    test_project = browser_api_module.ProjectInfo(
+        project_id="project-test-123",
+        name="Test Project",
+        workspace_id="ws-test-workspace",
+        member_gpu_limit=True,
+        member_remain_gpu_hours=100.0,
+    )
+    monkeypatch.setattr(
+        browser_api_module,
+        "list_projects",
+        lambda workspace_id=None, session=None: [test_project],
+    )
+    monkeypatch.setattr(
+        browser_api_module,
+        "select_project",
+        lambda projects, requested=None, **_: (test_project, None),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_main,
+        [
+            "job",
+            "create",
+            "--name",
+            "test-job",
+            "--command",
+            "echo hi",
+            "--no-auto",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert api.calls["create_training_job_smart"]["resource"] == "H200"
+    assert api.calls["create_training_job_smart"]["image"] == "shared-image"
+    assert api.calls["create_training_job_smart"]["task_priority"] == 7
+    assert (
+        api.calls["create_training_job_smart"]["workspace_id"]
+        == "ws-22222222-2222-2222-2222-222222222222"
+    )
+
+
 def test_job_create_requires_target_dir(monkeypatch: pytest.MonkeyPatch):
     def fake_from_files_and_env(
         cls, require_target_dir: bool = False, require_credentials: bool = True

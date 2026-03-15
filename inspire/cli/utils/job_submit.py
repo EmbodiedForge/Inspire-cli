@@ -197,7 +197,7 @@ def submit_training_job(
         shm_size = int(config.shm_size)
         if shm_size < 1:
             raise ValueError(
-                "Shared memory size must be >= 1 (set INSPIRE_SHM_SIZE or job.shm_size)."
+                "Shared memory size must be >= 1 (set INSPIRE_SHM_SIZE or [defaults].shm_size)."
             )
         create_kwargs["shm_gi"] = shm_size
 
