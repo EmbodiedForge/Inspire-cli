@@ -45,6 +45,8 @@ platform = "gitea"
 server = "https://codeberg.org"
 repo = "owner/repo"
 # token - use INSP_GITEA_TOKEN env var
+# Workflow settings are fallback-only. Prefer SSH tunnel/bridge transport when available.
+# These workflow keys are expected to be deprecated in the future.
 log_workflow = "retrieve_job_log.yml"
 sync_workflow = "sync_code.yml"
 bridge_workflow = "run_bridge_action.yml"
@@ -54,6 +56,8 @@ remote_timeout = 90
 server = "https://github.com"
 repo = "owner/repo"
 # token - use INSP_GITHUB_TOKEN env var
+# Workflow settings are fallback-only. Prefer SSH tunnel/bridge transport when available.
+# These workflow keys are expected to be deprecated in the future.
 log_workflow = "retrieve_job_log.yml"
 sync_workflow = "sync_code.yml"
 bridge_workflow = "run_bridge_action.yml"

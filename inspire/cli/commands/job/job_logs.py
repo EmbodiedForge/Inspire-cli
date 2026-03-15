@@ -116,6 +116,7 @@ def _format_remote_log_error_message(
         f"{str(err)}\n\n"
         f"Hints:\n"
         f"- Check that the training job created a log file at: {remote_log_path}\n"
+        f"- Prefer SSH tunnel/bridge log access when available; workflow retrieval is fallback-only\n"
         f"- Verify the Bridge workflow exists and can access the shared filesystem\n"
         f"- View Gitea Actions at: {config.gitea_server}/{config.gitea_repo}/actions"
     )
@@ -429,7 +430,10 @@ def _emit_tunnel_fallback_hint(ctx: Context, *, bridge_name: Optional[str]) -> N
         return
 
     target_label = f"bridge '{bridge_name}'" if bridge_name else "default bridge"
-    click.echo(f"Tunnel {target_label} not available, using Gitea workflow...", err=True)
+    click.echo(
+        f"Tunnel {target_label} not available, falling back to Gitea workflow...",
+        err=True,
+    )
 
     connected = _find_connected_tunnel_bridges(exclude=bridge_name)
     if connected:
@@ -584,7 +588,7 @@ def _try_get_ssh_exit_code(
     except IOError as e:
         if not ctx.json_output:
             click.echo(f"SSH log fetch failed: {e}", err=True)
-            click.echo("Falling back to Gitea workflow...", err=True)
+            click.echo("Falling back to Gitea workflow (SSH is preferred)...", err=True)
 
     return None
 

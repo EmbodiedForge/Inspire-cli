@@ -8,6 +8,9 @@ This command:
 2. Syncs code on Bridge via selected transport
 3. Returns the synced commit SHA
 
+SSH tunnel is the preferred transport. Workflow transport is retained as a
+fallback and is expected to be deprecated in the future.
+
 If the git remote is unreachable, use 'inspire bridge scp' to transfer
 files directly.
 """
@@ -388,9 +391,9 @@ def sync_via_workflow(
     wait: bool,
     timeout: int,
 ) -> int:
-    """Sync code via Git Actions workflow transport."""
+    """Sync code via fallback Git Actions workflow transport."""
     if ctx.debug and not ctx.json_output:
-        click.echo("Triggering sync workflow...")
+        click.echo("Triggering fallback sync workflow...")
 
     try:
         run_id = trigger_sync_workflow(config, branch, commit_sha)
@@ -530,7 +533,7 @@ def sync_via_workflow(
     type=click.Choice(["ssh", "workflow"], case_sensitive=False),
     default="ssh",
     show_default=True,
-    help="Sync transport to use (no automatic fallback)",
+    help="Sync transport to use (SSH preferred; workflow is fallback-only, no automatic fallback)",
 )
 @click.option(
     "--source",
@@ -562,13 +565,13 @@ def sync(
 
     This command pushes your local branch to the remote, then syncs to Bridge
     using the selected transport:
-    - ssh: direct SSH tunnel sync (default; uses offline bundle mode if bridge has no internet)
-    - workflow: Git Actions workflow sync
+    - ssh: direct SSH tunnel sync (default; preferred; uses offline bundle mode if bridge has no internet)
+    - workflow: fallback Git Actions workflow sync (planned for future deprecation)
 
     \b
     Examples:
         inspire sync                          # Sync current branch via SSH tunnel
-        inspire sync --transport workflow     # Sync via workflow transport
+        inspire sync --transport workflow     # Use fallback workflow transport
         inspire sync --remote upstream        # Sync via upstream remote
         inspire sync --source bundle          # Force local bundle sync over SSH
         inspire sync --push-mode best-effort  # Continue even if git push fails
@@ -669,7 +672,7 @@ def sync(
 
         if not selected_bridge:
             tried_csv = ", ".join(tried_bridges)
-            hint = "Run 'inspire tunnel status' or use '--transport workflow'."
+            hint = "Run 'inspire tunnel status' or use fallback '--transport workflow'."
             emit_output_error(
                 ctx,
                 error_type="TunnelUnavailable",

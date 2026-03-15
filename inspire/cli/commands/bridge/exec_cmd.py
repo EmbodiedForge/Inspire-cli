@@ -632,8 +632,8 @@ def exec_command(
 ) -> None:
     """Execute a command on the Bridge runner.
 
-    Uses SSH tunnel for command execution. Workflow transport is only used when
-    artifact options are requested.
+    Uses SSH tunnel for command execution. Workflow transport is fallback-only
+    and is only used when artifact options are requested.
 
     COMMAND is the shell command to run on Bridge (in INSPIRE_TARGET_DIR).
     Command output (stdout/stderr) is automatically displayed after completion.
