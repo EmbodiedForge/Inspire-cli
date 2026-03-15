@@ -65,6 +65,15 @@ default_remote = "origin"
 action_timeout = 600
 denylist = ["*.tmp", ".git/*"]
 
+[defaults]
+# Shared fallback settings for jobs and notebooks.
+# resource = "1xH200"
+# image = "pytorch:latest"
+# priority = 6
+# workspace_id = "ws-..."
+# shm_size = 32
+# project_order = ["cq", "ci"]
+
 [workspaces]
 # cpu = "ws-..."       # Default workspace (CPU jobs / notebooks)
 # gpu = "ws-..."       # GPU workspace (H100/H200 jobs)
@@ -72,15 +81,17 @@ denylist = ["*.tmp", ".git/*"]
 # special = "ws-..."   # Custom alias (use with --workspace special)
 
 [job]
+# resource = "4xH200"
 # project_id = "project-..."
 # workspace_id = "ws-..."
 # image = "pytorch:latest"
 # priority = 6
-# shm_size = 32  # Default shared memory (GiB) for notebooks; jobs use it when set
+# shm_size = 32
 
 [notebook]
-resource = "1xH200"
+# resource = "1xH200"
 # image = "pytorch:latest"
+# project_id = "project-..."
 # priority = 6
 # workspace_id = "ws-..."
 # shm_size = 32

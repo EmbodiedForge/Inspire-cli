@@ -92,10 +92,12 @@ class Config:
     docker_registry: Optional[str] = None
 
     # Job settings
+    job_resource: Optional[str] = None
     job_priority: Optional[int] = None
     job_image: Optional[str] = None
     job_project_id: Optional[str] = None
     job_workspace_id: Optional[str] = None
+    job_shm_size: Optional[int] = None
 
     # Shared command defaults ([defaults])
     default_resource: Optional[str] = None
@@ -132,6 +134,7 @@ class Config:
     # Notebook settings
     notebook_resource: Optional[str] = None
     notebook_image: Optional[str] = None
+    notebook_project_id: Optional[str] = None
     notebook_priority: Optional[int] = None
     notebook_workspace_id: Optional[str] = None
     notebook_shm_size: Optional[int] = None

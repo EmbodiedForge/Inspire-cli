@@ -12,6 +12,7 @@ CATEGORY_ORDER = [
     "GitHub",
     "Sync",
     "Bridge",
+    "Defaults",
     "Workspaces",
     "Job",
     "Notebook",

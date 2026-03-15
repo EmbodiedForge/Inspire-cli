@@ -134,8 +134,16 @@ class TestConfigSchema:
         assert "INSP_GITEA_REPO" in project_env_vars
 
         # Job/Notebook settings should be project
+        assert "INSPIRE_DEFAULT_RESOURCE" in project_env_vars
+        assert "INSPIRE_DEFAULT_IMAGE" in project_env_vars
+        assert "INSPIRE_DEFAULT_PRIORITY" in project_env_vars
+        assert "INSPIRE_DEFAULT_WORKSPACE_ID" in project_env_vars
+        assert "INSPIRE_PROJECT_ORDER" in project_env_vars
+        assert "INSPIRE_SHM_SIZE" in project_env_vars
+        assert "INSPIRE_JOB_RESOURCE" in project_env_vars
         assert "INSP_PRIORITY" in project_env_vars
         assert "INSPIRE_NOTEBOOK_RESOURCE" in project_env_vars
+        assert "INSPIRE_NOTEBOOK_PROJECT_ID" in project_env_vars
         assert "INSPIRE_NOTEBOOK_PRIORITY" in project_env_vars
         assert "INSPIRE_NOTEBOOK_WORKSPACE_ID" in project_env_vars
         assert "INSPIRE_NOTEBOOK_SHM_SIZE" in project_env_vars
@@ -206,9 +214,17 @@ timeout = 60
         assert Config._toml_key_to_field("auth.username") == "username"
         assert Config._toml_key_to_field("api.timeout") == "timeout"
         assert Config._toml_key_to_field("paths.target_dir") == "target_dir"
+        assert Config._toml_key_to_field("defaults.resource") == "default_resource"
+        assert Config._toml_key_to_field("defaults.image") == "default_image"
+        assert Config._toml_key_to_field("defaults.priority") == "default_priority"
+        assert Config._toml_key_to_field("defaults.workspace_id") == "default_workspace_id"
+        assert Config._toml_key_to_field("defaults.project_order") == "project_order"
+        assert Config._toml_key_to_field("defaults.shm_size") == "shm_size"
+        assert Config._toml_key_to_field("job.resource") == "job_resource"
         assert Config._toml_key_to_field("workspaces.cpu") == "workspace_cpu_id"
         assert Config._toml_key_to_field("workspaces.gpu") == "workspace_gpu_id"
         assert Config._toml_key_to_field("workspaces.internet") == "workspace_internet_id"
+        assert Config._toml_key_to_field("notebook.project_id") == "notebook_project_id"
         assert Config._toml_key_to_field("notebook.priority") == "notebook_priority"
         assert Config._toml_key_to_field("notebook.workspace_id") == "notebook_workspace_id"
         assert Config._toml_key_to_field("notebook.shm_size") == "notebook_shm_size"

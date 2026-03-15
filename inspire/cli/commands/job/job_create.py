@@ -55,11 +55,13 @@ def run_job_create(
         if image is None:
             image = config.job_image or getattr(config, "default_image", None)
         if not resource:
-            resource = getattr(config, "default_resource", None)
+            resource = getattr(config, "job_resource", None) or getattr(
+                config, "default_resource", None
+            )
         if not resource:
             raise ConfigError(
                 "Missing resource specification.\n"
-                "Pass --resource or set [defaults].resource in config.toml."
+                "Pass --resource or set [job].resource or [defaults].resource in config.toml."
             )
 
         try:
@@ -272,7 +274,7 @@ def run_job_create(
     "--resource",
     "-r",
     required=False,
-    help="Resource spec (e.g., '4xH200') (default from config [defaults].resource)",
+    help="Resource spec (e.g., '4xH200') (default from config [job].resource or [defaults].resource)",
 )
 @click.option("--command", "-c", required=True, help="Start command")
 @click.option("--framework", default="pytorch", help="Training framework (default: pytorch)")

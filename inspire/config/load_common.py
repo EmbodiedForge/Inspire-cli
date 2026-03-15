@@ -120,10 +120,12 @@ def _default_config_values() -> dict[str, Any]:
         "browser_api_prefix": None,
         "auth_endpoint": None,
         "docker_registry": None,
+        "job_resource": None,
         "job_priority": None,
         "job_image": None,
         "job_project_id": None,
         "job_workspace_id": None,
+        "job_shm_size": None,
         "default_resource": None,
         "default_image": None,
         "default_priority": None,
@@ -141,6 +143,7 @@ def _default_config_values() -> dict[str, Any]:
         "context_account": None,
         "notebook_resource": None,
         "notebook_image": None,
+        "notebook_project_id": None,
         "notebook_priority": None,
         "notebook_workspace_id": None,
         "notebook_shm_size": None,
@@ -266,7 +269,7 @@ def _resolve_alias(value: Any, mapping: dict[str, str], *, id_prefix: str) -> st
 
 
 def _coerce_project_default(field_name: str, raw_value: Any) -> Any:
-    if field_name in {"job_priority", "default_priority", "shm_size"}:
+    if field_name in {"job_priority", "default_priority", "job_shm_size", "shm_size"}:
         return int(raw_value)
     if field_name in {
         "default_resource",

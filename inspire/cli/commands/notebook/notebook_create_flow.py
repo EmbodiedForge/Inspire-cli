@@ -883,6 +883,8 @@ def _resolve_create_inputs(
 ) -> tuple[str, str | None, str | None, int]:
     if not resource:
         resource = config.notebook_resource or getattr(config, "default_resource", None) or "1xH200"
+    if not project:
+        project = getattr(config, "notebook_project_id", None)
     if not image:
         image = config.notebook_image or getattr(config, "default_image", None)
     if shm_size is None:

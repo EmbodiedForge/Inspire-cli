@@ -419,7 +419,7 @@ def test_resolve_create_inputs_falls_back_to_shared_defaults() -> None:
     config = SimpleNamespace(
         notebook_resource=None,
         project_order=None,
-        job_project_id="project-legacy",
+        notebook_project_id=None,
         notebook_image=None,
         job_image="job-image-legacy",
         default_resource="1xH200",
@@ -440,6 +440,29 @@ def test_resolve_create_inputs_falls_back_to_shared_defaults() -> None:
     assert project is None
     assert image == "shared-image"
     assert shm_size == 48
+
+
+def test_resolve_create_inputs_prefers_notebook_project_id_over_project_order() -> None:
+    config = SimpleNamespace(
+        notebook_resource=None,
+        project_order=["alpha", "beta"],
+        notebook_project_id="project-notebook",
+        notebook_image=None,
+        default_resource="1xH200",
+        default_image=None,
+        notebook_shm_size=None,
+        shm_size=32,
+    )
+
+    _resource, project, _image, _shm_size = flow_module._resolve_create_inputs(
+        config=config,
+        resource=None,
+        project=None,
+        image=None,
+        shm_size=None,
+    )
+
+    assert project == "project-notebook"
 
 
 def test_resolve_notebook_workspace_id_prefers_notebook_workspace_id(

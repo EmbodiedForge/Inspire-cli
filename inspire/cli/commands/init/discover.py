@@ -1741,16 +1741,32 @@ def _populate_project_defaults_from_config(
         defaults.setdefault("target_dir", config.target_dir)
     if config.log_pattern:
         defaults.setdefault("log_pattern", config.log_pattern)
-    if config.job_image:
+    if getattr(config, "default_image", None):
+        defaults.setdefault("image", config.default_image)
+    elif config.notebook_image:
+        defaults.setdefault("image", config.notebook_image)
+    elif config.job_image:
         defaults.setdefault("image", config.job_image)
-    if config.notebook_image:
-        defaults.setdefault("notebook_image", config.notebook_image)
-    if config.notebook_resource:
-        defaults.setdefault("notebook_resource", config.notebook_resource)
-    if config.job_priority is not None:
+    if getattr(config, "default_resource", None):
+        defaults.setdefault("resource", config.default_resource)
+    elif config.notebook_resource:
+        defaults.setdefault("resource", config.notebook_resource)
+    if getattr(config, "default_priority", None) is not None:
+        defaults.setdefault("priority", int(config.default_priority))
+    elif config.job_priority is not None:
         defaults.setdefault("priority", int(config.job_priority))
+    elif getattr(config, "notebook_priority", None) is not None:
+        defaults.setdefault("priority", int(config.notebook_priority))
+    if getattr(config, "default_workspace_id", None):
+        defaults.setdefault("workspace_id", config.default_workspace_id)
+    elif getattr(config, "notebook_workspace_id", None):
+        defaults.setdefault("workspace_id", config.notebook_workspace_id)
+    elif config.job_workspace_id:
+        defaults.setdefault("workspace_id", config.job_workspace_id)
     if config.shm_size is not None:
         defaults.setdefault("shm_size", int(config.shm_size))
+    if config.project_order:
+        defaults.setdefault("project_order", list(config.project_order))
 
 
 def _prompt_target_dir(

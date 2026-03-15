@@ -2,9 +2,78 @@
 
 from __future__ import annotations
 
-from inspire.config.schema_models import ConfigOption, _parse_int
+from inspire.config.schema_models import ConfigOption, _parse_int, _parse_list
+
+DEFAULTS_OPTIONS: list[ConfigOption] = [
+    ConfigOption(
+        env_var="INSPIRE_DEFAULT_RESOURCE",
+        toml_key="defaults.resource",
+        field_name="default_resource",
+        description="Shared default resource for jobs and notebooks",
+        default=None,
+        category="Defaults",
+        scope="project",
+    ),
+    ConfigOption(
+        env_var="INSPIRE_DEFAULT_IMAGE",
+        toml_key="defaults.image",
+        field_name="default_image",
+        description="Shared default image for jobs and notebooks",
+        default=None,
+        category="Defaults",
+        scope="project",
+    ),
+    ConfigOption(
+        env_var="INSPIRE_DEFAULT_PRIORITY",
+        toml_key="defaults.priority",
+        field_name="default_priority",
+        description="Shared default priority for jobs and notebooks",
+        default=None,
+        category="Defaults",
+        parser=_parse_int,
+        scope="project",
+    ),
+    ConfigOption(
+        env_var="INSPIRE_DEFAULT_WORKSPACE_ID",
+        toml_key="defaults.workspace_id",
+        field_name="default_workspace_id",
+        description="Shared default workspace ID for jobs and notebooks",
+        default=None,
+        category="Defaults",
+        scope="project",
+    ),
+    ConfigOption(
+        env_var="INSPIRE_PROJECT_ORDER",
+        toml_key="defaults.project_order",
+        field_name="project_order",
+        description="Preferred project selection order for automatic project selection",
+        default=[],
+        category="Defaults",
+        parser=_parse_list,
+        scope="project",
+    ),
+    ConfigOption(
+        env_var="INSPIRE_SHM_SIZE",
+        toml_key="defaults.shm_size",
+        field_name="shm_size",
+        description="Shared default memory size in GB for jobs and notebooks",
+        default=None,
+        category="Defaults",
+        parser=_parse_int,
+        scope="project",
+    ),
+]
 
 JOB_OPTIONS: list[ConfigOption] = [
+    ConfigOption(
+        env_var="INSPIRE_JOB_RESOURCE",
+        toml_key="job.resource",
+        field_name="job_resource",
+        description="Default resource spec for jobs",
+        default=None,
+        category="Job",
+        scope="project",
+    ),
     ConfigOption(
         env_var="INSP_PRIORITY",
         toml_key="job.priority",
@@ -43,10 +112,10 @@ JOB_OPTIONS: list[ConfigOption] = [
         scope="project",
     ),
     ConfigOption(
-        env_var="INSPIRE_SHM_SIZE",
+        env_var="INSPIRE_JOB_SHM_SIZE",
         toml_key="job.shm_size",
-        field_name="shm_size",
-        description="Default shared memory size in GB (jobs + notebooks)",
+        field_name="job_shm_size",
+        description="Default shared memory size in GB for jobs",
         default=None,
         category="Job",
         parser=_parse_int,
@@ -69,6 +138,15 @@ NOTEBOOK_OPTIONS: list[ConfigOption] = [
         toml_key="notebook.image",
         field_name="notebook_image",
         description="Default Docker image for notebooks",
+        default=None,
+        category="Notebook",
+        scope="project",
+    ),
+    ConfigOption(
+        env_var="INSPIRE_NOTEBOOK_PROJECT_ID",
+        toml_key="notebook.project_id",
+        field_name="notebook_project_id",
+        description="Default project ID for notebooks",
         default=None,
         category="Notebook",
         scope="project",

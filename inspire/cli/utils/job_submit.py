@@ -193,11 +193,13 @@ def submit_training_job(
         auto_fault_tolerance=auto_fault_tolerance,
     )
 
-    if config.shm_size is not None:
-        shm_size = int(config.shm_size)
+    job_shm_size = getattr(config, "job_shm_size", None)
+    effective_shm_size = job_shm_size if job_shm_size is not None else config.shm_size
+    if effective_shm_size is not None:
+        shm_size = int(effective_shm_size)
         if shm_size < 1:
             raise ValueError(
-                "Shared memory size must be >= 1 (set INSPIRE_SHM_SIZE or [defaults].shm_size)."
+                "Shared memory size must be >= 1 (set INSPIRE_JOB_SHM_SIZE or [defaults].shm_size)."
             )
         create_kwargs["shm_gi"] = shm_size
 
