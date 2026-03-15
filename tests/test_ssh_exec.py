@@ -3,13 +3,25 @@
 from __future__ import annotations
 
 import io
+import shlex
 import subprocess
 from typing import Any, Optional
 
 import pytest
 
 from inspire.bridge.tunnel.models import BridgeProfile, TunnelConfig
-from inspire.bridge.tunnel.ssh_exec import run_ssh_command, run_ssh_command_streaming
+from inspire.bridge.tunnel.ssh_exec import (
+    build_ssh_process_env,
+    get_ssh_command_args,
+    run_ssh_command,
+    run_ssh_command_streaming,
+)
+
+
+def _assert_has_locale_ssh_options(args: list[str]) -> None:
+    assert "/dev/null" in args
+    assert "SetEnv=LC_ALL=C" in args
+    assert "SetEnv=LANG=C" in args
 
 
 def _stub_resolve(*args: Any, **kwargs: Any) -> tuple[TunnelConfig, BridgeProfile, str]:
@@ -42,9 +54,44 @@ def test_run_ssh_command_forces_c_locale(
     result = run_ssh_command("echo ok")
 
     assert result.returncode == 0
-    assert captured["cmd"][-1] == "bash -l"
+    _assert_has_locale_ssh_options(captured["cmd"])
+    assert captured["cmd"][-3:] == ["bash", "--noprofile", "--norc"]
     assert captured["kwargs"]["env"]["LC_ALL"] == "C"
     assert captured["kwargs"]["env"]["LANG"] == "C"
+
+
+def test_run_ssh_command_uses_bridge_identity_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import inspire.bridge.tunnel.ssh_exec as ssh_exec_module
+
+    def _stub_resolve_with_identity(
+        *args: Any, **kwargs: Any
+    ) -> tuple[TunnelConfig, BridgeProfile, str]:
+        return (
+            TunnelConfig(),
+            BridgeProfile(
+                name="default",
+                proxy_url="https://proxy.example.com",
+                identity_file="/tmp/test-id",
+            ),
+            "proxy-cmd",
+        )
+
+    monkeypatch.setattr(ssh_exec_module, "_resolve_bridge_and_proxy", _stub_resolve_with_identity)
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(ssh_exec_module.subprocess, "run", fake_run)
+
+    result = run_ssh_command("echo ok")
+
+    assert result.returncode == 0
+    assert captured["cmd"][:3] == ["ssh", "-i", "/tmp/test-id"]
 
 
 def test_run_ssh_command_streaming_forces_c_locale(
@@ -99,10 +146,36 @@ def test_run_ssh_command_streaming_forces_c_locale(
 
     assert exit_code == 0
     assert emitted == ["hello\n"]
-    assert captured["cmd"][-1] == "bash -l"
+    _assert_has_locale_ssh_options(captured["cmd"])
+    assert captured["cmd"][-3:] == ["bash", "--noprofile", "--norc"]
     assert captured["kwargs"]["env"]["LC_ALL"] == "C"
     assert captured["kwargs"]["env"]["LANG"] == "C"
     assert captured["process"].stdin.data.startswith("export LC_ALL=C LANG=C; echo hello")
+
+
+def test_get_ssh_command_args_wraps_remote_command_in_quiet_bash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import inspire.bridge.tunnel.ssh_exec as ssh_exec_module
+
+    monkeypatch.setattr(ssh_exec_module, "_resolve_bridge_and_proxy", _stub_resolve)
+
+    args = get_ssh_command_args(remote_command="echo hi && pwd")
+
+    _assert_has_locale_ssh_options(args)
+    assert args[-1] == "bash --noprofile --norc -lc " + shlex.quote("echo hi && pwd")
+
+
+def test_build_ssh_process_env_forces_safe_locale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
+    monkeypatch.setenv("LANG", "en_US.UTF-8")
+
+    env = build_ssh_process_env()
+
+    assert env["LC_ALL"] == "C"
+    assert env["LANG"] == "C"
 
 
 def test_run_ssh_command_streaming_does_not_reemit_lines_after_exit(

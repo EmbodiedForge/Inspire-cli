@@ -34,6 +34,7 @@ from .ssh import (
 )
 from .scp import run_scp_transfer
 from .ssh_exec import (
+    build_ssh_process_env,
     get_ssh_command_args,
     run_ssh_command,
     run_ssh_command_streaming,
@@ -61,6 +62,7 @@ __all__ = [
     # SSH helpers
     "_get_proxy_command",
     "_test_ssh_connection",
+    "build_ssh_process_env",
     "get_ssh_command_args",
     "get_tunnel_status",
     "is_tunnel_available",

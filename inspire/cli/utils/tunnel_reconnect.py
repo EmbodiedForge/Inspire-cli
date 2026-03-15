@@ -104,6 +104,27 @@ def load_ssh_public_key_material(pubkey_path: Optional[str] = None) -> str:
     )
 
 
+def resolve_ssh_identity_file(pubkey_path: Optional[str] = None) -> Path:
+    """Resolve the private key path matching an explicit or default public key path."""
+    if pubkey_path:
+        pub_candidates = [Path(pubkey_path).expanduser()]
+    else:
+        pub_candidates = [
+            Path.home() / ".ssh" / "id_ed25519.pub",
+            Path.home() / ".ssh" / "id_rsa.pub",
+        ]
+
+    for pub_path in pub_candidates:
+        private_path = pub_path.with_suffix("") if pub_path.suffix == ".pub" else pub_path
+        if private_path.exists():
+            return private_path
+
+    raise ValueError(
+        "No SSH private key found for the selected public key. "
+        "Provide --pubkey PATH or generate one with 'ssh-keygen'."
+    )
+
+
 def rebuild_notebook_bridge_profile(
     *,
     bridge_name: str,
@@ -138,6 +159,7 @@ def rebuild_notebook_bridge_profile(
         ssh_user=bridge.ssh_user,
         ssh_port=bridge.ssh_port,
         has_internet=bridge.has_internet,
+        identity_file=bridge.identity_file,
         notebook_id=notebook_id,
         rtunnel_port=tunnel_port,
     )

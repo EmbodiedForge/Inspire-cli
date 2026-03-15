@@ -456,6 +456,7 @@ class TestBridgeProfile:
             proxy_url="https://proxy.example.com",
             ssh_user="admin",
             ssh_port=22222,
+            identity_file="/tmp/test-id",
             rtunnel_port=31337,
         )
 
@@ -465,6 +466,7 @@ class TestBridgeProfile:
         assert d["proxy_url"] == "https://proxy.example.com"
         assert d["ssh_user"] == "admin"
         assert d["ssh_port"] == 22222
+        assert d["identity_file"] == "/tmp/test-id"
         assert d["rtunnel_port"] == 31337
 
     def test_from_dict(self) -> None:
@@ -474,6 +476,7 @@ class TestBridgeProfile:
             "proxy_url": "https://proxy.example.com",
             "ssh_user": "admin",
             "ssh_port": 22222,
+            "identity_file": "/tmp/test-id",
             "rtunnel_port": 31337,
         }
 
@@ -483,6 +486,7 @@ class TestBridgeProfile:
         assert profile.proxy_url == "https://proxy.example.com"
         assert profile.ssh_user == "admin"
         assert profile.ssh_port == 22222
+        assert profile.identity_file == "/tmp/test-id"
         assert profile.rtunnel_port == 31337
 
     def test_from_dict_with_defaults(self) -> None:

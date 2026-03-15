@@ -20,6 +20,7 @@ def _build_scp_base_args(
 ) -> list[str]:
     args = [
         "scp",
+        *([] if not bridge.identity_file else ["-i", bridge.identity_file]),
         "-o",
         "StrictHostKeyChecking=no",
         "-o",

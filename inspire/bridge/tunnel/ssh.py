@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -49,6 +50,30 @@ def _get_proxy_command(bridge: BridgeProfile, rtunnel_bin: Path, quiet: bool = F
     return f"{shlex.quote(str(rtunnel_bin))} {shlex.quote(ws_url)} {shlex.quote('stdio://%h:%p')}"
 
 
+def _identity_args(bridge: BridgeProfile) -> list[str]:
+    identity_file = str(getattr(bridge, "identity_file", "") or "").strip()
+    if not identity_file:
+        return []
+    return ["-i", identity_file]
+
+
+def _ssh_locale_args() -> list[str]:
+    return [
+        "-F",
+        "/dev/null",
+        "-o",
+        "SetEnv=LC_ALL=C",
+        "-o",
+        "SetEnv=LANG=C",
+    ]
+
+
+def _ssh_process_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.update({"LC_ALL": "C", "LANG": "C"})
+    return env
+
+
 # ---------------------------------------------------------------------------
 # Connection testing
 # ---------------------------------------------------------------------------
@@ -81,6 +106,8 @@ def _test_ssh_connection(
         result = subprocess.run(
             [
                 "ssh",
+                *_identity_args(bridge),
+                *_ssh_locale_args(),
                 "-o",
                 "StrictHostKeyChecking=no",
                 "-o",
@@ -101,6 +128,7 @@ def _test_ssh_connection(
             capture_output=True,
             text=True,
             timeout=timeout + 5,
+            env=_ssh_process_env(),
         )
         return result.returncode == 0 and "ok" in result.stdout
     except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -179,6 +207,9 @@ def generate_ssh_config(
     StrictHostKeyChecking no
     UserKnownHostsFile /dev/null
     LogLevel ERROR"""
+
+    if bridge.identity_file:
+        ssh_config += f"\n    IdentityFile {bridge.identity_file}"
 
     return ssh_config
 

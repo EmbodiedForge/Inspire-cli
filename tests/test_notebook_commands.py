@@ -802,6 +802,9 @@ def test_run_notebook_ssh_refreshes_saved_profile_on_notebook_mismatch(
         "get_ssh_command_args",
         lambda bridge_name, config, remote_command=None: ["ssh", "root@localhost"],
     )
+    monkeypatch.setattr(
+        ssh_flow_module, "resolve_ssh_identity_file", lambda pubkey: tmp_path / "id_ed25519"
+    )
 
     monkeypatch.setattr(ssh_flow_module.subprocess, "call", lambda args: 0)
 
@@ -822,6 +825,7 @@ def test_run_notebook_ssh_refreshes_saved_profile_on_notebook_mismatch(
     assert setup_called["value"] is True
     saved_profile = fake_tunnel_config.bridges["shared-profile"]
     assert getattr(saved_profile, "notebook_id", None) == "notebook-12345678"
+    assert getattr(saved_profile, "identity_file", None) == str(tmp_path / "id_ed25519")
 
 
 def test_run_notebook_ssh_interactive_reconnects_after_drop(
@@ -1027,8 +1031,8 @@ def test_run_notebook_ssh_reports_when_tunnel_not_ready(
     )
     monkeypatch.setattr(
         ssh_flow_module.os,
-        "execvp",
-        lambda file, args: (_ for _ in ()).throw(AssertionError("execvp should not run")),
+        "execvpe",
+        lambda file, args, env: (_ for _ in ()).throw(AssertionError("execvpe should not run")),
     )
 
     with pytest.raises(SystemExit) as exc:
@@ -1225,7 +1229,14 @@ def test_run_notebook_ssh_passes_upload_policy_override(
         lambda bridge_name, config, remote_command=None: ["ssh", "root@localhost"],
     )
     monkeypatch.setattr(ssh_flow_module.subprocess, "call", lambda args: 0)
-    monkeypatch.setattr(ssh_flow_module.os, "execvp", lambda file, args: None)
+    exec_call: dict[str, Any] = {}
+
+    def fake_execvpe(file: str, args: list[str], env: dict[str, str]) -> None:
+        exec_call["file"] = file
+        exec_call["args"] = args
+        exec_call["env"] = env
+
+    monkeypatch.setattr(ssh_flow_module.os, "execvpe", fake_execvpe)
 
     ssh_flow_module.run_notebook_ssh(
         Context(),
@@ -1243,3 +1254,6 @@ def test_run_notebook_ssh_passes_upload_policy_override(
     )
 
     assert captured_overrides.get("rtunnel_upload_policy") == "never"
+    assert exec_call["file"] == "ssh"
+    assert exec_call["env"]["LC_ALL"] == "C"
+    assert exec_call["env"]["LANG"] == "C"

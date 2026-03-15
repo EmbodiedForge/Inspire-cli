@@ -18,6 +18,7 @@ from inspire.cli.utils.tunnel_reconnect import (
     attempt_notebook_bridge_rebuild,
     load_ssh_public_key_material,
     rebuild_notebook_bridge_profile,
+    resolve_ssh_identity_file,
     retry_pause_seconds,
     should_attempt_ssh_reconnect,
 )
@@ -229,6 +230,7 @@ def run_notebook_ssh(
 ) -> None:
     from inspire.bridge.tunnel import (
         BridgeProfile,
+        build_ssh_process_env,
         get_ssh_command_args,
         has_internet_for_gpu_type,
         is_tunnel_available,
@@ -336,6 +338,7 @@ def run_notebook_ssh(
                     capture_output=True,
                     timeout=10,
                     text=True,
+                    env=build_ssh_process_env(),
                 )
                 if result.returncode == 0 and "ok" in result.stdout:
                     click.echo("Using cached tunnel connection (fast path).", err=True)
@@ -359,7 +362,7 @@ def run_notebook_ssh(
                         config=cached_config,
                         remote_command=command,
                     )
-                    os.execvp("ssh", args)
+                    os.execvpe("ssh", args, build_ssh_process_env())
                     return
             except (subprocess.TimeoutExpired, Exception):
                 pass
@@ -383,6 +386,7 @@ def run_notebook_ssh(
 
     try:
         ssh_public_key = load_ssh_public_key(pubkey)
+        ssh_identity_file = resolve_ssh_identity_file(pubkey)
     except ValueError as e:
         _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
         return
@@ -423,6 +427,7 @@ def run_notebook_ssh(
         ssh_user="root",
         ssh_port=ssh_port,
         has_internet=has_internet,
+        identity_file=str(ssh_identity_file),
         notebook_id=notebook_id,
         rtunnel_port=port,
     )
@@ -489,7 +494,7 @@ def run_notebook_ssh(
         config=tunnel_config,
         remote_command=command,
     )
-    os.execvp("ssh", args)
+    os.execvpe("ssh", args, build_ssh_process_env())
 
 
 __all__ = ["load_ssh_public_key", "run_notebook_ssh"]

@@ -81,6 +81,7 @@ class BridgeProfile:
     ssh_user: str = DEFAULT_SSH_USER
     ssh_port: int = DEFAULT_SSH_PORT
     has_internet: bool = True  # Whether this bridge has internet access
+    identity_file: Optional[str] = None
     # Optional notebook binding for saved notebook SSH profiles.
     notebook_id: Optional[str] = None
     # Optional rtunnel server port in the notebook.
@@ -94,6 +95,8 @@ class BridgeProfile:
             "ssh_port": self.ssh_port,
             "has_internet": self.has_internet,
         }
+        if self.identity_file:
+            payload["identity_file"] = self.identity_file
         if self.notebook_id:
             payload["notebook_id"] = self.notebook_id
         if self.rtunnel_port is not None:
@@ -114,6 +117,7 @@ class BridgeProfile:
             ssh_user=data.get("ssh_user", DEFAULT_SSH_USER),
             ssh_port=data.get("ssh_port", DEFAULT_SSH_PORT),
             has_internet=data.get("has_internet", True),  # Default True for backward compat
+            identity_file=data.get("identity_file"),
             notebook_id=data.get("notebook_id"),
             rtunnel_port=rtunnel_port,
         )

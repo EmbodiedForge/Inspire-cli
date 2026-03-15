@@ -46,6 +46,17 @@ def test_build_scp_base_args_recursive() -> None:
     assert "-r" in args
 
 
+def test_build_scp_base_args_uses_identity_file() -> None:
+    bridge = BridgeProfile(
+        name="test",
+        proxy_url="https://proxy.example.com",
+        identity_file="/tmp/test-id",
+    )
+    args = _build_scp_base_args(bridge=bridge, proxy_cmd="cmd")
+
+    assert args[:3] == ["scp", "-i", "/tmp/test-id"]
+
+
 def test_build_scp_base_args_no_user_host() -> None:
     """Base args should NOT include user@host -- that's part of the remote specifier."""
     bridge = BridgeProfile(name="test", proxy_url="https://proxy.example.com")

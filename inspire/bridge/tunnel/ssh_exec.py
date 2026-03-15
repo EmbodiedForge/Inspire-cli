@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import select
+import shlex
 import subprocess
 import time
 from typing import Callable, Optional
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _build_ssh_process_env() -> dict[str, str]:
+def build_ssh_process_env() -> dict[str, str]:
     """Build environment for SSH subprocesses with a universally available locale.
 
     This prevents remote login shells from inheriting unsupported locale values
@@ -61,13 +62,35 @@ def _resolve_bridge_and_proxy(
 
 
 def _build_stdin_script(command: str) -> str:
-    """Build a short shell script to pipe into ``bash -l`` via stdin.
+    """Build a short shell script to pipe into a non-login bash via stdin.
 
     This avoids embedding *command* in the SSH process's command-line
     arguments, which would otherwise make ``pkill -f <pattern>`` match
     the parent bash process and tear down the SSH session.
     """
     return f"export LC_ALL=C LANG=C; {command}\n"
+
+
+def _ssh_locale_args() -> list[str]:
+    """Return SSH options that suppress unsupported locale forwarding."""
+    return [
+        "-F",
+        "/dev/null",
+        "-o",
+        "SetEnv=LC_ALL=C",
+        "-o",
+        "SetEnv=LANG=C",
+    ]
+
+
+def _quiet_remote_shell_args() -> list[str]:
+    """Return a non-login shell argv for command execution."""
+    return ["bash", "--noprofile", "--norc"]
+
+
+def _wrap_remote_command(command: str) -> str:
+    """Wrap a remote command in a quiet bash shell to avoid login banners."""
+    return f"bash --noprofile --norc -lc {shlex.quote(command)}"
 
 
 def _build_ssh_base_args(
@@ -78,6 +101,8 @@ def _build_ssh_base_args(
 ) -> list[str]:
     args = [
         "ssh",
+        *([] if not bridge.identity_file else ["-i", bridge.identity_file]),
+        *_ssh_locale_args(),
         "-o",
         "StrictHostKeyChecking=no",
         "-o",
@@ -113,7 +138,7 @@ def run_ssh_command(
     """Execute a command on Bridge via SSH ProxyCommand."""
     _config, bridge, proxy_cmd = _resolve_bridge_and_proxy(bridge_name, config, quiet=quiet_proxy)
     ssh_cmd = _build_ssh_base_args(bridge=bridge, proxy_cmd=proxy_cmd)
-    ssh_cmd.append("bash -l")
+    ssh_cmd.extend(_quiet_remote_shell_args())
 
     logger.debug(
         "run_ssh_command bridge=%s timeout=%s capture_output=%s quiet_proxy=%s command=%s",
@@ -131,7 +156,7 @@ def run_ssh_command(
         text=True,
         timeout=timeout,
         check=check,
-        env=_build_ssh_process_env(),
+        env=build_ssh_process_env(),
     )
     logger.debug(
         "run_ssh_command completed bridge=%s returncode=%s",
@@ -168,7 +193,7 @@ def get_ssh_command_args(
     _config, bridge, proxy_cmd = _resolve_bridge_and_proxy(bridge_name, config)
     args = _build_ssh_base_args(bridge=bridge, proxy_cmd=proxy_cmd, batch_mode=False)
     if remote_command:
-        args.append(remote_command)
+        args.append(_wrap_remote_command(remote_command))
     return args
 
 
@@ -189,7 +214,7 @@ def run_ssh_command_streaming(
 
     _config, bridge, proxy_cmd = _resolve_bridge_and_proxy(bridge_name, config)
     ssh_cmd = _build_ssh_base_args(bridge=bridge, proxy_cmd=proxy_cmd)
-    ssh_cmd.append("bash -l")
+    ssh_cmd.extend(_quiet_remote_shell_args())
 
     logger.debug(
         "run_ssh_command_streaming bridge=%s timeout=%s command=%s",
@@ -213,7 +238,7 @@ def run_ssh_command_streaming(
         stderr=subprocess.STDOUT,
         bufsize=1,
         universal_newlines=True,
-        env=_build_ssh_process_env(),
+        env=build_ssh_process_env(),
     )
 
     # Feed the command via stdin so it never appears in the process cmdline.
@@ -275,10 +300,13 @@ def run_ssh_command_streaming(
 
 
 __all__ = [
-    "_build_ssh_process_env",
     "_build_ssh_base_args",
     "_build_stdin_script",
+    "_quiet_remote_shell_args",
     "_resolve_bridge_and_proxy",
+    "_ssh_locale_args",
+    "_wrap_remote_command",
+    "build_ssh_process_env",
     "get_ssh_command_args",
     "run_ssh_command",
     "run_ssh_command_streaming",
