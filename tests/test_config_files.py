@@ -2045,6 +2045,30 @@ username = "toml-user"
         assert cfg.password == "global-pass"
         assert sources["password"] == SOURCE_GLOBAL
 
+    def test_single_global_account_infers_username(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """A lone global [accounts] entry should be used as the active username."""
+        global_dir = tmp_path / "global"
+        global_dir.mkdir()
+        global_config = global_dir / "config.toml"
+        global_config.write_text(
+            """
+[accounts."toml-user"]
+password = "global-pass"
+"""
+        )
+
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
+        monkeypatch.chdir(tmp_path)
+
+        cfg, sources = Config.from_files_and_env(require_credentials=True)
+
+        assert cfg.username == "toml-user"
+        assert cfg.password == "global-pass"
+        assert sources["username"] == SOURCE_GLOBAL
+        assert sources["password"] == SOURCE_GLOBAL
+
     def test_password_resolves_from_project_accounts_map(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
     ) -> None:

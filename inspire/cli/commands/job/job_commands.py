@@ -29,6 +29,47 @@ from inspire.cli.utils.job_cli import resolve_job_id
 from inspire.config import Config, ConfigError
 
 
+_RECOVERABLE_API_ERROR_MARKERS = (
+    "authentication",
+    "not authenticated",
+    "unauthorized",
+    "401",
+    "connection error after",
+    "connection aborted",
+    "remote disconnected",
+    "max retries exceeded",
+)
+
+
+def _should_refresh_api(exc: Exception) -> bool:
+    if isinstance(exc, AuthenticationError):
+        return True
+    return any(marker in str(exc).lower() for marker in _RECOVERABLE_API_ERROR_MARKERS)
+
+
+def _get_job_detail_with_reauth(
+    *,
+    config: Config,
+    job_id: str,
+    api=None,  # noqa: ANN001
+):
+    current_api = api or AuthManager.get_api(config)
+    try:
+        return current_api.get_job_detail(job_id), current_api
+    except Exception as exc:
+        if not _should_refresh_api(exc):
+            raise
+
+        logging.getLogger(__name__).warning(
+            "Refreshing API client after job detail request failed for %s: %s",
+            job_id,
+            exc,
+        )
+        AuthManager.clear_cache()
+        refreshed_api = AuthManager.get_api(config)
+        return refreshed_api.get_job_detail(job_id), refreshed_api
+
+
 def _watch_jobs(
     ctx: Context,
     config: Config,
@@ -133,7 +174,11 @@ def _watch_jobs(
                 if job_id:
                     original_status = job_item.get("status", "")
                     try:
-                        result = api.get_job_detail(job_id)
+                        result, api = _get_job_detail_with_reauth(
+                            config=config,
+                            job_id=job_id,
+                            api=api,
+                        )
                         data = result.get("data", {})
                         new_status = data.get("status")
                         if new_status:
@@ -209,7 +254,7 @@ def list_jobs(
         inspire job list --watch --interval 5
     """
     try:
-        config = Config.from_env()
+        config, _ = Config.from_files_and_env()
 
         if watch:
             _watch_jobs(
@@ -260,10 +305,10 @@ def status(ctx: Context, job_id: str) -> None:
     job_id = resolve_job_id(ctx, job_id)
 
     try:
-        config = Config.from_env()
+        config, _ = Config.from_files_and_env()
         api = AuthManager.get_api(config)
 
-        result = api.get_job_detail(job_id)
+        result, _ = _get_job_detail_with_reauth(config=config, job_id=job_id, api=api)
         job_data = result.get("data", {})
 
         if job_data.get("status"):
@@ -300,7 +345,7 @@ def stop(ctx: Context, job_id: str) -> None:
     job_id = resolve_job_id(ctx, job_id)
 
     try:
-        config = Config.from_env()
+        config, _ = Config.from_files_and_env()
         api = AuthManager.get_api(config)
 
         api.stop_training_job(job_id)
@@ -343,7 +388,7 @@ def wait(ctx: Context, job_id: str, timeout: int, interval: int) -> None:
     job_id = resolve_job_id(ctx, job_id)
 
     try:
-        config = Config.from_env()
+        config, _ = Config.from_files_and_env()
         api = AuthManager.get_api(config)
         cache = job_deps.JobCache(config.get_expanded_cache_path())
 
@@ -369,7 +414,11 @@ def wait(ctx: Context, job_id: str, timeout: int, interval: int) -> None:
                 return
 
             try:
-                result = api.get_job_detail(job_id)
+                result, api = _get_job_detail_with_reauth(
+                    config=config,
+                    job_id=job_id,
+                    api=api,
+                )
                 job_data = result.get("data", {})
                 current_status = job_data.get("status", "UNKNOWN")
 
@@ -470,7 +519,7 @@ def update_jobs(ctx: Context, status: tuple, limit: int, delay: float) -> None:
         statuses_set.update(alias_map.get(key, {s}))
 
     try:
-        config = Config.from_env()
+        config, _ = Config.from_files_and_env()
         api = AuthManager.get_api(config)
         cache = job_deps.JobCache(config.get_expanded_cache_path())
 
@@ -486,7 +535,11 @@ def update_jobs(ctx: Context, status: tuple, limit: int, delay: float) -> None:
                 continue
             old_status = job.get("status", "UNKNOWN")
             try:
-                result = api.get_job_detail(job_id)
+                result, api = _get_job_detail_with_reauth(
+                    config=config,
+                    job_id=job_id,
+                    api=api,
+                )
                 data = result.get("data", {}) if isinstance(result, dict) else {}
                 new_status = data.get("status") or data.get("job_status") or old_status
                 if new_status:
@@ -548,7 +601,7 @@ def show_command(ctx: Context, job_id: str) -> None:
     source = None
 
     try:
-        config = Config.from_env()
+        config, _ = Config.from_files_and_env()
         api = AuthManager.get_api(config)
 
         result = api.get_job_detail(job_id)

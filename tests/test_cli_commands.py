@@ -735,6 +735,79 @@ def test_job_status_not_found_sets_specific_exit_code(
     assert result.exit_code == EXIT_JOB_NOT_FOUND
 
 
+def test_job_status_loads_credentials_from_layered_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_test_config(tmp_path)
+
+    def fail_from_env(cls, require_target_dir: bool = False) -> config_module.Config:  # type: ignore[override]
+        raise AssertionError("job status should not use Config.from_env")
+
+    def fake_from_files_and_env(
+        cls, require_target_dir: bool = False, require_credentials: bool = True
+    ) -> tuple[config_module.Config, dict[str, str]]:  # type: ignore[override]
+        assert require_target_dir is False
+        assert require_credentials is True
+        return config, {}
+
+    monkeypatch.setattr(config_module.Config, "from_env", classmethod(fail_from_env))
+    monkeypatch.setattr(
+        config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env)
+    )
+
+    api = DummyAPI()
+
+    def fake_get_api(self_or_cls, cfg: Optional[config_module.Config] = None) -> DummyAPI:  # type: ignore[override]
+        assert cfg is config or cfg is None
+        return api
+
+    monkeypatch.setattr(auth_module.AuthManager, "get_api", fake_get_api)
+    auth_module.AuthManager.clear_cache()
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["job", "status", TEST_JOB_ID])
+
+    assert result.exit_code == EXIT_SUCCESS
+    assert "SUCCEEDED" in result.output
+
+
+def test_job_status_reauths_once_after_connection_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_test_config(tmp_path)
+
+    def fake_from_files_and_env(
+        cls, require_target_dir: bool = False, require_credentials: bool = True
+    ) -> tuple[config_module.Config, dict[str, str]]:  # type: ignore[override]
+        return config, {}
+
+    monkeypatch.setattr(
+        config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env)
+    )
+
+    class FailingAPI:
+        def get_job_detail(self, job_id: str) -> Dict[str, Any]:  # noqa: ARG002
+            raise RuntimeError("Connection error after 3 retries")
+
+    refreshed_api = DummyAPI()
+    get_api_calls: List[int] = []
+
+    def fake_get_api(self_or_cls, cfg: Optional[config_module.Config] = None):  # type: ignore[override]
+        assert cfg is config or cfg is None
+        get_api_calls.append(1)
+        return FailingAPI() if len(get_api_calls) == 1 else refreshed_api
+
+    monkeypatch.setattr(auth_module.AuthManager, "get_api", fake_get_api)
+    auth_module.AuthManager.clear_cache()
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, ["job", "status", TEST_JOB_ID])
+
+    assert result.exit_code == EXIT_SUCCESS
+    assert "SUCCEEDED" in result.output
+    assert len(get_api_calls) == 2
+
+
 def test_job_stop_with_force_and_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     patch_config_and_auth(monkeypatch, tmp_path)
     runner = CliRunner()
@@ -830,6 +903,46 @@ def test_job_wait_times_out(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     )
     assert result.exit_code == EXIT_TIMEOUT
     assert "Timeout after 1s" in result.output
+
+
+def test_job_wait_reauths_after_connection_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = make_test_config(tmp_path)
+
+    def fake_from_files_and_env(
+        cls, require_target_dir: bool = False, require_credentials: bool = True
+    ) -> tuple[config_module.Config, dict[str, str]]:  # type: ignore[override]
+        return config, {}
+
+    monkeypatch.setattr(
+        config_module.Config, "from_files_and_env", classmethod(fake_from_files_and_env)
+    )
+
+    class FailingAPI:
+        def get_job_detail(self, job_id: str) -> Dict[str, Any]:  # noqa: ARG002
+            raise RuntimeError("Connection error after 3 retries")
+
+    refreshed_api = DummyAPI()
+    get_api_calls: List[int] = []
+
+    def fake_get_api(self_or_cls, cfg: Optional[config_module.Config] = None):  # type: ignore[override]
+        assert cfg is config or cfg is None
+        get_api_calls.append(1)
+        return FailingAPI() if len(get_api_calls) == 1 else refreshed_api
+
+    monkeypatch.setattr(auth_module.AuthManager, "get_api", fake_get_api)
+    auth_module.AuthManager.clear_cache()
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_main,
+        ["job", "wait", TEST_JOB_ID, "--timeout", "60", "--interval", "1"],
+    )
+
+    assert result.exit_code == EXIT_SUCCESS
+    assert "SUCCEEDED" in result.output
+    assert len(get_api_calls) == 2
 
 
 def test_job_list_uses_local_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):

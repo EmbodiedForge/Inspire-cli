@@ -140,6 +140,15 @@ def config_from_files_and_env(
         config_dict["context_account"] = context_account
         sources["context_account"] = SOURCE_PROJECT
 
+    if not str(config_dict.get("username") or "").strip() and not context_account:
+        candidate_accounts = set(global_account_catalogs.keys()) | set(project_account_catalogs.keys())
+        if len(candidate_accounts) == 1:
+            inferred_username = next(iter(candidate_accounts))
+            config_dict["username"] = inferred_username
+            sources["username"] = (
+                SOURCE_PROJECT if inferred_username in project_account_catalogs else SOURCE_GLOBAL
+            )
+
     _apply_account_catalog_layer(
         config_dict=config_dict,
         sources=sources,

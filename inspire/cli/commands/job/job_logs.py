@@ -773,7 +773,7 @@ def _bulk_update_logs(
     refresh: bool,
 ) -> None:
     try:
-        config = Config.from_env(require_target_dir=False)
+        config, _ = Config.from_files_and_env(require_target_dir=False)
         cache = job_deps.JobCache(config.get_expanded_cache_path())
 
         alias_map = {
@@ -902,7 +902,7 @@ def _run_job_logs_single_job(
     bridge: Optional[str] = None,
 ) -> None:
     try:
-        config = Config.from_env(require_target_dir=False)
+        config, _ = Config.from_files_and_env(require_target_dir=False)
         cache = job_deps.JobCache(config.get_expanded_cache_path())
 
         cached = cache.get_job(job_id)
