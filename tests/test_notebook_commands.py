@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Optional
 
 import pytest
@@ -7,6 +8,7 @@ from click.testing import CliRunner
 from inspire import config as config_module
 from inspire.bridge import tunnel as tunnel_module
 from inspire.cli.commands.notebook import notebook_commands as notebook_cmd_module
+from inspire.cli.commands.notebook import notebook_create_flow as notebook_create_flow_module
 from inspire.cli.commands.notebook import notebook_ssh_flow as ssh_flow_module
 from inspire.cli.context import Context, EXIT_API_ERROR, EXIT_CONFIG_ERROR, EXIT_SUCCESS
 from inspire.cli.main import main as cli_main
@@ -74,6 +76,50 @@ def test_notebook_create_rejects_priority_11(monkeypatch: pytest.MonkeyPatch) ->
     assert result.exit_code != EXIT_SUCCESS
     assert "1<=x<=10" in result.output
     assert called is False
+
+
+def test_resolve_notebook_compute_group_bypasses_auto_select_with_explicit_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_auto_select(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("_auto_select_compute_group should not be called")
+
+    monkeypatch.setattr(
+        notebook_create_flow_module,
+        "_auto_select_compute_group",
+        fail_auto_select,
+    )
+    monkeypatch.setattr(
+        browser_api_module,
+        "list_notebook_compute_groups",
+        lambda workspace_id, session=None: [
+            {
+                "logic_compute_group_id": "lcg-4090-cuda128",
+                "name": "4090-cuda12.8",
+                "compute_group_name": "GPU4090资源组",
+                "gpu_type_stats": [],
+            }
+        ],
+    )
+
+    result = notebook_create_flow_module.resolve_notebook_compute_group(
+        Context(),
+        session=SimpleNamespace(),
+        workspace_id="ws-test",
+        gpu_count=1,
+        gpu_pattern="4090",
+        requested_cpu_count=None,
+        auto=True,
+        json_output=True,
+        compute_group_name="4090-cuda12.8",
+    )
+
+    assert result == (
+        "lcg-4090-cuda128",
+        "",
+        "4090",
+        "1x4090",
+    )
 
 
 def test_notebook_create_accepts_post_start_command(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1043,3 +1089,93 @@ def test_run_notebook_ssh_reports_when_tunnel_not_ready(
     assert captured["type"] == "APIError"
     assert "SSH preflight failed" in captured["message"]
     assert "Proxy readiness report:" in captured["hint"]
+
+
+def test_run_notebook_ssh_execs_wrapped_command_from_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeSession:
+        workspace_id = "ws-test"
+        storage_state = {}
+
+    class FakeTunnelConfig:
+        def __init__(self) -> None:
+            self.bridges: dict[str, object] = {
+                "notebook-nb-name": SimpleNamespace(
+                    name="notebook-nb-name",
+                    notebook_id="nb-name",
+                )
+            }
+
+        def add_bridge(self, profile: object) -> None:
+            self.bridges[str(getattr(profile, "name", "default"))] = profile
+
+    fake_tunnel_config = FakeTunnelConfig()
+
+    monkeypatch.setattr(ssh_flow_module, "require_web_session", lambda ctx, hint: FakeSession())
+    monkeypatch.setattr(ssh_flow_module, "get_base_url", lambda: "https://example.invalid")
+    monkeypatch.setattr(ssh_flow_module, "load_config", lambda ctx: SimpleNamespace(username="user"))
+    monkeypatch.setattr(
+        ssh_flow_module,
+        "_resolve_notebook_id",
+        lambda *args, **kwargs: ("nb-name", None),
+    )
+    monkeypatch.setattr(
+        browser_api_module,
+        "get_notebook_detail",
+        lambda notebook_id, session=None: {
+            "resource_spec_price": {"gpu_info": {"gpu_product_simple": "CPU"}}
+        },
+    )
+    monkeypatch.setattr(
+        ssh_flow_module,
+        "_get_current_user_detail",
+        lambda session, base_url: {"id": "user-1", "username": "user"},
+    )
+    monkeypatch.setattr(
+        ssh_flow_module,
+        "_validate_notebook_account_access",
+        lambda current_user, notebook_detail: (True, ""),
+    )
+    monkeypatch.setattr(
+        tunnel_module, "load_tunnel_config", lambda account=None: fake_tunnel_config
+    )
+    monkeypatch.setattr(tunnel_module, "save_tunnel_config", lambda config: None)
+    monkeypatch.setattr(
+        tunnel_module,
+        "get_ssh_command_args",
+        lambda bridge_name, config, remote_command=None: ["bash", "-lc", "echo EXEC_OK"],
+    )
+    monkeypatch.setattr(
+        ssh_flow_module.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="ok\n", stderr=""),
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_execvp(file: str, args: list[str]) -> None:
+        captured["file"] = file
+        captured["args"] = args
+        raise SystemExit(99)
+
+    monkeypatch.setattr(ssh_flow_module.os, "execvp", fake_execvp)
+
+    with pytest.raises(SystemExit) as exc:
+        ssh_flow_module.run_notebook_ssh(
+            Context(),
+            notebook_id="nb-name",
+            wait=False,
+            pubkey=None,
+            save_as=None,
+            port=31337,
+            ssh_port=22222,
+            command="echo hello",
+            rtunnel_bin="/cli/rtunnel",
+            debug_playwright=False,
+            setup_timeout=60,
+        )
+
+    assert exc.value.code == 99
+    assert captured["file"] == "bash"
+    assert captured["args"] == ["bash", "-lc", "echo EXEC_OK"]

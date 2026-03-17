@@ -159,12 +159,14 @@ def sync_via_ssh(
     update_cmd = (
         f"git reset --hard {q_commit_sha}" if force else f"git merge --ff-only {q_commit_sha}"
     )
+    clean_cmd = "git clean -fd" if force else ""
     sync_cmd = f"""
 set -e
 cd {q_target_dir}
 git fetch {q_remote} {q_branch}
 git checkout {q_branch}
 {update_cmd}
+{clean_cmd}
 expected_sha={q_commit_sha}
 actual_sha="$(git rev-parse HEAD)"
 if [ "$actual_sha" != "$expected_sha" ]; then

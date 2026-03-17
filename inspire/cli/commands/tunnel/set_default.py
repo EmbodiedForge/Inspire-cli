@@ -7,6 +7,7 @@ import sys
 import click
 
 from inspire.bridge.tunnel import load_tunnel_config, save_tunnel_config
+from inspire.cli.commands.tunnel._ssh_config_sync import sync_installed_ssh_config
 from inspire.cli.context import Context, EXIT_CONFIG_ERROR, pass_context
 from inspire.cli.formatters import human_formatter, json_formatter
 
@@ -39,6 +40,7 @@ def tunnel_set_default(ctx: Context, name: str) -> None:
 
     config.default_bridge = name
     save_tunnel_config(config)
+    ssh_synced, ssh_sync_error = sync_installed_ssh_config(config)
 
     if ctx.json_output:
         click.echo(
@@ -46,9 +48,14 @@ def tunnel_set_default(ctx: Context, name: str) -> None:
                 {
                     "status": "updated",
                     "default": name,
+                    "ssh_config_synced": ssh_synced,
                 }
             )
         )
         return
 
     click.echo(human_formatter.format_success(f"Default bridge set to: {name}"))
+    if ssh_synced:
+        click.echo("SSH config synced.")
+    elif ssh_sync_error:
+        click.echo(human_formatter.format_warning(f"SSH config sync skipped: {ssh_sync_error}"))

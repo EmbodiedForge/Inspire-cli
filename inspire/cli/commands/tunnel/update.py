@@ -7,6 +7,7 @@ import sys
 import click
 
 from inspire.bridge.tunnel import load_tunnel_config, save_tunnel_config
+from inspire.cli.commands.tunnel._ssh_config_sync import sync_installed_ssh_config
 from inspire.cli.context import Context, EXIT_CONFIG_ERROR, pass_context
 from inspire.cli.formatters import human_formatter, json_formatter
 
@@ -118,6 +119,7 @@ def tunnel_update(
         sys.exit(EXIT_CONFIG_ERROR)
 
     save_tunnel_config(config)
+    ssh_synced, ssh_sync_error = sync_installed_ssh_config(config)
 
     if ctx.json_output:
         click.echo(
@@ -127,6 +129,7 @@ def tunnel_update(
                     "name": name,
                     "updated_fields": updated_fields,
                     "bridge": bridge.to_dict(),
+                    "ssh_config_synced": ssh_synced,
                 }
             )
         )
@@ -142,3 +145,7 @@ def tunnel_update(
             click.echo(f"  SSH port: {bridge.ssh_port}")
         elif field == "has_internet":
             click.echo(f"  Internet: {'yes' if bridge.has_internet else 'no'}")
+    if ssh_synced:
+        click.echo("  SSH config: synced")
+    elif ssh_sync_error:
+        click.echo(human_formatter.format_warning(f"  SSH config sync skipped: {ssh_sync_error}"))

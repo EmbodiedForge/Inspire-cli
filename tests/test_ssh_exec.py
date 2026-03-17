@@ -20,6 +20,40 @@ def _stub_resolve(*args: Any, **kwargs: Any) -> tuple[TunnelConfig, BridgeProfil
     )
 
 
+def test_run_ssh_command_uses_bootstrap_wrapper_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import inspire.bridge.tunnel.ssh_exec as ssh_exec_module
+
+    config = TunnelConfig(
+        bridges={
+            "default": BridgeProfile(name="default", proxy_url="https://proxy.example.com"),
+        },
+        default_bridge="default",
+    )
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(ssh_exec_module, "_ensure_rtunnel_binary", lambda _config: None)
+    monkeypatch.setattr(
+        ssh_exec_module,
+        "get_ssh_command_args",
+        lambda *args, **kwargs: ["bash", "-lc", "wrapped ssh bash -l"],
+    )
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(ssh_exec_module.subprocess, "run", fake_run)
+
+    result = run_ssh_command("echo ok", config=config)
+
+    assert result.returncode == 0
+    assert captured["cmd"] == ["bash", "-lc", "wrapped ssh bash -l"]
+    assert captured["kwargs"]["input"].startswith("export LC_ALL=C LANG=C; echo ok")
+
+
 def test_run_ssh_command_forces_c_locale(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -28,7 +62,18 @@ def test_run_ssh_command_forces_c_locale(
 
     import inspire.bridge.tunnel.ssh_exec as ssh_exec_module
 
-    monkeypatch.setattr(ssh_exec_module, "_resolve_bridge_and_proxy", _stub_resolve)
+    config = TunnelConfig(
+        bridges={
+            "default": BridgeProfile(name="default", proxy_url="https://proxy.example.com"),
+        },
+        default_bridge="default",
+    )
+    monkeypatch.setattr(ssh_exec_module, "_ensure_rtunnel_binary", lambda _config: None)
+    monkeypatch.setattr(
+        ssh_exec_module,
+        "get_ssh_command_args",
+        lambda *args, **kwargs: ["bash", "-lc", "wrapped ssh bash -l"],
+    )
 
     captured: dict[str, Any] = {}
 
@@ -39,12 +84,76 @@ def test_run_ssh_command_forces_c_locale(
 
     monkeypatch.setattr(ssh_exec_module.subprocess, "run", fake_run)
 
-    result = run_ssh_command("echo ok")
+    result = run_ssh_command("echo ok", config=config)
 
     assert result.returncode == 0
-    assert captured["cmd"][-1] == "bash -l"
+    assert captured["cmd"][-1] == "wrapped ssh bash -l"
     assert captured["kwargs"]["env"]["LC_ALL"] == "C"
     assert captured["kwargs"]["env"]["LANG"] == "C"
+
+
+def test_run_ssh_command_streaming_uses_bootstrap_wrapper_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import inspire.bridge.tunnel.ssh_exec as ssh_exec_module
+
+    config = TunnelConfig(
+        bridges={
+            "default": BridgeProfile(name="default", proxy_url="https://proxy.example.com"),
+        },
+        default_bridge="default",
+    )
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(ssh_exec_module, "_ensure_rtunnel_binary", lambda _config: None)
+    monkeypatch.setattr(
+        ssh_exec_module,
+        "get_ssh_command_args",
+        lambda *args, **kwargs: ["bash", "-lc", "wrapped ssh bash -l"],
+    )
+
+    class FakeStdin:
+        def __init__(self) -> None:
+            self.data = ""
+            self.closed = False
+
+        def write(self, text: str) -> None:
+            self.data += text
+
+        def close(self) -> None:
+            self.closed = True
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.stdin = FakeStdin()
+            self.stdout = io.StringIO("hello\n")
+            self.returncode = 0
+
+        def poll(self) -> int:
+            return 0
+
+        def terminate(self) -> None:
+            return None
+
+        def wait(self) -> int:
+            return 0
+
+    def fake_popen(cmd: list[str], **kwargs: Any) -> FakeProcess:
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        process = FakeProcess()
+        captured["process"] = process
+        return process
+
+    monkeypatch.setattr(ssh_exec_module.subprocess, "Popen", fake_popen)
+
+    emitted: list[str] = []
+    exit_code = run_ssh_command_streaming("echo hello", config=config, output_callback=emitted.append)
+
+    assert exit_code == 0
+    assert emitted == ["hello\n"]
+    assert captured["cmd"] == ["bash", "-lc", "wrapped ssh bash -l"]
+    assert captured["process"].stdin.data.startswith("export LC_ALL=C LANG=C; echo hello")
 
 
 def test_run_ssh_command_streaming_forces_c_locale(
@@ -55,7 +164,18 @@ def test_run_ssh_command_streaming_forces_c_locale(
 
     import inspire.bridge.tunnel.ssh_exec as ssh_exec_module
 
-    monkeypatch.setattr(ssh_exec_module, "_resolve_bridge_and_proxy", _stub_resolve)
+    config = TunnelConfig(
+        bridges={
+            "default": BridgeProfile(name="default", proxy_url="https://proxy.example.com"),
+        },
+        default_bridge="default",
+    )
+    monkeypatch.setattr(ssh_exec_module, "_ensure_rtunnel_binary", lambda _config: None)
+    monkeypatch.setattr(
+        ssh_exec_module,
+        "get_ssh_command_args",
+        lambda *args, **kwargs: ["bash", "-lc", "wrapped ssh bash -l"],
+    )
 
     captured: dict[str, Any] = {}
 
@@ -95,11 +215,11 @@ def test_run_ssh_command_streaming_forces_c_locale(
     monkeypatch.setattr(ssh_exec_module.subprocess, "Popen", fake_popen)
 
     emitted: list[str] = []
-    exit_code = run_ssh_command_streaming("echo hello", output_callback=emitted.append)
+    exit_code = run_ssh_command_streaming("echo hello", config=config, output_callback=emitted.append)
 
     assert exit_code == 0
     assert emitted == ["hello\n"]
-    assert captured["cmd"][-1] == "bash -l"
+    assert captured["cmd"][-1] == "wrapped ssh bash -l"
     assert captured["kwargs"]["env"]["LC_ALL"] == "C"
     assert captured["kwargs"]["env"]["LANG"] == "C"
     assert captured["process"].stdin.data.startswith("export LC_ALL=C LANG=C; echo hello")
@@ -110,7 +230,18 @@ def test_run_ssh_command_streaming_does_not_reemit_lines_after_exit(
 ) -> None:
     import inspire.bridge.tunnel.ssh_exec as ssh_exec_module
 
-    monkeypatch.setattr(ssh_exec_module, "_resolve_bridge_and_proxy", _stub_resolve)
+    config = TunnelConfig(
+        bridges={
+            "default": BridgeProfile(name="default", proxy_url="https://proxy.example.com"),
+        },
+        default_bridge="default",
+    )
+    monkeypatch.setattr(ssh_exec_module, "_ensure_rtunnel_binary", lambda _config: None)
+    monkeypatch.setattr(
+        ssh_exec_module,
+        "get_ssh_command_args",
+        lambda *args, **kwargs: ["bash", "-lc", "wrapped ssh bash -l"],
+    )
 
     class FakeStdin:
         def __init__(self) -> None:
@@ -171,7 +302,7 @@ def test_run_ssh_command_streaming_does_not_reemit_lines_after_exit(
     monkeypatch.setattr(ssh_exec_module.select, "select", fake_select)
 
     emitted: list[str] = []
-    exit_code = run_ssh_command_streaming("echo hello", output_callback=emitted.append)
+    exit_code = run_ssh_command_streaming("echo hello", config=config, output_callback=emitted.append)
 
     assert exit_code == 2
     assert emitted == ["dupe\n"]

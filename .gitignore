@@ -53,3 +53,4 @@ config.toml.example
 scripts/
 API_ENDPOINTS.md
 .playwright-cli/
+login.sh

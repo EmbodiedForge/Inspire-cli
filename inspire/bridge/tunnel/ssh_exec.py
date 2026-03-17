@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import select
+import shlex
 import subprocess
 import time
 from typing import Callable, Optional
@@ -17,7 +18,7 @@ from .models import (
     TunnelNotAvailableError,
 )
 from .rtunnel import _ensure_rtunnel_binary
-from .ssh import _get_proxy_command
+from .ssh import _build_rtunnel_cleanup_shell, _get_proxy_command, _to_ws_url
 
 logger = logging.getLogger(__name__)
 
@@ -111,9 +112,18 @@ def run_ssh_command(
     quiet_proxy: bool = True,
 ) -> subprocess.CompletedProcess:
     """Execute a command on Bridge via SSH ProxyCommand."""
-    _config, bridge, proxy_cmd = _resolve_bridge_and_proxy(bridge_name, config, quiet=quiet_proxy)
-    ssh_cmd = _build_ssh_base_args(bridge=bridge, proxy_cmd=proxy_cmd)
-    ssh_cmd.append("bash -l")
+    if config is None:
+        config = load_tunnel_config()
+    bridge = config.get_bridge(bridge_name)
+    if not bridge:
+        if bridge_name:
+            raise BridgeNotFoundError(f"Bridge '{bridge_name}' not found")
+        raise TunnelNotAvailableError(
+            "No bridge configured. Run 'inspire tunnel add <name> <url>' first."
+        )
+
+    _ensure_rtunnel_binary(config)
+    ssh_cmd = get_ssh_command_args(bridge_name=bridge.name, config=config, remote_command="bash -l")
 
     logger.debug(
         "run_ssh_command bridge=%s timeout=%s capture_output=%s quiet_proxy=%s command=%s",
@@ -164,12 +174,44 @@ def get_ssh_command_args(
     config: Optional[TunnelConfig] = None,
     remote_command: Optional[str] = None,
 ) -> list[str]:
-    """Build SSH command arguments with ProxyCommand."""
-    _config, bridge, proxy_cmd = _resolve_bridge_and_proxy(bridge_name, config)
-    args = _build_ssh_base_args(bridge=bridge, proxy_cmd=proxy_cmd, batch_mode=False)
-    if remote_command:
-        args.append(remote_command)
-    return args
+    """Build SSH command arguments using the same bootstrap wrapper as ssh-config."""
+    if config is None:
+        config = load_tunnel_config()
+
+    bridge = config.get_bridge(bridge_name)
+    if not bridge:
+        if bridge_name:
+            raise BridgeNotFoundError(f"Bridge '{bridge_name}' not found")
+        raise TunnelNotAvailableError(
+            "No bridge configured. Run 'inspire tunnel add <name> <url>' first."
+        )
+
+    _ensure_rtunnel_binary(config)
+    local_target = f"{bridge.ssh_user}@localhost"
+    remote_part = f" {shlex.quote(remote_command)}" if remote_command else ""
+    script = (
+        "set -e; "
+        f"RTUNNEL_BIN={shlex.quote(str(config.rtunnel_bin))}; "
+        f"RTUNNEL_URL={shlex.quote(_to_ws_url(bridge.proxy_url))}; "
+        f"LOCAL_PORT={bridge.ssh_port}; "
+        f"{_build_rtunnel_cleanup_shell('LOCAL_PORT')}"
+        "\"$RTUNNEL_BIN\" \"$RTUNNEL_URL\" \"localhost:$LOCAL_PORT\" >/dev/null 2>&1 & "
+        "RT_PID=$!; "
+        "cleanup(){ kill \"$RT_PID\" >/dev/null 2>&1 || true; }; "
+        "trap cleanup EXIT INT TERM; "
+        "for _ in $(seq 1 50); do "
+        "nc -z 127.0.0.1 \"$LOCAL_PORT\" >/dev/null 2>&1 && break; "
+        "sleep 0.1; "
+        "done; "
+        "exec ssh "
+        "-o StrictHostKeyChecking=no "
+        "-o UserKnownHostsFile=/dev/null "
+        "-o LogLevel=ERROR "
+        "-p \"$LOCAL_PORT\" "
+        f"{shlex.quote(local_target)}"
+        f"{remote_part}"
+    )
+    return ["bash", "-lc", script]
 
 
 # ---------------------------------------------------------------------------
@@ -187,9 +229,18 @@ def run_ssh_command_streaming(
     """Execute a command on Bridge via SSH with streaming output."""
     import click
 
-    _config, bridge, proxy_cmd = _resolve_bridge_and_proxy(bridge_name, config)
-    ssh_cmd = _build_ssh_base_args(bridge=bridge, proxy_cmd=proxy_cmd)
-    ssh_cmd.append("bash -l")
+    if config is None:
+        config = load_tunnel_config()
+    bridge = config.get_bridge(bridge_name)
+    if not bridge:
+        if bridge_name:
+            raise BridgeNotFoundError(f"Bridge '{bridge_name}' not found")
+        raise TunnelNotAvailableError(
+            "No bridge configured. Run 'inspire tunnel add <name> <url>' first."
+        )
+
+    _ensure_rtunnel_binary(config)
+    ssh_cmd = get_ssh_command_args(bridge_name=bridge.name, config=config, remote_command="bash -l")
 
     logger.debug(
         "run_ssh_command_streaming bridge=%s timeout=%s command=%s",

@@ -57,7 +57,7 @@ def parse_resource_string(resource: str) -> tuple[int, str, Optional[int]]:
         if parsed is not None:
             return parsed
 
-    for pattern in (r"^(\d+)\s*[xX]\s*(\w+)$", r"^(\d+)\s+(\w+)$", r"^(\d+)([A-Z0-9_-]+)$"):
+    for pattern in (r"^(\d+)\s*[xX]\s*([\w.-]+)$", r"^(\d+)\s+(\w+)$", r"^(\d+)([A-Z0-9_.-]+)$"):
         parsed = _parse_resource_with_pattern(
             resource,
             pattern,
@@ -198,6 +198,26 @@ def _match_compute_group_by_id(
     return None, ""
 
 
+def _match_compute_group_by_name_or_id(
+    *,
+    compute_groups: list[dict],
+    name_or_id: str,
+) -> dict | None:
+    """Find a compute group by exact ID or substring name match (case-insensitive)."""
+    name_lower = name_or_id.lower()
+    # Exact ID match first
+    for group in compute_groups:
+        if group.get("logic_compute_group_id") == name_or_id:
+            return group
+    # Substring name match
+    for group in compute_groups:
+        for field in ("name", "compute_group_name"):
+            group_name = group.get(field, "")
+            if group_name and name_lower in group_name.lower():
+                return group
+    return None
+
+
 def _match_compute_group_by_gpu_type(
     *,
     compute_groups: list[dict],
@@ -210,6 +230,18 @@ def _match_compute_group_by_gpu_type(
             gpu_type_display = gpu_info.get("gpu_type_display", "")
             if match_gpu_type(gpu_pattern, gpu_type_display):
                 return group, gpu_info.get("gpu_type", "")
+    # Fallback: when gpu_type_stats is empty, match against both name fields.
+    # "compute_group_name" is the display name (e.g. "GPU4090资源组") while
+    # "name" is the logical group identifier (e.g. "4090-cuda12.8").  Check
+    # both so that patterns like "4090-cuda12.8" resolve correctly.
+    # Return "" as gpu_type so quota matching uses the lenient empty-string
+    # path (empty string is always a substring of any quota gpu_type).
+    for group in compute_groups:
+        if not group.get("gpu_type_stats"):
+            for field in ("name", "compute_group_name"):
+                group_name = group.get(field, "")
+                if group_name and match_gpu_type(gpu_pattern, group_name):
+                    return group, ""
     return None, ""
 
 
@@ -293,17 +325,22 @@ def resolve_notebook_compute_group(
     requested_cpu_count: Optional[int],
     auto: bool,
     json_output: bool,
+    compute_group_name: Optional[str] = None,
 ) -> tuple[str, str, str, str] | None:
-    auto_selected = _auto_select_compute_group(
-        ctx,
-        gpu_count=gpu_count,
-        gpu_pattern=gpu_pattern,
-        auto=auto,
-        json_output=json_output,
-    )
-    if auto_selected is None:
-        return None
-    auto_selected_group, auto_selected_gpu_type, gpu_pattern = auto_selected
+    # When --compute-group is specified, skip auto-select entirely so a failure
+    # to find a "best available" group never blocks the explicit choice.
+    auto_selected_group, auto_selected_gpu_type = None, ""
+    if not compute_group_name:
+        auto_selected = _auto_select_compute_group(
+            ctx,
+            gpu_count=gpu_count,
+            gpu_pattern=gpu_pattern,
+            auto=auto,
+            json_output=json_output,
+        )
+        if auto_selected is None:
+            return None
+        auto_selected_group, auto_selected_gpu_type, gpu_pattern = auto_selected
 
     resource_display = format_resource_display(gpu_count, gpu_pattern, requested_cpu_count)
 
@@ -321,7 +358,28 @@ def resolve_notebook_compute_group(
 
     selected_group = None
     selected_gpu_type = ""
-    if auto_selected_group:
+
+    # --compute-group explicit override: bypass all auto-selection logic.
+    if compute_group_name:
+        selected_group = _match_compute_group_by_name_or_id(
+            compute_groups=compute_groups,
+            name_or_id=compute_group_name,
+        )
+        if not selected_group:
+            hint = "Available groups:\n" + "\n".join(
+                f"  - {g.get('name', g.get('compute_group_name', '?'))}"
+                for g in compute_groups
+            )
+            _handle_error(
+                ctx,
+                "ValidationError",
+                f"Compute group '{compute_group_name}' not found",
+                EXIT_CONFIG_ERROR,
+                hint=hint,
+            )
+            return None
+
+    if not selected_group and auto_selected_group:
         selected_group, selected_gpu_type = _match_compute_group_by_id(
             compute_groups=compute_groups,
             group_id=auto_selected_group.group_id,
@@ -333,7 +391,8 @@ def resolve_notebook_compute_group(
                 gpu_pattern=auto_selected_group.gpu_type,
             )
 
-    if not selected_group:
+    if not selected_group and gpu_count > 0:
+        # GPU: match by type name
         selected_group, selected_gpu_type = _match_compute_group_by_gpu_type(
             compute_groups=compute_groups,
             gpu_pattern=gpu_pattern,
@@ -419,6 +478,7 @@ def resolve_notebook_quota(
                 quota_gpu_type == selected_gpu_type
                 or match_gpu_type(selected_gpu_type, quota_gpu_type)
                 or match_gpu_type(gpu_pattern, quota_gpu_type)
+                or not quota_gpu_type  # accept untyped quota when gpu_count matches
             ):
                 selected_quota = quota
                 break
@@ -998,6 +1058,18 @@ def _fetch_notebook_images(
         except Exception:
             pass
 
+    if image and not _find_image_match(images, image):
+        try:
+            personal_images = browser_api_module.list_images_by_source(
+                source="personal-visible", session=session
+            )
+            if personal_images:
+                if not json_output:
+                    click.echo("Searching personal images...")
+                images = images + personal_images
+        except Exception:
+            pass
+
     if images:
         return images
 
@@ -1033,6 +1105,7 @@ def run_notebook_create(
     priority: Optional[int] = None,
     project_explicit: bool = False,
     keepalive: bool | None = None,
+    compute_group_name: Optional[str] = None,
 ) -> None:
     del project_explicit  # Reserved for future behavior; currently inferred from value presence.
     json_output = resolve_json_output(ctx, json_output)
@@ -1099,6 +1172,7 @@ def run_notebook_create(
         requested_cpu_count=requested_cpu_count,
         auto=auto,
         json_output=json_output,
+        compute_group_name=compute_group_name,
     )
     if not compute_group:
         return

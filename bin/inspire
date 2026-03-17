@@ -4,6 +4,32 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_DIR="${INSPIRE_VENV:-$ROOT_DIR/.venv}"
 
+maybe_load_auto_env() {
+  local auto_env_disable="${INSPIRE_AUTO_ENV_DISABLE:-0}"
+  if [ "$auto_env_disable" = "1" ]; then
+    return 0
+  fi
+
+  # Skip auto-load when core auth vars are already present.
+  if [ -n "${INSPIRE_USERNAME:-}" ] && [ -n "${INSPIRE_PASSWORD:-}" ]; then
+    return 0
+  fi
+
+  local candidate=""
+  if [ -n "${INSPIRE_AUTO_ENV_FILE:-}" ]; then
+    candidate="$INSPIRE_AUTO_ENV_FILE"
+  elif [ -f "$ROOT_DIR/login.sh" ]; then
+    candidate="$ROOT_DIR/login.sh"
+  fi
+
+  if [ -n "$candidate" ] && [ -r "$candidate" ]; then
+    # shellcheck disable=SC1090
+    source "$candidate"
+  fi
+}
+
+maybe_load_auto_env
+
 if [ -x "$VENV_DIR/bin/inspire" ]; then
   exec "$VENV_DIR/bin/inspire" "$@"
 fi

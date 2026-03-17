@@ -51,6 +51,7 @@ def test_sync_via_ssh_force_uses_hard_reset(monkeypatch) -> None:
     )
 
     assert "git reset --hard" in captured["command"]
+    assert "git clean -fd" in captured["command"]
 
 
 def test_sync_via_ssh_bundle_uses_scp_and_remote_fetch(monkeypatch) -> None:

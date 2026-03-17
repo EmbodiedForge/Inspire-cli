@@ -126,6 +126,14 @@ from inspire.platform.web.browser_api import NotebookFailedError
     default=None,
     help="Task priority (1-10, default from config [job].priority or 6)",
 )
+@click.option(
+    "--compute-group",
+    default=None,
+    help=(
+        "Compute group name or ID (bypasses GPU-type auto-matching). "
+        "Use when multiple groups share the same GPU type, e.g. 'CPU资源-2' or '4090-cuda12.8'."
+    ),
+)
 @pass_context
 def create_notebook_cmd(
     ctx: Context,
@@ -143,6 +151,7 @@ def create_notebook_cmd(
     post_start_script: Optional[Path],
     json_output: bool,
     priority: Optional[int],
+    compute_group: Optional[str],
 ) -> None:
     """Create a new interactive notebook instance.
 
@@ -154,6 +163,7 @@ def create_notebook_cmd(
         inspire notebook create -r 4x               # 4 GPUs, auto-select type
         inspire notebook create -r 8x               # 8 GPUs (full node), auto-select type
         inspire notebook create -r 4CPU             # 4 CPUs
+        inspire notebook create -r 20xCPU --compute-group CPU资源-2  # specific CPU group
         inspire notebook create -r 1xH100 --shm-size 64  # With 64GB shared memory
         inspire notebook create --no-auto -r 1xH200 # Disable auto-select
         inspire notebook create --post-start 'bash /workspace/bootstrap.sh'
@@ -183,6 +193,7 @@ def create_notebook_cmd(
         json_output=json_output,
         priority=priority,
         project_explicit=project_explicit,
+        compute_group_name=compute_group,
     )
 
 

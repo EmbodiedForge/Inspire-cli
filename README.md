@@ -19,6 +19,8 @@ uv tool install -e .
 inspire --help
 ```
 
+When using the repo-local wrapper `bin/inspire`, the script now auto-loads `./login.sh` by default if core auth vars are not already set. This reduces "works in sourced shell only" failures during local development and keeps the wrapper closer to how real project repos are used. Set `INSPIRE_AUTO_ENV_DISABLE=1` to disable this behavior, or `INSPIRE_AUTO_ENV_FILE=/path/to/login.sh` to point at a different env file.
+
 ## Quick Start
 
 ### 1. Auto-discover your platform
@@ -108,10 +110,28 @@ inspire project list
 
 - There is no `inspire tunnel start` command. Create or refresh bridge profiles with `inspire notebook ssh <notebook-id> --save-as <name>` (or `inspire tunnel add` / `inspire tunnel update`), then validate with `inspire tunnel status`.
 - `inspire bridge ssh` and `inspire bridge scp` validate `--bridge` names before connectivity checks. If a profile is missing, run `inspire tunnel list`.
+- `inspire tunnel list`, `inspire tunnel status`, and `inspire tunnel test` now use the same bootstrap SSH path as generated `ssh <bridge>` aliases. This avoids false `not responding` results when direct `rtunnel ... stdio://...` probing is flaky but the saved bridge alias is actually usable.
+- If `inspire tunnel list` still shows `not responding`, confirm with direct `ssh <bridge>` before concluding the bridge is down. A saved profile can still be valid even when a specific probe path is flaky.
 - Saved notebook profiles now store the source notebook ID. Reusing `--save-as <name>` for a different notebook refreshes the tunnel instead of reusing stale tunnel state.
 - `inspire bridge ssh`, `inspire bridge exec`, and interactive `inspire notebook ssh` auto-rebuild/reconnect dropped tunnels for notebook-backed profiles, using `tunnel.retries` / `tunnel.retry_pause` as retry controls.
 - Non-notebook tunnel profiles (for example, manually added profiles without `notebook_id`) cannot be auto-rebuilt and still require manual tunnel recovery.
-- `inspire tunnel ssh-config` now writes shell-quoted `ProxyCommand` entries so proxy URLs with query parameters/tokens remain safe in `~/.ssh/config`.
+- `inspire tunnel ssh-config` now installs a managed block in `~/.ssh/config` and writes shell-quoted `ProxyCommand` entries so proxy URLs with query parameters/tokens remain safe. Existing non-Inspire hosts are preserved.
+- After `inspire tunnel add`, `update`, `remove`, or `set-default`, the CLI now auto-refreshes the managed Inspire block in `~/.ssh/config` if one is already installed. This keeps `ssh <bridge>` aliases aligned with the saved tunnel config instead of leaving stale proxy URLs or ports behind.
+- Generated SSH aliases and runtime SSH execution now start a short-lived local `rtunnel` bootstrap listener and clean up stale listeners on the target port first. This was added because direct long-lived `ProxyCommand rtunnel ... stdio://...` paths were more fragile under reconnects and could leave port conflicts behind.
+
+## Notebook Resource Notes
+
+- `inspire notebook create --resource` now accepts GPU patterns containing dots and hyphens, such as `1x4090-cuda12.8`.
+- When notebook compute groups come back without `gpu_type_stats`, the resolver now falls back to matching both the logical group name and display name. This is needed because some workspaces expose names like `4090-cuda12.8` in one field and `GPU4090资源组` in another.
+- Notebook quota matching now accepts untyped quota entries when the GPU count matches. This avoids false "No quota found" failures in workspaces whose quota API omits `gpu_type`.
+
+These changes were made because some real notebook workspaces expose incomplete or inconsistent GPU metadata, and the old matcher rejected otherwise valid resource selections.
+
+## Force Sync Behavior
+
+- `inspire sync --force` now runs `git clean -fd` on the remote checkout after the forced reset.
+
+This is documented because a forced sync is expected to make the remote tree match the chosen commit exactly. Without cleaning untracked files, stale generated artifacts or deleted files could remain on the remote side and make subsequent runs diverge from local expectations.
 
 ## Configuration
 
@@ -196,4 +216,4 @@ inspire init --json --template --project --force
 | `INSPIRE_WORKSPACE_INTERNET_ID` | Internet-enabled workspace ID (e.g. RTX 4090) |
 | `INSPIRE_PROJECT_ID` | Default project ID |
 | `INSP_IMAGE` | Default Docker image |
-| `INSP_PRIORITY` | Job priority (1-10) |
+| `INSP_PRIORITY` | Default job/notebook priority (1-10); typically set to `10` unless lower priority is intentional |
