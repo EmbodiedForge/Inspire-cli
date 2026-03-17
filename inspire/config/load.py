@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+import os
 from pathlib import Path
 
 from inspire.config.models import (
@@ -140,7 +141,17 @@ def config_from_files_and_env(
         config_dict["context_account"] = context_account
         sources["context_account"] = SOURCE_PROJECT
 
-    if not str(config_dict.get("username") or "").strip() and not context_account:
+    env_username = str(os.getenv("INSPIRE_USERNAME") or "").strip()
+    current_username = str(config_dict.get("username") or "").strip()
+    username_source = sources.get("username")
+
+    if env_username and not (prefer_source == "toml" and username_source == SOURCE_PROJECT):
+        config_dict["username"] = env_username
+        sources["username"] = SOURCE_ENV
+    elif not current_username and context_account:
+        config_dict["username"] = context_account
+        sources["username"] = SOURCE_PROJECT
+    elif not current_username and not context_account:
         candidate_accounts = set(global_account_catalogs.keys()) | set(project_account_catalogs.keys())
         if len(candidate_accounts) == 1:
             inferred_username = next(iter(candidate_accounts))

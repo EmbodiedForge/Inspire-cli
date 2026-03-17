@@ -2069,6 +2069,37 @@ password = "global-pass"
         assert sources["username"] == SOURCE_GLOBAL
         assert sources["password"] == SOURCE_GLOBAL
 
+    def test_env_username_does_not_load_single_account_metadata(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
+    ) -> None:
+        """Env username should win before account-scoped metadata is applied."""
+        global_dir = tmp_path / "global"
+        global_dir.mkdir()
+        global_config = global_dir / "config.toml"
+        global_config.write_text(
+            """
+[accounts."bob"]
+password = "bob-pass"
+
+[accounts."bob".workspaces]
+gpu = "ws-bob-gpu"
+
+[accounts."bob".projects]
+demo = "project-bob"
+"""
+        )
+
+        monkeypatch.setattr(Config, "GLOBAL_CONFIG_PATH", global_config)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("INSPIRE_USERNAME", "alice")
+
+        cfg, sources = Config.from_files_and_env(require_credentials=False)
+
+        assert cfg.username == "alice"
+        assert sources["username"] == SOURCE_ENV
+        assert cfg.workspaces == {}
+        assert cfg.projects == {}
+
     def test_password_resolves_from_project_accounts_map(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_env: None
     ) -> None:
