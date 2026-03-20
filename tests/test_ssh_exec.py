@@ -158,12 +158,27 @@ def test_get_ssh_command_args_wraps_remote_command_in_quiet_bash(
 ) -> None:
     import inspire.bridge.tunnel.ssh_exec as ssh_exec_module
 
-    monkeypatch.setattr(ssh_exec_module, "_resolve_bridge_and_proxy", _stub_resolve)
+    config = TunnelConfig()
+    config.add_bridge(
+        BridgeProfile(
+            name="default",
+            proxy_url="https://proxy.example.com",
+            identity_file="/tmp/test-id",
+        )
+    )
+    monkeypatch.setattr(ssh_exec_module, "_ensure_rtunnel_binary", lambda _config: None)
 
-    args = get_ssh_command_args(remote_command="echo hi && pwd")
+    args = get_ssh_command_args(config=config, remote_command="echo hi && pwd")
 
-    _assert_has_locale_ssh_options(args)
-    assert args[-1] == "bash --noprofile --norc -lc " + shlex.quote("echo hi && pwd")
+    assert args[:2] == ["bash", "-lc"]
+    script = args[2]
+    assert "-i /tmp/test-id" in script
+    assert "-F /dev/null" in script
+    assert "SetEnv=LC_ALL=C" in script
+    assert "SetEnv=LANG=C" in script
+    assert "lsof -nP -t -iTCP:$LOCAL_PORT" in script
+    assert "exec ssh" in script
+    assert shlex.quote("bash --noprofile --norc -lc " + shlex.quote("echo hi && pwd")) in script
 
 
 def test_build_ssh_process_env_forces_safe_locale(

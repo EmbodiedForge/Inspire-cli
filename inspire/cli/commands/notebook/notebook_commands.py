@@ -65,6 +65,11 @@ from inspire.platform.web.browser_api import NotebookFailedError
     help="Resource spec (e.g., 1xH200, 4xH100, 4CPU) (default from config [notebook].resource or [defaults].resource)",
 )
 @click.option(
+    "--compute-group",
+    default=None,
+    help="Explicit compute group name or logic_compute_group_id override",
+)
+@click.option(
     "--project",
     "-p",
     default=None,
@@ -134,6 +139,7 @@ def create_notebook_cmd(
     workspace: Optional[str],
     workspace_id: Optional[str],
     resource: Optional[str],
+    compute_group: Optional[str],
     project: Optional[str],
     image: Optional[str],
     shm_size: Optional[int],
@@ -173,6 +179,7 @@ def create_notebook_cmd(
         workspace=workspace,
         workspace_id=workspace_id,
         resource=resource,
+        compute_group_name=compute_group,
         project=project,
         image=image,
         shm_size=shm_size,

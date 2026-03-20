@@ -29,6 +29,8 @@ from .ssh import (
     generate_all_ssh_configs,
     generate_ssh_config,
     get_tunnel_status,
+    has_installed_ssh_config,
+    install_all_ssh_configs,
     install_ssh_config,
     is_tunnel_available,
 )
@@ -72,6 +74,8 @@ __all__ = [
     # ssh-config
     "generate_all_ssh_configs",
     "generate_ssh_config",
+    "has_installed_ssh_config",
+    "install_all_ssh_configs",
     "install_ssh_config",
     # Sync
     "sync_via_ssh",

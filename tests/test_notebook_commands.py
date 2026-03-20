@@ -93,6 +93,25 @@ def test_notebook_create_accepts_post_start_command(monkeypatch: pytest.MonkeyPa
     assert captured["post_start_script"] is None
 
 
+def test_notebook_create_accepts_compute_group(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run_notebook_create(ctx: Context, **kwargs: Any) -> None:
+        assert ctx is not None
+        captured.update(kwargs)
+
+    monkeypatch.setattr(notebook_cmd_module, "run_notebook_create", fake_run_notebook_create)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_main,
+        ["notebook", "create", "--compute-group", "4090-cuda12.8"],
+    )
+
+    assert result.exit_code == EXIT_SUCCESS
+    assert captured["compute_group_name"] == "4090-cuda12.8"
+
+
 def test_notebook_create_rejects_post_start_and_script_together(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

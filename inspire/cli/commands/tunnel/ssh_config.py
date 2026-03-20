@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import re
 import sys
-from pathlib import Path
 
 import click
 
@@ -13,6 +11,7 @@ from inspire.bridge.tunnel import (
     generate_all_ssh_configs,
     generate_ssh_config,
     get_rtunnel_path,
+    install_all_ssh_configs,
     install_ssh_config,
     load_tunnel_config,
 )
@@ -115,21 +114,7 @@ def tunnel_ssh_config(ctx: Context, bridge: str, install: bool) -> None:
             return
 
         if install:
-            ssh_config_path = Path.home() / ".ssh" / "config"
-            ssh_config_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-
-            if ssh_config_path.exists():
-                content = ssh_config_path.read_text()
-                for bridge_name in list(config.bridges.keys()):
-                    pattern = rf"Host\s+.*?\b{re.escape(bridge_name)}\b.*?(?=\nHost\s|\Z)"
-                    content = re.sub(pattern, "", content, flags=re.DOTALL | re.MULTILINE)
-                ssh_config_path.write_text(content)
-
-            with ssh_config_path.open("a", encoding="utf-8") as f:
-                f.write("\n")
-                f.write("# Inspire Bridges (auto-generated)\n")
-                f.write(all_configs)
-                f.write("\n")
+            install_all_ssh_configs(config)
 
             click.echo(
                 human_formatter.format_success(

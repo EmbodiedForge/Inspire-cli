@@ -302,6 +302,70 @@ def test_run_notebook_create_skips_post_start_when_wait_fails(monkeypatch) -> No
     assert "post_start_called" not in calls
 
 
+def test_resolve_notebook_compute_group_accepts_explicit_group_name(
+    monkeypatch,
+) -> None:  # noqa: ANN001
+    monkeypatch.setattr(
+        flow_module.browser_api_module,
+        "list_notebook_compute_groups",
+        lambda workspace_id, session=None: [
+            {
+                "logic_compute_group_id": "lcg-4090-cuda128",
+                "name": "4090-cuda12.8",
+                "compute_group_name": "GPU4090资源组",
+                "gpu_type_stats": [],
+            }
+        ],
+    )
+
+    result = flow_module.resolve_notebook_compute_group(
+        Context(),
+        session=SimpleNamespace(),
+        workspace_id="ws-test",
+        gpu_count=1,
+        gpu_pattern="4090",
+        requested_cpu_count=None,
+        auto=True,
+        json_output=True,
+        compute_group_name="4090-cuda12.8",
+    )
+
+    assert result == ("lcg-4090-cuda128", "", "4090", "1x4090")
+
+
+def test_fetch_notebook_images_falls_back_to_personal_visible(monkeypatch) -> None:  # noqa: ANN001
+    public_calls: list[str] = []
+
+    monkeypatch.setattr(
+        flow_module.browser_api_module,
+        "list_images",
+        lambda workspace_id, source=None, session=None: (
+            [] if not source else public_calls.append(source) or []
+        ),
+    )
+    monkeypatch.setattr(
+        flow_module.browser_api_module,
+        "list_images_by_source",
+        lambda source, session=None: (
+            [SimpleNamespace(image_id="img-personal", url="docker://personal", name="my-image")]
+            if source == "personal-visible"
+            else []
+        ),
+    )
+
+    images = flow_module._fetch_notebook_images(
+        Context(),
+        workspace_id="ws-test",
+        session=SimpleNamespace(),
+        image="my-image",
+        json_output=True,
+    )
+
+    assert images is not None
+    assert any(getattr(item, "name", "") == "my-image" for item in images)
+    assert public_calls == ["SOURCE_PUBLIC"]
+
+
 def test_maybe_run_post_start_warns_when_start_is_not_confirmed(
     monkeypatch, capsys
 ) -> None:  # noqa: ANN001

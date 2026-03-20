@@ -18,7 +18,7 @@ from .models import (
     TunnelNotAvailableError,
 )
 from .rtunnel import _ensure_rtunnel_binary
-from .ssh import _get_proxy_command
+from .ssh import _build_rtunnel_cleanup_shell, _get_proxy_command, _to_ws_url
 
 logger = logging.getLogger(__name__)
 
@@ -189,12 +189,51 @@ def get_ssh_command_args(
     config: Optional[TunnelConfig] = None,
     remote_command: Optional[str] = None,
 ) -> list[str]:
-    """Build SSH command arguments with ProxyCommand."""
-    _config, bridge, proxy_cmd = _resolve_bridge_and_proxy(bridge_name, config)
-    args = _build_ssh_base_args(bridge=bridge, proxy_cmd=proxy_cmd, batch_mode=False)
+    """Build SSH command arguments using the same bootstrap wrapper as ssh-config."""
+    if config is None:
+        config = load_tunnel_config()
+
+    bridge = config.get_bridge(bridge_name)
+    if not bridge:
+        if bridge_name:
+            raise BridgeNotFoundError(f"Bridge '{bridge_name}' not found")
+        raise TunnelNotAvailableError(
+            "No bridge configured. Run 'inspire tunnel add <name> <url>' first."
+        )
+
+    _ensure_rtunnel_binary(config)
+    local_target = f"{bridge.ssh_user}@localhost"
+    ssh_prefix_args = [
+        "ssh",
+        *([] if not bridge.identity_file else ["-i", bridge.identity_file]),
+        *_ssh_locale_args(),
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "LogLevel=ERROR",
+    ]
+    ssh_command = f'{shlex.join(ssh_prefix_args)} -p "$LOCAL_PORT" {shlex.quote(local_target)}'
     if remote_command:
-        args.append(_wrap_remote_command(remote_command))
-    return args
+        ssh_command += f" {shlex.quote(_wrap_remote_command(remote_command))}"
+    script = (
+        "set -e; "
+        f"RTUNNEL_BIN={shlex.quote(str(config.rtunnel_bin))}; "
+        f"RTUNNEL_URL={shlex.quote(_to_ws_url(bridge.proxy_url))}; "
+        f"LOCAL_PORT={bridge.ssh_port}; "
+        f"{_build_rtunnel_cleanup_shell('LOCAL_PORT')}"
+        '"$RTUNNEL_BIN" "$RTUNNEL_URL" "localhost:$LOCAL_PORT" >/dev/null 2>&1 & '
+        "RT_PID=$!; "
+        'cleanup(){ kill "$RT_PID" >/dev/null 2>&1 || true; }; '
+        "trap cleanup EXIT INT TERM; "
+        "for _ in $(seq 1 50); do "
+        'nc -z 127.0.0.1 "$LOCAL_PORT" >/dev/null 2>&1 && break; '
+        "sleep 0.1; "
+        "done; "
+        f"exec {ssh_command}"
+    )
+    return ["bash", "-lc", script]
 
 
 # ---------------------------------------------------------------------------
