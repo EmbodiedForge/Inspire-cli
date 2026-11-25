@@ -26,6 +26,7 @@ SOURCE_GLOBAL = "global"
 SOURCE_PROJECT = "project"
 SOURCE_ENV = "env"
 SOURCE_INFERRED = "inferred"
+SOURCE_CLI = "cli"
 
 
 def _default_rtunnel_download_url() -> str:
@@ -42,11 +43,21 @@ class Config:
     username: str
     password: str
 
+    # Local selector for the account record. Never inferred from username.
+    account_alias: Optional[str] = None
+
+    # Optional command-backed password provider for the selected account.
+    password_command: Optional[str] = None
+
+    # Optional serving API key (Bearer token for serving endpoints)
+    api_key: Optional[str] = None
+
+    # Authentication method
+    auth_method: str = "http"
+
     # Optional with defaults
     base_url: str = "https://api.example.com"
     target_dir: Optional[str] = None  # INSPIRE_TARGET_DIR - unified for all Bridge operations
-    log_pattern: str = "training_master_*.log"
-    job_cache_path: str = "~/.inspire/jobs.json"
 
     # API settings
     timeout: int = 30
@@ -106,18 +117,15 @@ class Config:
     default_priority: Optional[int] = None
     default_workspace_id: Optional[str] = None
 
-    # Workspace routing (optional)
-    workspace_cpu_id: Optional[str] = None
-    workspace_gpu_id: Optional[str] = None
-    workspace_internet_id: Optional[str] = None
-
-    # Full workspace map loaded from account-scoped [accounts."<user>".workspaces]
-    workspaces: dict[str, str] = field(default_factory=dict)
+    # User-written workspace aliases and compute-pool reachability declarations.
+    workspace_selectors: dict[str, dict[str, str]] = field(default_factory=dict)
+    pool_internet: dict[str, bool] = field(default_factory=dict)
 
     # Project alias map for project_id resolution (alias -> project-...)
     projects: dict[str, str] = field(default_factory=dict)
+    project_selectors: dict[str, dict[str, str]] = field(default_factory=dict)
 
-    # Discovered per-account project metadata (loaded from layered [accounts."<user>"] catalog)
+    # Discovered per-account project metadata (loaded from [accounts."<alias>"] catalog)
     # project_id -> metadata dict (best-effort, schema may evolve)
     project_catalog: dict[str, dict[str, Any]] = field(default_factory=dict)
     # project_id -> shared-path grouping key (e.g. "/train/global_user/<user>")
@@ -129,8 +137,12 @@ class Config:
     # Account-level train job workdir (if available)
     account_train_job_workdir: Optional[str] = None
 
-    # Legacy project context account binding (from deprecated [context].account)
+    # Project/global Account Context selector.
     context_account: Optional[str] = None
+
+    # Portable workload profiles merged from global and project config.
+    profiles: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
+    profile_sources: dict[str, dict[str, str]] = field(default_factory=dict)
 
     # Notebook settings
     notebook_resource: Optional[str] = None
@@ -140,6 +152,7 @@ class Config:
     notebook_workspace_id: Optional[str] = None
     notebook_shm_size: Optional[int] = None
     notebook_post_start: Optional[str] = None
+    notebook_post_start_mode: Optional[str] = None
 
     # SSH settings
     rtunnel_bin: Optional[str] = None
@@ -149,6 +162,7 @@ class Config:
     rtunnel_download_url: str = field(default_factory=_default_rtunnel_download_url)
     apt_mirror_url: Optional[str] = None
     rtunnel_upload_policy: str = "auto"
+    host_key_dir: Optional[str] = None
     ssh_port: int = 22222
 
     # Tunnel retry settings
@@ -174,9 +188,16 @@ class Config:
     # Structure: {workspace_id: "workspace_name"}
     # Maps workspace IDs to their human-readable names.
     workspace_names: dict[str, str] = field(default_factory=dict)
+    discovery_state_status: Optional[str] = None
+    discovery_state_path: Optional[str] = None
+    discovery_state_updated_at: Optional[str] = None
 
     # Remote environment variables (injected into bridge exec, jobs, run commands)
     remote_env: dict[str, str] = field(default_factory=dict)
+    remote_runtime_cwd: Optional[str] = None
+    remote_runtime_path_prepend: list[str] = field(default_factory=list)
+    remote_runtime_venv: str = "auto"
+    remote_runtime_env: dict[str, str] = field(default_factory=dict)
 
     # Global per-account secrets map, loaded from global config:
     # [accounts."<username>"].password
@@ -197,9 +218,10 @@ class Config:
             return Path(override).expanduser()
         return cls.GLOBAL_CONFIG_PATH
 
-    def get_expanded_cache_path(self) -> str:
-        """Get the job cache path with ~ expanded."""
-        return os.path.expanduser(self.job_cache_path)
+    def get_account_context(self):  # noqa: ANN201
+        from inspire.config.accounts import resolve_account_context
+
+        return resolve_account_context(self)
 
     @classmethod
     def _find_project_config(cls) -> Path | None:
@@ -239,12 +261,17 @@ class Config:
 
     @classmethod
     def from_files_and_env(
-        cls, require_target_dir: bool = False, require_credentials: bool = True
+        cls,
+        require_target_dir: bool = False,
+        require_credentials: bool = True,
+        account_alias: str | None = None,
     ) -> tuple["Config", dict[str, str]]:
         from inspire.config.load import config_from_files_and_env
 
         return config_from_files_and_env(
-            require_target_dir=require_target_dir, require_credentials=require_credentials
+            require_target_dir=require_target_dir,
+            require_credentials=require_credentials,
+            account_alias=account_alias,
         )
 
     @classmethod

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
+from typing import Any
 
 import click
 
@@ -13,12 +13,14 @@ from inspire.cli.context import (
     EXIT_GENERAL_ERROR,
     pass_context,
 )
+from inspire.cli.formatters.json_formatter import format_json
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.notebook_cli import resolve_json_output
 from inspire.config import (
     Config,
     ConfigError,
     ConfigOption,
+    SOURCE_CLI,
     SOURCE_DEFAULT,
     SOURCE_ENV,
     SOURCE_GLOBAL,
@@ -33,6 +35,7 @@ from inspire.config import (
 # ---------------------------------------------------------------------------
 
 SOURCE_LABELS: dict[str, tuple[str, str]] = {
+    SOURCE_CLI: ("cli", "bright_blue"),
     SOURCE_DEFAULT: ("default", "white"),
     SOURCE_GLOBAL: ("global", "cyan"),
     SOURCE_PROJECT: ("project", "green"),
@@ -98,6 +101,9 @@ def _show_table(
         click.echo(
             "  Precedence: " + click.style("env vars win", fg="yellow") + " on conflict (default)"
         )
+    click.echo(f"  Account:  {cfg.account_alias or '(legacy username config)'}")
+    click.echo(f"  Username: {cfg.username or '(not set)'}")
+    click.echo(f"  Base URL: {cfg.base_url}")
 
     click.echo()
 
@@ -160,12 +166,22 @@ def _show_json(
     compact: bool,
     filter_category: str | None,
 ) -> None:
-    result = {
+    result: dict[str, Any] = {
         "config_files": {
             "global": str(global_path) if global_path else None,
             "project": str(project_path) if project_path else None,
         },
         "prefer_source": getattr(cfg, "prefer_source", "env"),
+        "account_context": {
+            "alias": cfg.account_alias,
+            "username": cfg.username or None,
+            "base_url": cfg.base_url,
+            "sources": {
+                "alias": sources.get("account_alias", SOURCE_DEFAULT),
+                "username": sources.get("username", SOURCE_DEFAULT),
+                "base_url": sources.get("base_url", SOURCE_DEFAULT),
+            },
+        },
         "values": {},
     }
 
@@ -196,10 +212,13 @@ def _show_json(
                 "description": option.description,
             }
 
-    click.echo(json.dumps(result, indent=2))
+    click.echo(format_json(result))
 
 
 def _show_env(cfg: Config, compact: bool, filter_category: str | None) -> None:
+    if cfg.account_alias:
+        click.echo(f"INSPIRE_ACCOUNT={cfg.account_alias}")
+        click.echo()
     categories = get_categories()
     if filter_category:
         filter_value = filter_category.lower()

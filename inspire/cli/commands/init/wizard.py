@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import click
 import questionary
@@ -14,6 +14,10 @@ from inspire.config.toml import _load_toml
 
 class _WizardCancelled(Exception):
     """Raised when the interactive wizard is cancelled by the user."""
+
+
+# Empty answers to a required prompt are re-asked, then the step fails.
+_REQUIRED_PROMPT_ATTEMPTS = 3
 
 
 def _wizard_info(message: str) -> None:
@@ -69,7 +73,7 @@ def _format_project_label(project: dict[str, Any]) -> str:
 
 def _get_existing_config_summary(global_path: Path, project_path: Path) -> dict[str, Any]:
     """Get summary of existing config files."""
-    summary = {
+    summary: dict[str, Any] = {
         "global_exists": global_path.exists(),
         "project_exists": project_path.exists(),
         "global_config": None,
@@ -170,18 +174,42 @@ def _prompt_credentials() -> tuple[str, str, str] | None:
         _wizard_error("Password is required")
         return None
 
-    # Prompt for base URL
-    base_url = questionary.text(
-        "Base URL (e.g., https://inspire.example.com):",
-        default=env_base_url or "https://api.example.com",
-    )
-    base_url = _ask_or_cancel(base_url)
+    # Prompt for base URL. The example is display text only — defaulting to it
+    # would persist a placeholder host that nothing can resolve against.
+    base_url_default = env_base_url
+    base_url = ""
+    for _ in range(_REQUIRED_PROMPT_ATTEMPTS):
+        base_url = str(
+            _ask_or_cancel(
+                questionary.text(
+                    "Base URL (e.g., https://inspire.example.com):",
+                    default=base_url_default,
+                )
+            )
+            or ""
+        ).strip()
+        if base_url:
+            break
+        _wizard_error("Base URL is required")
+        base_url_default = ""
 
     if not base_url:
-        _wizard_error("Base URL is required")
         return None
 
     return username, password, base_url
+
+
+def _prompt_account_alias(default: str | None = None) -> str | None:
+    """Prompt for the local account alias, which is distinct from username."""
+    prompt = questionary.text(
+        "Account alias:",
+        default=str(default or "").strip(),
+    )
+    alias = str(_ask_or_cancel(prompt) or "").strip()
+    if not alias:
+        _wizard_error("Account alias is required")
+        return None
+    return alias
 
 
 def _prompt_discovery() -> bool:
@@ -218,11 +246,11 @@ def _prompt_project_ranking(projects: list[dict[str, Any]]) -> list[str]:
         choices.append(questionary.Choice(title=label, value=proj_id))
 
     # Let user select and order projects
-    selected = questionary.checkbox(
+    selected_prompt = questionary.checkbox(
         "Select projects (use space to select, then we'll order them):",
         choices=choices,
     )
-    selected = _ask_or_cancel(selected)
+    selected = cast(list[str], _ask_or_cancel(selected_prompt))
 
     if selected == []:
         return []
@@ -231,7 +259,7 @@ def _prompt_project_ranking(projects: list[dict[str, Any]]) -> list[str]:
     if len(selected) > 1:
         click.echo("\nNow let's order them by priority (highest first):\n")
 
-        ordered = []
+        ordered: list[str] = []
         remaining = selected.copy()
 
         for i in range(len(selected)):
@@ -239,14 +267,14 @@ def _prompt_project_ranking(projects: list[dict[str, Any]]) -> list[str]:
             remaining_choices = [c for c in choices if c.value in remaining]
 
             if len(remaining_choices) == 1:
-                ordered.append(remaining_choices[0].value)
+                ordered.append(cast(str, remaining_choices[0].value))
                 break
 
-            choice = questionary.select(
+            choice_prompt = questionary.select(
                 f"Priority {i + 1}:",
                 choices=remaining_choices,
             )
-            choice = _ask_or_cancel(choice)
+            choice = cast(str, _ask_or_cancel(choice_prompt))
 
             ordered.append(choice)
             remaining.remove(choice)
@@ -276,6 +304,7 @@ def _prompt_target_dir(default: str | None = None) -> str | None:
 def _create_config_files(
     global_path: Path,
     project_path: Path,
+    account_alias: str,
     credentials: tuple[str, str, str],
     project_order: list[str],
     target_dir: str | None,
@@ -291,33 +320,21 @@ def _create_config_files(
     global_doc.add(tomlkit.comment("Inspire CLI Global Configuration"))
     global_doc.add(tomlkit.nl())
 
-    # Auth section
-    auth_table = tomlkit.table()
-    auth_table.add("username", username)
-    global_doc.add("auth", auth_table)
-    global_doc.add(tomlkit.nl())
-
-    # API section
-    api_table = tomlkit.table()
-    api_table.add("base_url", base_url)
-    global_doc.add("api", api_table)
+    context_table = tomlkit.table()
+    context_table.add("account", account_alias)
+    global_doc.add("context", context_table)
     global_doc.add(tomlkit.nl())
 
     # Accounts section with password
     accounts_table = tomlkit.table()
     user_account = tomlkit.table()
+    user_account.add("username", username)
     user_account.add("password", password)
+    user_account.add("base_url", base_url.rstrip("/"))
+    user_account.add("auth_method", "http")
 
     # Add discovered data if available
     if discover_results:
-        # Workspaces
-        if "workspaces" in discover_results:
-            ws_table = tomlkit.table()
-            for alias, ws_id in discover_results["workspaces"].items():
-                ws_table.add(alias, ws_id)
-            if ws_table:
-                user_account.add("workspaces", ws_table)
-
         # Compute groups
         if "compute_groups" in discover_results:
             compute_groups_aot = tomlkit.aot()
@@ -340,7 +357,7 @@ def _create_config_files(
             if compute_groups_aot:
                 global_doc.add("compute_groups", compute_groups_aot)
 
-    accounts_table.add(username, user_account)
+    accounts_table.add(account_alias, user_account)
     global_doc.add("accounts", accounts_table)
     global_doc.add(tomlkit.nl())
 
@@ -359,10 +376,9 @@ def _create_config_files(
     project_doc.add("cli", cli_table)
     project_doc.add(tomlkit.nl())
 
-    # Auth section
-    auth_table = tomlkit.table()
-    auth_table.add("username", username)
-    project_doc.add("auth", auth_table)
+    context_table = tomlkit.table()
+    context_table.add("account", account_alias)
+    project_doc.add("context", context_table)
     project_doc.add(tomlkit.nl())
 
     # Defaults section
@@ -385,6 +401,7 @@ def run_wizard(
     project_path: Path,
     force: bool = False,
     yes: bool = False,
+    account_alias: str | None = None,
 ) -> bool:
     """Run the interactive setup wizard.
 
@@ -404,6 +421,10 @@ def run_wizard(
         # Check existing configs
         if not _check_existing_configs(global_path, project_path, force):
             _wizard_info("Setup cancelled.")
+            return False
+
+        account_alias = str(account_alias or "").strip() or _prompt_account_alias()
+        if not account_alias:
             return False
 
         # Step 1: Credentials
@@ -438,6 +459,7 @@ def run_wizard(
         click.echo(click.style("\n" + "-" * 60, fg="cyan"))
         click.echo(click.style("Configuration Summary:", fg="cyan", bold=True))
         click.echo("-" * 60)
+        click.echo(f"Account alias: {account_alias}")
         click.echo(f"Username:     {credentials[0]}")
         click.echo(f"Base URL:     {credentials[2]}")
         click.echo(f"Project Order: {', '.join(project_order) if project_order else '(not set)'}")
@@ -458,6 +480,7 @@ def run_wizard(
         _create_config_files(
             global_path,
             project_path,
+            account_alias,
             credentials,
             project_order,
             target_dir,

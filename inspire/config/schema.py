@@ -25,6 +25,7 @@ from inspire.config.options.project import (
     DEFAULTS_OPTIONS,
     JOB_OPTIONS,
     NOTEBOOK_OPTIONS,
+    RUNTIME_OPTIONS,
     SYNC_OPTIONS,
     WORKSPACES_OPTIONS,
 )
@@ -40,6 +41,7 @@ CONFIG_OPTIONS: list[ConfigOption] = [
     *SYNC_OPTIONS,
     *BRIDGE_OPTIONS,
     *DEFAULTS_OPTIONS,
+    *RUNTIME_OPTIONS,
     *WORKSPACES_OPTIONS,
     *JOB_OPTIONS,
     *NOTEBOOK_OPTIONS,

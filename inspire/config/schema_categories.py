@@ -13,6 +13,7 @@ CATEGORY_ORDER = [
     "Sync",
     "Bridge",
     "Defaults",
+    "Runtime",
     "Workspaces",
     "Job",
     "Notebook",

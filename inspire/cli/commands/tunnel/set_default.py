@@ -19,13 +19,14 @@ from inspire.cli.utils.output import emit_info, emit_success, emit_warning
 @json_option
 @pass_context
 def tunnel_set_default(ctx: Context, name: str, json_output: bool = False) -> None:
-    json_output = resolve_json_output(ctx, json_output)
     """Set a bridge as the default.
 
     \b
     Example:
         inspire tunnel set-default mybridge
     """
+
+    json_output = resolve_json_output(ctx, json_output)
     config = load_tunnel_config()
 
     if name not in config.bridges:

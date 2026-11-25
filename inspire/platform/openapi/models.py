@@ -1,6 +1,6 @@
 """OpenAPI domain models for the Inspire API client."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
@@ -10,6 +10,7 @@ class GPUType(Enum):
 
     H100 = "H100"
     H200 = "H200"
+    RTX4090 = "4090"
 
 
 @dataclass
@@ -33,6 +34,7 @@ class ComputeGroup:
     compute_group_id: str
     gpu_type: GPUType
     location: str = ""
+    workspace_ids: tuple[str, ...] = ()
 
 
 @dataclass
@@ -51,3 +53,5 @@ class InspireConfig:
     docker_registry: Optional[str] = None  # Docker registry hostname
     # Compute groups configuration
     compute_groups: Optional[list[dict]] = None  # List of compute group dicts from config
+    # Workspace specs cache ( mirrors inspire.config.models.Config.workspace_specs)
+    workspace_specs: dict = field(default_factory=dict)

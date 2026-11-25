@@ -1,22 +1,49 @@
-"""CLI command modules."""
+"""CLI command modules.
 
-from inspire.cli.commands.job import job
-from inspire.cli.commands.resources import resources
-from inspire.cli.commands.config import config
-from inspire.cli.commands.sync import sync
-from inspire.cli.commands.bridge import bridge
-from inspire.cli.commands.tunnel import tunnel
-from inspire.cli.commands.run import run
-from inspire.cli.commands.notebook import notebook
-from inspire.cli.commands.init import init
-from inspire.cli.commands.image import image
-from inspire.cli.commands.project import project
-from inspire.cli.commands.mount import mount
+This module imports the command **modules**, never their Click groups under the modules' own names. The reason
+is load-bearing and easy to undo by accident: `import a.b.c as m` resolves `a.b` by *attribute* lookup on the
+parent package, so a single `from .job import job` here replaces the `inspire.cli.commands.job` attribute with
+a Group object and every dotted import below it stops working -
+
+    import inspire.cli.commands.job.job_commands as jc
+    ImportError: cannot import name 'job_commands' from '<unknown module name>'
+
+an error that names nothing true. `from inspire.cli.commands.job import job_commands` still worked, which is
+why our own suite never noticed while anything written against the documented layout failed. Import the group
+from the package that defines it, e.g. `from inspire.cli.commands.job import job`. tests/test_import_surface.py
+holds this line; the regression was measured at 20 dotted paths unreachable before the rule existed.
+"""
+
+from . import (
+    api,
+    bridge,
+    config,
+    dataset,
+    hpc,
+    image,
+    init,
+    job,
+    model,
+    model_hub,
+    notebook,
+    project,
+    ray,
+    resources,
+    run,
+    runtime,
+    schema_cmd,
+    storage,
+    sync,
+    tunnel,
+    user,
+)
 
 __all__ = [
+    "api",
     "job",
     "resources",
     "config",
+    "dataset",
     "sync",
     "bridge",
     "tunnel",
@@ -25,5 +52,12 @@ __all__ = [
     "init",
     "image",
     "project",
-    "mount",
+    "model",
+    "model_hub",
+    "runtime",
+    "schema_cmd",
+    "storage",
+    "hpc",
+    "ray",
+    "user",
 ]

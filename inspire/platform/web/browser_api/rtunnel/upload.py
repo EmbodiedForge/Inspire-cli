@@ -26,9 +26,11 @@ _CONTENTS_API_RTUNNEL_FILENAME = "inspire_rtunnel_bin"
 
 
 def _upload_rtunnel_via_contents_api(
-    context: Any,
-    lab_url: str,
-    local_binary_path: Path,
+    context: Any = None,
+    lab_url: str = "",
+    local_binary_path: Path = Path(),
+    session: Any = None,
+    token: str | None = None,
 ) -> bool:
     """Upload a local rtunnel binary to the notebook via Jupyter Contents API.
 
@@ -53,6 +55,39 @@ def _upload_rtunnel_via_contents_api(
     api_url = f"{base}api/contents/{_CONTENTS_API_RTUNNEL_FILENAME}"
     _log.debug("Uploading rtunnel via Contents API: %s (%d bytes)", api_url, len(raw))
 
+    if session is not None:
+        # HTTP path using requests.Session
+        headers: dict[str, str] = {}
+        if token:
+            headers["Authorization"] = f"token {token}"
+        else:
+            xsrf = None
+            for cookie in session.cookies:
+                if cookie.name == "_xsrf":
+                    xsrf = cookie.value
+                    break
+            if xsrf:
+                headers["X-XSRFToken"] = xsrf
+        try:
+            resp = session.put(
+                api_url,
+                headers=headers,
+                json={
+                    "type": "file",
+                    "format": "base64",
+                    "content": encoded,
+                },
+                timeout=30,
+            )
+            _log.debug("Contents API upload response: %d", resp.status_code)
+            if resp.status_code not in (200, 201):
+                _log.debug("Contents API upload error body: %s", resp.text[:500])
+            return resp.status_code in (200, 201)
+        except Exception as exc:
+            _log.debug("Contents API upload failed: %s", exc, exc_info=True)
+            return False
+
+    # Playwright path
     try:
         headers = _build_jupyter_xsrf_headers(context)
         resp = context.request.put(
@@ -102,9 +137,11 @@ def _compute_rtunnel_hash(path: Path) -> Optional[str]:
 
 
 def _rtunnel_matches_on_notebook(
-    context: Any,
-    lab_url: str,
-    local_hash: str,
+    context: Any = None,
+    lab_url: str = "",
+    local_hash: str = "",
+    session: Any = None,
+    token: str | None = None,
 ) -> bool:
     """Check whether the notebook already has an up-to-date rtunnel binary.
 
@@ -120,6 +157,41 @@ def _rtunnel_matches_on_notebook(
         f"{base}api/contents/{_CONTENTS_API_RTUNNEL_FILENAME}.sha256?format=base64&content=1"
     )
 
+    if session is not None:
+        # HTTP path using requests.Session
+        headers: dict[str, str] = {}
+        if token:
+            headers["Authorization"] = f"token {token}"
+        try:
+            resp = session.get(binary_url, headers=headers, timeout=5)
+            if resp.status_code == 404:
+                _log.debug("rtunnel binary not found on notebook (404)")
+                return False
+            if resp.status_code not in (200, 201):
+                _log.debug("rtunnel binary metadata check returned %d", resp.status_code)
+                return False
+
+            resp = session.get(sidecar_url, headers=headers, timeout=5)
+            if resp.status_code == 404:
+                _log.debug("rtunnel hash sidecar not found on notebook (404)")
+                return False
+            if resp.status_code not in (200, 201):
+                _log.debug("rtunnel hash sidecar check returned %d", resp.status_code)
+                return False
+
+            body = resp.json()
+            remote_b64 = body.get("content", "")
+            remote_hash = _b64.b64decode(remote_b64).decode("ascii").strip()
+            if remote_hash == local_hash:
+                _log.debug("rtunnel hash matches: %s", local_hash)
+                return True
+            _log.debug("rtunnel hash mismatch: local=%s remote=%s", local_hash, remote_hash)
+            return False
+        except Exception as exc:
+            _log.debug("rtunnel hash check failed: %s", exc, exc_info=True)
+            return False
+
+    # Playwright path
     try:
         # 1. Check the binary exists (metadata only, fast).
         resp = context.request.get(binary_url, timeout=5000)
@@ -163,9 +235,11 @@ def _rtunnel_matches_on_notebook(
 
 
 def _upload_rtunnel_hash_sidecar(
-    context: Any,
-    lab_url: str,
-    hex_hash: str,
+    context: Any = None,
+    lab_url: str = "",
+    hex_hash: str = "",
+    session: Any = None,
+    token: str | None = None,
 ) -> bool:
     """Upload a ``.sha256`` sidecar alongside the rtunnel binary (best-effort).
 
@@ -178,6 +252,31 @@ def _upload_rtunnel_hash_sidecar(
     api_url = f"{base}api/contents/{_CONTENTS_API_RTUNNEL_FILENAME}.sha256"
     encoded = _b64.b64encode(hex_hash.encode("ascii")).decode("ascii")
 
+    if session is not None:
+        # HTTP path using requests.Session
+        headers: dict[str, str] = {}
+        if token:
+            headers["Authorization"] = f"token {token}"
+        try:
+            resp = session.put(
+                api_url,
+                headers=headers,
+                json={
+                    "type": "file",
+                    "format": "base64",
+                    "content": encoded,
+                },
+                timeout=5,
+            )
+            ok = resp.status_code in (200, 201)
+            if not ok:
+                _log.debug("Hash sidecar upload returned %d", resp.status_code)
+            return ok
+        except Exception as exc:
+            _log.debug("Hash sidecar upload failed: %s", exc, exc_info=True)
+            return False
+
+    # Playwright path
     try:
         headers = _build_jupyter_xsrf_headers(context)
         resp = context.request.put(
@@ -209,9 +308,11 @@ def _upload_rtunnel_hash_sidecar(
 
 def _resolve_rtunnel_binary(
     *,
-    context: Any,
-    lab_url: str,
-    ssh_runtime: Optional[SshRuntimeConfig],
+    context: Any = None,
+    lab_url: str = "",
+    ssh_runtime: Optional[SshRuntimeConfig] = None,
+    session: Any = None,
+    token: str | None = None,
 ) -> Optional[str]:
     """Decide whether to upload the rtunnel binary via the Contents API.
 
@@ -228,7 +329,7 @@ def _resolve_rtunnel_binary(
     rtunnel_bin_configured = ssh_runtime and ssh_runtime.rtunnel_bin
     policy = ssh_runtime.rtunnel_upload_policy if ssh_runtime else "auto"
 
-    if rtunnel_bin_configured:
+    if ssh_runtime is not None and rtunnel_bin_configured:
         _log.info("  Using configured rtunnel path: %s", ssh_runtime.rtunnel_bin)
         trace_event("rtunnel_bin_configured", rtunnel_bin=ssh_runtime.rtunnel_bin)
 
@@ -241,7 +342,13 @@ def _resolve_rtunnel_binary(
     if policy == "auto" and rtunnel_bin_configured:
         if local_exists:
             local_hash = _compute_rtunnel_hash(local_rtunnel)
-            if local_hash and _rtunnel_matches_on_notebook(context, lab_url, local_hash):
+            if local_hash and _rtunnel_matches_on_notebook(
+                context=context,
+                lab_url=lab_url,
+                local_hash=local_hash,
+                session=session,
+                token=token,
+            ):
                 trace_event("rtunnel_upload_reused_contents_copy", policy=policy)
                 return _CONTENTS_API_RTUNNEL_FILENAME
         trace_event("rtunnel_upload_skipped", policy=policy, reason="configured_bin_path")
@@ -267,13 +374,31 @@ def _resolve_rtunnel_binary(
     if local_rtunnel.is_file():
         _log.debug("Local rtunnel binary: %d bytes", local_rtunnel.stat().st_size)
         local_hash = _compute_rtunnel_hash(local_rtunnel)
-        if local_hash and _rtunnel_matches_on_notebook(context, lab_url, local_hash):
+        if local_hash and _rtunnel_matches_on_notebook(
+            context=context,
+            lab_url=lab_url,
+            local_hash=local_hash,
+            session=session,
+            token=token,
+        ):
             _log.debug("  rtunnel binary already on notebook (skipping upload).")
             trace_event("rtunnel_upload_already_present", policy=policy)
             return _CONTENTS_API_RTUNNEL_FILENAME
-        elif _upload_rtunnel_via_contents_api(context, lab_url, local_rtunnel):
+        elif _upload_rtunnel_via_contents_api(
+            context=context,
+            lab_url=lab_url,
+            local_binary_path=local_rtunnel,
+            session=session,
+            token=token,
+        ):
             if local_hash:
-                _upload_rtunnel_hash_sidecar(context, lab_url, local_hash)
+                _upload_rtunnel_hash_sidecar(
+                    context=context,
+                    lab_url=lab_url,
+                    hex_hash=local_hash,
+                    session=session,
+                    token=token,
+                )
             _log.info("  Uploaded rtunnel binary via Jupyter Contents API.")
             trace_event("rtunnel_contents_upload_success", policy=policy)
             return _CONTENTS_API_RTUNNEL_FILENAME

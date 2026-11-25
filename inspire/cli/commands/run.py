@@ -1,41 +1,22 @@
-"""Run command - Quick job submission with smart resource allocation.
-
-Usage:
-    inspire run "python train.py"
-    inspire run "bash train.sh" --gpus 4 --type H100
-    inspire run "python train.py" --sync --watch
-"""
+"""Compatibility adapter for ``job create`` with optional sync and log following."""
 
 from __future__ import annotations
 
 import os
 import shutil
 import subprocess
-import sys
 import time
 from datetime import datetime
 
 import click
 
-from inspire.cli.context import (
-    Context,
-    EXIT_AUTH_ERROR,
-    EXIT_CONFIG_ERROR,
-    EXIT_GENERAL_ERROR,
-    EXIT_SUCCESS,
-    EXIT_VALIDATION_ERROR,
-    pass_context,
-)
-from inspire.cli.formatters import json_formatter
-from inspire.cli.utils import job_submit
-from inspire.cli.utils.auth import AuthManager, AuthenticationError
+from inspire.cli.commands.job.job_create import run_job_create
+from inspire.cli.context import Context, EXIT_GENERAL_ERROR, EXIT_SUCCESS, pass_context
 from inspire.cli.utils.common import json_option
-from inspire.cli.utils.compute_group_autoselect import find_best_compute_group_location
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.notebook_cli import resolve_json_output
-from inspire.cli.utils.output import emit_error, emit_info, emit_success
-from inspire.config import Config, ConfigError
-from inspire.config.workspaces import select_workspace_id
+from inspire.cli.utils.output import emit_error, emit_info, emit_warning
+from inspire.config.workspaces import WORKSPACE_ALIAS_HELP
 
 
 def _get_current_branch() -> str | None:
@@ -72,8 +53,7 @@ def _run_inspire_subcommand(args: list[str]) -> int:
     exe = _get_inspire_executable()
     if not exe:
         raise RuntimeError("Cannot find 'inspire' executable in PATH")
-    proc = subprocess.run([exe, *args])
-    return proc.returncode
+    return subprocess.run([exe, *args]).returncode
 
 
 def _exec_inspire_subcommand(args: list[str]) -> None:
@@ -86,10 +66,8 @@ def _exec_inspire_subcommand(args: list[str]) -> None:
 def _run_sync_if_requested(ctx: Context, *, sync: bool, watch: bool) -> None:
     if not (sync or watch):
         return
-
     if ctx.debug and not ctx.json_output:
         emit_info(ctx, "Syncing code...")
-
     if _check_uncommitted_changes():
         _handle_error(
             ctx,
@@ -97,87 +75,13 @@ def _run_sync_if_requested(ctx: Context, *, sync: bool, watch: bool) -> None:
             "Uncommitted changes detected. Commit or stash first.",
             EXIT_GENERAL_ERROR,
         )
-
     try:
         exit_code = _run_inspire_subcommand(["sync"])
     except Exception as e:
         _handle_error(ctx, "SyncError", f"Failed to run sync: {e}", EXIT_GENERAL_ERROR)
-
     if exit_code != EXIT_SUCCESS:
         _handle_error(ctx, "SyncError", "Code sync failed", EXIT_GENERAL_ERROR)
-
     time.sleep(0.5)
-
-
-def _resolve_run_resource_and_location(
-    ctx: Context,
-    *,
-    api,  # noqa: ANN001
-    gpus: int,
-    gpu_type: str,
-    location: str | None,
-    nodes: int,
-) -> tuple[str, str | None]:
-    if location:
-        return f"{gpus}x{gpu_type}", location
-
-    if ctx.debug and not ctx.json_output:
-        click.echo("Checking GPU availability...")
-
-    best, selected_location, selected_group_name = find_best_compute_group_location(
-        api,
-        gpu_type=gpu_type,
-        min_gpus=gpus,
-        include_preemptible=True,
-        instance_count=nodes,
-    )
-
-    if not best:
-        if ctx.json_output:
-            click.echo(
-                json_formatter.format_json_error(
-                    "InsufficientResources",
-                    f"No compute groups with at least {gpus} {gpu_type} GPUs available",
-                    EXIT_VALIDATION_ERROR,
-                )
-            )
-        else:
-            emit_error(
-                ctx,
-                error_type="InsufficientResources",
-                message=f"No compute groups with at least {gpus} {gpu_type} GPUs available",
-                exit_code=EXIT_VALIDATION_ERROR,
-                hint=(
-                    "Try different GPU type or fewer GPUs. Run 'inspire resources list' "
-                    "to see availability."
-                ),
-            )
-        sys.exit(EXIT_VALIDATION_ERROR)
-
-    resource_str = f"{gpus}x{gpu_type}"
-    location = selected_location or selected_group_name or None
-
-    if ctx.debug and not ctx.json_output:
-        if getattr(best, "selection_source", "") == "nodes" and getattr(best, "free_nodes", 0):
-            emit_info(
-                ctx,
-                "Auto-selected: "
-                f"{selected_group_name}, {best.free_nodes} full nodes free "
-                f"({best.available_gpus} GPUs)",
-            )
-        else:
-            preempt_note = (
-                f" (+{best.low_priority_gpus} preemptible)"
-                if getattr(best, "low_priority_gpus", 0) > 0
-                else ""
-            )
-            emit_info(
-                ctx,
-                f"Auto-selected: {selected_group_name}, "
-                f"{best.available_gpus} GPUs available{preempt_note}",
-            )
-
-    return resource_str, location
 
 
 def _run_flow(
@@ -198,195 +102,56 @@ def _run_flow(
     nodes: int,
     project: str | None,
     fault_tolerant: bool | None,
+    fault_tolerance_max_retry: int | None,
+    dry_run: bool = False,
 ) -> None:
-    _run_sync_if_requested(ctx, sync=sync, watch=watch)
+    if dry_run and (sync or watch) and not ctx.json_output:
+        emit_warning(ctx, "--dry-run: skipping code sync.")
+    if not dry_run:
+        _run_sync_if_requested(ctx, sync=sync, watch=watch)
 
+    if not name:
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        branch = _get_current_branch()
+        name = f"run-{timestamp}{f'-{branch}' if branch else ''}"
+
+    submission = run_job_create(
+        ctx,
+        name=name,
+        resource=f"{gpus}x{gpu_type}",
+        command=command,
+        framework="pytorch",
+        priority=priority,
+        max_time=max_time,
+        location=location or "",
+        group=None,
+        quota=None,
+        workspace=workspace,
+        workspace_id_override=workspace_id_override,
+        auto=location is None,
+        image=image,
+        project=project,
+        nodes=nodes,
+        fault_tolerant=fault_tolerant,
+        fault_tolerance_max_retry=fault_tolerance_max_retry,
+        keep_alive_on_success=None,
+        keep_alive_on_fail=None,
+        dry_run=dry_run,
+    )
+    if dry_run or not watch or ctx.json_output or not submission or not submission.job_id:
+        return
+    if ctx.debug:
+        emit_info(ctx, "Fetching logs...")
     try:
-        config, _ = Config.from_files_and_env(require_target_dir=True)
-        api = AuthManager.get_api(config)
-
-        if priority is None:
-            priority = config.job_priority
-            if priority is None:
-                priority = getattr(config, "default_priority", None)
-            if priority is None:
-                priority = 6
-        if image is None:
-            image = config.job_image or getattr(config, "default_image", None)
-
-        selected_workspace_id = select_workspace_id(
-            config,
-            gpu_type=gpu_type,
-            explicit_workspace_id=workspace_id_override,
-            explicit_workspace_name=workspace,
-            legacy_workspace_id=config.job_workspace_id
-            or getattr(config, "default_workspace_id", None),
-        )
-        if not selected_workspace_id:
-            _handle_error(
-                ctx,
-                "ConfigError",
-                "No workspace_id configured for GPU workloads. "
-                'Set [accounts."<username>".workspaces].gpu '
-                '(or [accounts."<username>".workspaces].internet for 4090), '
-                "or pass --workspace/--workspace-id.",
-                EXIT_CONFIG_ERROR,
-            )
-            return
-
-        resource_str, location = _resolve_run_resource_and_location(
-            ctx,
-            api=api,
-            gpus=gpus,
-            gpu_type=gpu_type,
-            location=location,
-            nodes=nodes,
-        )
-
-        if not name:
-            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            branch = _get_current_branch()
-            branch_suffix = f"-{branch}" if branch else ""
-            name = f"run-{timestamp}{branch_suffix}"
-
-        if ctx.debug and not ctx.json_output:
-            click.echo(f"Creating job '{name}'...")
-
-        time.sleep(0.5)
-
-        try:
-            selected_project, fallback_msg = job_submit.select_project_for_workspace(
-                config,
-                workspace_id=selected_workspace_id,
-                requested=project,
-            )
-        except ValueError as e:
-            error_type = "QuotaExceeded" if "over quota" in str(e) else "ValidationError"
-            _handle_error(ctx, error_type, str(e), EXIT_CONFIG_ERROR)
-            return
-        project_id = selected_project.project_id
-
-        # Auto-enable fault tolerance for LOW-priority projects
-        is_low_priority, auto_fault_tolerance = job_submit.resolve_fault_tolerance(
-            selected_project, fault_tolerant
-        )
-
-        if not ctx.json_output and fallback_msg:
-            click.echo(fallback_msg)
-        if not ctx.json_output:
-            if is_low_priority:
-                restart_note = " and auto-restarted" if auto_fault_tolerance else ""
-                click.echo(
-                    f"Using project: {selected_project.name} "
-                    f"(low priority — job may be preempted{restart_note})"
-                )
-            elif ctx.debug:
-                click.echo(
-                    f"Using project: {selected_project.name}{selected_project.get_quota_status()}"
-                )
-
-        # Show compute-group availability diagnostics
-        if not ctx.json_output and location:
-            try:
-                from inspire.platform.web import browser_api as browser_api_module
-
-                all_avail = browser_api_module.get_accurate_gpu_availability(
-                    workspace_id=selected_workspace_id
-                )
-                summary = job_submit.format_gpu_availability_summary(all_avail, gpu_type)
-                if summary:
-                    click.echo(summary)
-            except Exception:
-                pass  # diagnostics are best-effort
-
-        try:
-            submission = job_submit.submit_training_job(
-                api,
-                config=config,
-                name=name,
-                command=command,
-                resource=resource_str,
-                framework="pytorch",
-                location=location,
-                project_id=project_id,
-                workspace_id=selected_workspace_id,
-                image=image,
-                priority=priority,
-                nodes=nodes,
-                max_time_hours=max_time,
-                project_name=selected_project.name,
-                auto_fault_tolerance=auto_fault_tolerance,
-            )
-        except ValueError as e:
-            _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
-            return
-
-        wrapped_command = submission.wrapped_command
-        log_path = submission.log_path
-        result = submission.result
-        data = submission.data
-        job_id = submission.job_id
-
-        if not job_id:
-            if ctx.json_output:
-                click.echo(json_formatter.format_json(data if data else result))
-            else:
-                if isinstance(result, dict):
-                    message = result.get("message") or "Job created (no job ID returned)"
-                    emit_success(ctx, payload=result, text=message)
-                    if result.get("data") and ctx.debug:
-                        emit_info(ctx, str(result["data"]))
-                else:
-                    emit_success(ctx, payload={"status": "created"}, text="Job created")
-                    if ctx.debug:
-                        emit_info(ctx, str(result))
-            sys.exit(EXIT_SUCCESS)
-
-        if ctx.json_output:
-            click.echo(json_formatter.format_json(data))
-        else:
-            emit_success(
-                ctx, payload={"job_id": job_id, "status": "created"}, text=f"Job created: {job_id}"
-            )
-            if ctx.debug:
-                emit_info(ctx, f"Name: {name}")
-                emit_info(ctx, f"Resource: {resource_str}")
-                if nodes > 1:
-                    emit_info(ctx, f"Nodes: {nodes}")
-                emit_info(
-                    ctx,
-                    f"Command: {wrapped_command[:80]}{'...' if len(wrapped_command) > 80 else ''}",
-                )
-                if log_path:
-                    emit_info(ctx, f"Log file: {log_path}")
-                emit_info(ctx, f"Check status with: inspire job status {job_id}")
-
-        if watch:
-            if ctx.json_output:
-                sys.exit(EXIT_SUCCESS)
-
-            if ctx.debug:
-                emit_info(ctx, "Following logs...")
-            try:
-                _exec_inspire_subcommand(["job", "logs", job_id, "--follow"])
-            except Exception as e:
-                emit_error(
-                    ctx,
-                    error_type="LogFollowError",
-                    message=f"Failed to start log follow: {e}",
-                    exit_code=EXIT_GENERAL_ERROR,
-                    hint=f"You can still run: inspire job logs {job_id} --follow",
-                )
-                sys.exit(EXIT_GENERAL_ERROR)
-
-        sys.exit(EXIT_SUCCESS)
-
-    except ConfigError as e:
-        _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
-    except AuthenticationError as e:
-        _handle_error(ctx, "AuthenticationError", str(e), EXIT_AUTH_ERROR)
+        _exec_inspire_subcommand(["job", "logs", submission.job_id])
     except Exception as e:
-        _handle_error(ctx, "APIError", str(e), EXIT_GENERAL_ERROR)
+        emit_error(
+            ctx,
+            error_type="LogFollowError",
+            message=f"Failed to read logs: {e}",
+            exit_code=EXIT_GENERAL_ERROR,
+            hint=f"You can still run: inspire job logs {submission.job_id}",
+        )
 
 
 @click.command()
@@ -401,12 +166,13 @@ def _run_flow(
 )
 @click.option("--name", "-n", help="Job name (auto-generated if not specified)")
 @click.option("--sync", "-s", is_flag=True, help="Sync code before running")
-@click.option("--watch", "-w", is_flag=True, help="Sync, run, then follow logs")
+@click.option("--watch", "-w", is_flag=True, help="Sync, run, then print logs")
 @click.option(
     "--priority",
-    type=int,
+    type=click.IntRange(1, 10),
     default=None,
-    help="Task priority 1-10 (default from config [job].priority or [defaults].priority or 6)",
+    help="Task priority 1-10 (default from config [job].priority or [defaults].priority or 6). "
+    "The selected Scheduling Offer determines any cap.",
 )
 @click.option(
     "--project",
@@ -415,14 +181,7 @@ def _run_flow(
     help="Project name or ID (default from config [job].project_id or [defaults].project_order)",
 )
 @click.option("--location", help="Preferred datacenter location (overrides auto-selection)")
-@click.option(
-    "--workspace",
-    help=(
-        'Workspace alias or ID. Common aliases from [accounts."<username>".workspaces] config: '
-        "'cpu' (CPU workloads), 'gpu' (H100/H200), 'internet' (RTX 4090 with internet). "
-        "Use --workspace-id for explicit UUID."
-    ),
-)
+@click.option("--workspace", help=WORKSPACE_ALIAS_HELP)
 @click.option(
     "--workspace-id",
     "workspace_id_override",
@@ -435,12 +194,26 @@ def _run_flow(
     help="Custom Docker image (default from config [job].image or [defaults].image)",
 )
 @click.option(
-    "--nodes", type=int, default=1, help="Number of nodes for multi-node training (default: 1)"
+    "--nodes",
+    type=click.IntRange(min=1),
+    default=1,
+    help="Number of nodes for multi-node training (default: 1)",
 )
 @click.option(
     "--fault-tolerant/--no-fault-tolerant",
     default=None,
-    help="Auto-restart on failure/preemption (auto-enabled for low-priority projects)",
+    help="Auto-restart on failure/preemption (auto-enabled for LOW projects or priority < 4)",
+)
+@click.option(
+    "--fault-tolerance-max-retry",
+    type=click.IntRange(1, 2000),
+    default=None,
+    help="Maximum platform runs when fault tolerance is enabled (default: 100)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Resolve the launch and print the platform request (secrets redacted) without creating a job",
 )
 @json_option
 @pass_context
@@ -461,26 +234,18 @@ def run(
     image: str | None,
     nodes: int,
     fault_tolerant: bool | None,
+    fault_tolerance_max_retry: int | None,
+    dry_run: bool = False,
     json_output: bool = False,
 ) -> None:
-    json_output = resolve_json_output(ctx, json_output)
-    """Quick job submission with smart resource allocation.
-
-    Automatically selects the compute group with most available capacity.
-    If --location is specified, uses that location instead of auto-selecting.
+    """Submit through the job-create compatibility path, optionally syncing and following logs.
 
     \b
     Examples:
-        inspire run "python train.py"
-        inspire run "bash train.sh" --gpus 4 --type H100
         inspire run "python train.py" --sync --watch
-
-    \b
-    With --watch:
-        1. Sync code (if --sync or --watch)
-        2. Create job
-        3. Follow logs until completion
+        inspire run "python train.py" --dry-run
     """
+    resolve_json_output(ctx, json_output)
     _run_flow(
         ctx,
         command=command,
@@ -498,6 +263,8 @@ def run(
         image=image,
         nodes=nodes,
         fault_tolerant=fault_tolerant,
+        fault_tolerance_max_retry=fault_tolerance_max_retry,
+        dry_run=dry_run,
     )
 
 

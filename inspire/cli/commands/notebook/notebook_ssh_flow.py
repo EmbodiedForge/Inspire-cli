@@ -23,12 +23,9 @@ from inspire.cli.utils.tunnel_reconnect import (
     should_attempt_ssh_reconnect,
 )
 from inspire.config import ConfigError
-from inspire.config.ssh_runtime import resolve_ssh_runtime_config
+from inspire.config.ssh_runtime import SshRuntimeConfig, resolve_ssh_runtime_config
 from inspire.platform.web import browser_api as browser_api_module
 from inspire.platform.web.browser_api import NotebookFailedError
-from inspire.platform.web.browser_api.rtunnel.diagnostics import (
-    collect_notebook_rtunnel_diagnostics,
-)
 from inspire.platform.web.browser_api.rtunnel.logging import get_last_failure_summary
 
 from .notebook_lookup import (
@@ -40,6 +37,15 @@ from .notebook_lookup import (
 
 def load_ssh_public_key(pubkey_path: Optional[str] = None) -> str:
     return load_ssh_public_key_material(pubkey_path)
+
+
+def _tunnel_account_key(config: object) -> Optional[str]:
+    """Use the Account Catalog alias for bridge state when one is selected."""
+    account_alias = str(getattr(config, "account_alias", "") or "").strip()
+    if account_alias:
+        return account_alias
+    username = str(getattr(config, "username", "") or "").strip()
+    return username or None
 
 
 def _run_interactive_notebook_ssh_with_reconnect(
@@ -58,8 +64,9 @@ def _run_interactive_notebook_ssh_with_reconnect(
 ) -> None:
     from inspire.bridge.tunnel import (
         get_ssh_command_args,
-        is_tunnel_available,
         load_tunnel_config,
+        probe_tunnel_available,
+        save_tunnel_config,
     )
 
     reconnect_limit = max(0, int(tunnel_retries))
@@ -68,7 +75,7 @@ def _run_interactive_notebook_ssh_with_reconnect(
         reconnect_pause=tunnel_retry_pause,
     )
 
-    def _runtime_loader() -> object:
+    def _runtime_loader() -> SshRuntimeConfig:
         return resolve_ssh_runtime_config(
             cli_overrides={
                 "rtunnel_bin": rtunnel_bin,
@@ -168,6 +175,21 @@ def _run_interactive_notebook_ssh_with_reconnect(
             )
             return
 
+        if reconnect_result.status is NotebookBridgeReconnectStatus.STALE_NOTEBOOK:
+            # Remove the stale bridge profile
+            stale_notebook_id = str(getattr(bridge, "notebook_id", "") or "").strip()
+            tunnel_config.remove_bridge(profile_name)
+            save_tunnel_config(tunnel_config)
+            _handle_error(
+                ctx,
+                "NotebookRecycled",
+                f"Bridge profile '{profile_name}' pointed to a recycled notebook (ID: {stale_notebook_id}). "
+                "The stale bridge has been removed.",
+                EXIT_CONFIG_ERROR,
+                hint=f"Start a new notebook and run 'inspire notebook ssh <new-notebook-id> --save-as {profile_name}'.",
+            )
+            return
+
         if reconnect_result.status is NotebookBridgeReconnectStatus.EXHAUSTED:
             if reconnect_result.error is not None:
                 _handle_error(
@@ -187,20 +209,25 @@ def _run_interactive_notebook_ssh_with_reconnect(
             return
 
         refreshed_config = load_tunnel_config(account=tunnel_account)
-        if is_tunnel_available(
+        preflight = probe_tunnel_available(
             bridge_name=profile_name,
             config=refreshed_config,
             retries=3,
             retry_pause=1.0,
-        ):
+        )
+        if preflight.ok:
             continue
         if reconnect_state.reconnect_attempt >= reconnect_limit:
             _handle_error(
                 ctx,
                 "APIError",
-                "Tunnel rebuild completed, but SSH preflight still failed.",
+                "Tunnel rebuild completed, but SSH preflight still failed.\n\n"
+                f"{preflight.format_failure()}",
                 EXIT_API_ERROR,
-                hint=f"Run 'inspire tunnel test -b {profile_name}' for diagnostics.",
+                hint=(
+                    f"Run 'inspire notebook doctor -b {profile_name} --verbose' for full diagnostics, "
+                    f"or use 'inspire notebook exec -b {profile_name} -- <command>' to run commands directly."
+                ),
             )
             return
 
@@ -233,8 +260,8 @@ def run_notebook_ssh(
         build_ssh_process_env,
         get_ssh_command_args,
         has_internet_for_gpu_type,
-        is_tunnel_available,
         load_tunnel_config,
+        probe_tunnel_available,
         save_tunnel_config,
     )
 
@@ -318,8 +345,10 @@ def run_notebook_ssh(
     gpu_info = (notebook_detail.get("resource_spec_price") or {}).get("gpu_info") or {}
     gpu_type = gpu_info.get("gpu_product_simple", "")
     has_internet = has_internet_for_gpu_type(gpu_type)
+    project_detail = notebook_detail.get("project") or {}
+    bridge_priority: Optional[int] = project_detail.get("priority")
 
-    tunnel_account = str(getattr(config, "username", "") or "").strip() or None
+    tunnel_account = _tunnel_account_key(config)
     profile_name = save_as or f"notebook-{notebook_id[:8]}"
     cached_config = load_tunnel_config(account=tunnel_account)
 
@@ -415,10 +444,55 @@ def run_notebook_ssh(
         )
     except Exception as e:
         message = f"Failed to set up notebook tunnel: {e}"
+        ingress_denied = (
+            "platform proxy policy change" in str(e) or "ingress denied" in str(e).lower()
+        )
+        saved_jupyter_profile = False
+        if ingress_denied:
+            try:
+                jupyter_bridge = BridgeProfile(
+                    name=profile_name,
+                    proxy_url="",
+                    ssh_user="root",
+                    ssh_port=ssh_port,
+                    gpu_type=gpu_type,
+                    identity_file=str(ssh_identity_file),
+                    notebook_id=notebook_id,
+                    notebook_name=notebook_detail.get("name", ""),
+                    rtunnel_port=port,
+                    priority=bridge_priority,
+                )
+                tunnel_config = load_tunnel_config(account=tunnel_account)
+                tunnel_config.add_bridge(jupyter_bridge)
+                save_tunnel_config(tunnel_config)
+                saved_jupyter_profile = True
+                message = f"{message}\n\nSaved Jupyter-only bridge profile '{profile_name}'."
+            except Exception as save_error:  # noqa: BLE001 - retain the ingress root cause
+                message = f"{message}\n\nFailed to save Jupyter-only profile: {save_error}"
         failure_summary = get_last_failure_summary()
         if failure_summary and failure_summary not in message:
             message = f"{message}\n\n{failure_summary}"
-        _handle_error(ctx, "APIError", message, EXIT_API_ERROR)
+        hint = f"Run 'inspire notebook doctor {notebook_id} --verbose' for full diagnostics."
+        if ingress_denied:
+            if saved_jupyter_profile:
+                hint = (
+                    f"Interactive SSH is unavailable through this workspace ingress. Use "
+                    f"'inspire bridge exec -b {profile_name} --transport auto -- <command>' "
+                    "for Jupyter-backed agent execution."
+                )
+            else:
+                hint = (
+                    f"Interactive SSH is unavailable through this workspace ingress. Use "
+                    f"'inspire notebook exec -n {notebook_id} -- <command>' for Jupyter-backed "
+                    "command execution, and ask the platform operator to enable WebSocket proxying."
+                )
+        _handle_error(
+            ctx,
+            "APIError",
+            message,
+            EXIT_API_ERROR,
+            hint=hint,
+        )
         return
 
     bridge = BridgeProfile(
@@ -426,47 +500,39 @@ def run_notebook_ssh(
         proxy_url=proxy_url,
         ssh_user="root",
         ssh_port=ssh_port,
-        has_internet=has_internet,
+        gpu_type=gpu_type,
         identity_file=str(ssh_identity_file),
         notebook_id=notebook_id,
+        notebook_name=notebook_detail.get("name", ""),
         rtunnel_port=port,
+        priority=bridge_priority,
     )
 
     tunnel_config = load_tunnel_config(account=tunnel_account)
     tunnel_config.add_bridge(bridge)
     save_tunnel_config(tunnel_config)
 
-    if not is_tunnel_available(
+    preflight = probe_tunnel_available(
         bridge_name=profile_name,
         config=tunnel_config,
         retries=6,
         retry_pause=1.5,
-    ):
-        doctor = collect_notebook_rtunnel_diagnostics(
-            notebook_id=notebook_id,
-            port=port,
-            ssh_port=ssh_port,
-            ssh_runtime=ssh_runtime,
-            session=session,
-            headless=not debug_playwright,
-        )
-        extra_hint = ""
-        if doctor is not None:
-            extra_hint = f" Observed: {doctor.observed}."
+    )
+    if not preflight.ok:
         _handle_error(
             ctx,
             "APIError",
-            "Tunnel setup completed, but SSH preflight failed.",
+            f"Tunnel setup completed, but SSH preflight failed.\n\n{preflight.format_failure()}",
             EXIT_API_ERROR,
             hint=(
                 "Retry 'inspire notebook ssh <notebook-id>' in a few seconds, "
-                f"or run 'inspire tunnel test -b {profile_name}' to inspect connectivity."
-                f"{extra_hint}"
+                f"run 'inspire notebook doctor -b {profile_name} --verbose' for full diagnostics, "
+                f"or use 'inspire notebook exec -b {profile_name} -- <command>' to run commands directly."
             ),
         )
         return
 
-    internet_status = "yes" if has_internet else "no"
+    internet_status = "has-internet" if has_internet else "no-internet"
     gpu_label = gpu_type if gpu_type else "CPU"
     click.echo(
         f"Added bridge '{profile_name}' (internet: {internet_status}, GPU: {gpu_label})",

@@ -10,11 +10,10 @@ try:
 except ImportError:  # pragma: no cover
     import tomli as tomllib
 
-import tomlkit
-
 from inspire.config.models import CONFIG_FILENAME, PROJECT_CONFIG_DIR, ConfigError
 from inspire.config.schema import get_option_by_toml
 from inspire.config.schema_models import ConfigOption
+from inspire.config.toml_write import atomic_write_toml, load_toml_document
 
 
 def _find_project_config() -> Path | None:
@@ -66,7 +65,9 @@ def save_config(config) -> None:
     """Save workspace_specs to global config file.
 
     Only workspace_specs is persisted. Other config fields are loaded from
-    environment/files and should not be written back.
+    environment/files and should not be written back, so the rest of the file -
+    the user's comments included - is left exactly as it was, and the update
+    replaces the file atomically instead of rewriting it from scratch.
 
     Args:
         config: Config object with workspace_specs to save
@@ -81,23 +82,13 @@ def save_config(config) -> None:
 
     config_path = Config.resolve_global_config_path()
 
-    # Load existing config or create new
-    if config_path.exists():
-        with open(config_path, "rb") as f:
-            data = tomllib.load(f)
-    else:
-        data = {}
-
-    # Update workspace_specs section
+    document = load_toml_document(config_path)
     if config.workspace_specs:
-        data["workspace_specs"] = config.workspace_specs
-    elif "workspace_specs" in data:
-        del data["workspace_specs"]
+        document["workspace_specs"] = config.workspace_specs
+    elif "workspace_specs" in document:
+        del document["workspace_specs"]
 
-    # Write back
     try:
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(config_path, "w") as f:
-            tomlkit.dump(data, f)
+        atomic_write_toml(config_path, document)
     except Exception as e:
         raise ConfigError(f"Failed to write config file {config_path}: {e}") from e

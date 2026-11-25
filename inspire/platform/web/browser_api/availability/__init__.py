@@ -4,17 +4,16 @@ from __future__ import annotations
 
 from .api import (
     get_accurate_gpu_availability,
-    get_full_free_node_counts,
     list_compute_groups,
+    list_compute_pools,
 )
-from .models import FullFreeNodeCount, GPUAvailability
+from .models import GPUAvailability
 from .select import find_best_compute_group_accurate
 
 __all__ = [
-    "FullFreeNodeCount",
     "GPUAvailability",
     "find_best_compute_group_accurate",
     "get_accurate_gpu_availability",
-    "get_full_free_node_counts",
     "list_compute_groups",
+    "list_compute_pools",
 ]

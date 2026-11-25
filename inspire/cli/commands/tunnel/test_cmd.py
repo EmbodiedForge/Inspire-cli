@@ -19,7 +19,6 @@ from inspire.cli.utils.output import emit_info, emit_success
 @json_option
 @pass_context
 def tunnel_test(ctx: Context, bridge: str, json_output: bool = False) -> None:
-    json_output = resolve_json_output(ctx, json_output)
     """Test SSH connection and show timing.
 
     \b
@@ -27,6 +26,8 @@ def tunnel_test(ctx: Context, bridge: str, json_output: bool = False) -> None:
         inspire tunnel test
         inspire tunnel test -b mybridge
     """
+
+    json_output = resolve_json_output(ctx, json_output)
     import time
 
     config = load_tunnel_config()

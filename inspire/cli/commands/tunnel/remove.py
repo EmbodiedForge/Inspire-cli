@@ -19,13 +19,14 @@ from inspire.cli.utils.output import emit_info, emit_success, emit_warning
 @json_option
 @pass_context
 def tunnel_remove(ctx: Context, name: str, json_output: bool = False) -> None:
-    json_output = resolve_json_output(ctx, json_output)
     """Remove a bridge profile.
 
     \b
     Example:
         inspire tunnel remove mybridge
     """
+
+    json_output = resolve_json_output(ctx, json_output)
     config = load_tunnel_config()
 
     if name not in config.bridges:
@@ -39,7 +40,7 @@ def tunnel_remove(ctx: Context, name: str, json_output: bool = False) -> None:
     was_default = name == config.default_bridge
     config.remove_bridge(name)
     save_tunnel_config(config)
-    ssh_synced, ssh_sync_error = sync_installed_ssh_config(config)
+    ssh_synced, ssh_sync_error = sync_installed_ssh_config(config, removed_bridges={name})
 
     emit_success(
         ctx,

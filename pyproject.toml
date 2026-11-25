@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "inspire-cli"
-version = "0.2.4"
+version = "0.7.4"
 description = "CLI tool for the Inspire HPC training platform"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -29,46 +29,56 @@ classifiers = [
 dependencies = [
     "requests>=2.28.0",
     "click>=8.0.0",
-    "playwright>=1.57.0",
     "tomli>=1.2.0; python_version < '3.11'",
     "tomlkit>=0.12.0",
     "questionary>=2.0.0",
+    "paramiko>=4.0.0",
+    "websocket-client>=1.9.0",
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=7.0.0",
-    "pytest-mock>=3.10.0",
-    "black>=23.0.0",
-    "ruff>=0.0.280",
-    "types-requests>=2.28.0",
-    "mypy>=1.0.0",
-    "hypothesis>=6.0.0",
+browser = ["playwright>=1.57.0"]
+pool = [
+    "paramiko>=3.0.0",
 ]
+# There used to be a second `dev = [...]` list here as an extra. Two lists both meaning
+# "dev tools" had already drifted (pytest>=9.0.1 vs >=9.0.2, hypothesis>=6.0 vs >=6.151,
+# pre-commit>=3.0 vs >=4.6), and worse: `uv sync --dev` installs [dependency-groups] dev,
+# not this extra - so CI's `uv sync --dev` produced an environment with no ruff, black or
+# mypy at all, which is the only reason ci.yml had to reach for `uvx ruff==0.9.0`. The dev
+# group below is now the single list. Use `uv sync --dev`; `pip install .[dev]` is gone.
 
 [project.scripts]
 inspire = "inspire.cli.main:cli"
 
 [project.urls]
-Documentation = "https://gitea.com/cyteena/inspire-cli"
-Repository = "https://gitea.com/cyteena/inspire-cli"
+Documentation = "https://codeberg.org/cyteena/inspire-cli"
+Repository = "https://codeberg.org/cyteena/inspire-cli"
 
 [tool.setuptools]
 packages = {find = {where = ["."], include = ["inspire*"], exclude = ["tests*"]}}
 
 [tool.setuptools.package-data]
-inspire = ["*.md"]
+inspire = ["*.md", "skills/*/*.md", "skills/*/*/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-m 'not integration'"
 markers = [
     "integration: marks tests requiring live API access",
+    "e2e: marks real end-to-end tests that drive the CLI against a live Inspire account",
+    "xdist_group: pin a group of tests to one xdist worker (they share a fixed path or port)",
 ]
 
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.ruff.lint]
+# Default rules plus bugbear. The B group paid for itself on first run: unenforced
+# zip() pairing (silent truncation of config sources and table rows) and exception
+# chaining that buried the real cause.
+select = ["E4", "E7", "E9", "F", "B"]
 
 [tool.black]
 line-length = 100
@@ -89,6 +99,10 @@ module = "playwright.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+module = "paramiko.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 module = "tomlkit.*"
 ignore_missing_imports = true
 
@@ -96,25 +110,100 @@ ignore_missing_imports = true
 module = "tests.*"
 ignore_errors = true
 
-[dependency-groups]
-dev = [
-    "pytest>=9.0.1",
-    "black>=23.0.0",
-    "ruff>=0.0.280",
-    "commitizen>=3.12.0",
-    "pre-commit>=3.6.0",
-    "types-requests>=2.28.0",
-    "mypy>=1.0.0",
-    "hypothesis>=6.0.0",
-]
 
+# Releases are driven by python-semantic-release (see [tool.semantic_release]
+# below). Commitizen is kept for exactly one job: `cz check` in the commit-msg
+# pre-commit hook, which rejects a malformed subject line at commit time instead
+# of silently producing no release later. No `version` key here on purpose - the
+# version number is owned by PSR, and a second copy would just rot.
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "0.2.4"
-version_files = [
-    "inspire/__init__.py:__version__",
-    "pyproject.toml:^version"
-]
-tag_format = "v$version"
-update_changelog_on_bump = true
+
+# Pre-1.0 demotion, the equivalent of release-please's bump-minor-pre-major plus
+# bump-patch-for-minor-pre-major: a feature moves the patch digit (0.3.0 -> 0.3.1)
+# and only a breaking change moves the minor digit (0.3.x -> 0.4.0). This is what
+# commitizen cannot do from config - cz_conventional_commits hardcodes its bump
+# map as a class attribute, and switching to cz_customize (where the map is
+# readable) costs the CHANGELOG, because cz_customize has no conventional-commit
+# parser and emits an ungrouped list of raw commit bodies. Measured on both tools
+# against this history.
+#
+# Both flags below are required and both read backwards; measured on 10.7.0:
+#   allow_zero_version = true  default False forces ANY bump at 0.x to 1.0.0.
+#   major_on_zero = false      this is the value that demotes a breaking change
+#                              to the minor digit (version/algorithm.py runs
+#                              level_bump = min(level_bump, MINOR) when
+#                              major_on_zero is false). The default True sends a
+#                              breaking change at 0.x to 1.0.0.
+[tool.semantic_release]
+branch = "main"
+version_toml = ["pyproject.toml:project.version"]
+version_variables = ["inspire/__init__.py:__version__"]
+tag_format = "v{version}"
+allow_zero_version = true
+major_on_zero = false
+commit_parser = "conventional"
+# [skip ci] keeps the release commit from re-triggering CI and the bump job.
+commit_message = "chore(release): bump version {version} [skip ci]"
+# PSR exports this as both author and GIT_COMMITTER_*, so the release commit does
+# not depend on the runner having a git identity configured.
+commit_author = "inspire-cli release automation <inspire-cli-ci@users.noreply.codeberg.org>"
+
+# Type -> bump level is plain config here. minor_tags is deliberately empty, so
+# only breaking changes can move the minor digit. Types listed under
+# other_allowed_tags parse cleanly with no bump; leaving them out would push them
+# into the changelog's "Other" section instead of dropping them silently.
+[tool.semantic_release.commit_parser_options]
+minor_tags = []
+patch_tags = ["feat", "fix", "perf", "refactor"]
+other_allowed_tags = ["build", "chore", "ci", "docs", "revert", "style", "test"]
+
+# mode=update rewrites only the block under the insertion flag, so the
+# commitizen-era sections below stay untouched. PSR writes a section per commit
+# type (Features / Bug Fixes / Documentation / ...) plus a separate Breaking
+# Changes section, subject lines only.
+[tool.semantic_release.changelog]
 changelog_file = "CHANGELOG.md"
+mode = "update"
+insertion_flag = "<!-- version list -->"
+# Types that bump nothing should not take space in a user-facing changelog
+# either. They stay in other_allowed_tags so they parse cleanly, and PSR only
+# honours an exclusion for a commit that caused no version bump (changelog/
+# release_history.py), so this cannot hide the real reason for a release.
+exclude_commit_patterns = ['^(build|chore|ci|docs|revert|style|test)(\(.+\))?!?:']
+
+# v10 dropped the plain "git" remote type (bitbucket|github|gitlab|gitea). gitea
+# is the closest fit for Forgejo and is used here for commit link URLs only: the
+# release script passes --no-push --no-vcs-release, so no token is read and no
+# API call happens. Setting url keeps those links on codeberg.org instead of a
+# path derived from the CI checkout.
+[tool.semantic_release.remote]
+name = "origin"
+url = "https://codeberg.org/cyteena/inspire-cli"
+type = "gitea"
+domain = "https://codeberg.org"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.151.10",
+    "pre-commit>=4.6.0",
+    "pytest>=9.0.2",
+    "pytest-mock>=3.10.0",
+    "types-requests>=2.28.0",
+    "paramiko>=3.0.0",
+    # Quality-gate tools are pinned exactly, and CI, pre-commit and local all invoke them as
+    # `uv run --frozen ...`. Loose bounds here plus `uvx` pins in ci.yml were two version
+    # sources two generations apart, which manufactures "green locally, red in CI": CI
+    # rejected code that was correctly formatted and lint-clean under the toolchain the author
+    # actually used, and nobody was wrong. One version is now authoritative; bump it in a
+    # deliberate commit whose only content is the bump and its fallout.
+    # black 26 was tried and rejected for now: it hugs multi-line raw strings (mostly regexes)
+    # into the call parentheses, a 373-line readability churn for no gain.
+    "black==25.1.0",
+    "ruff==0.16.9",
+    # mypy_ratchet.sh judges against a recorded error set, so the mypy version is part of the
+    # calibration rather than a detail; and it runs mypy via `python -m` so a stray mypy on
+    # PATH cannot silently replace the pinned one.
+    "mypy==2.3.1",
+    "pytest-xdist>=3.8.0",
+]

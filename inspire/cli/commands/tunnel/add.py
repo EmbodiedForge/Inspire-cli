@@ -35,7 +35,6 @@ def tunnel_add(
     no_internet: bool,
     json_output: bool = False,
 ) -> None:
-    json_output = resolve_json_output(ctx, json_output)
     """Add a new bridge profile.
 
     Get the URL from the Bridge notebook's VSCode Ports tab (port 31337).
@@ -46,6 +45,8 @@ def tunnel_add(
         inspire tunnel add bridge1 "https://..." --set-default
         inspire tunnel add gpu-bridge "https://..." --no-internet
     """
+
+    json_output = resolve_json_output(ctx, json_output)
     config = load_tunnel_config()
 
     if not name or not name.replace("-", "").replace("_", "").isalnum():
@@ -61,7 +62,7 @@ def tunnel_add(
         proxy_url=url,
         ssh_user=ssh_user,
         ssh_port=ssh_port,
-        has_internet=not no_internet,
+        _has_internet_stored=not no_internet,
     )
     config.add_bridge(profile)
 
@@ -77,7 +78,7 @@ def tunnel_add(
                 {
                     "status": "added",
                     "name": name,
-                    "proxy_url": url,
+                    "proxy_url": redact_proxy_url(url),
                     "is_default": name == config.default_bridge,
                     "has_internet": not no_internet,
                     "ssh_config_synced": ssh_synced,
@@ -92,7 +93,7 @@ def tunnel_add(
         payload={
             "status": "added",
             "name": name,
-            "proxy_url": url,
+            "proxy_url": redact_proxy_url(url),
             "is_default": is_default,
             "has_internet": not no_internet,
             "ssh_config_synced": ssh_synced,
@@ -101,7 +102,7 @@ def tunnel_add(
     )
     emit_info(ctx, f"  Proxy URL: {redact_proxy_url(url)}")
     emit_info(ctx, f"  SSH: {ssh_user}@localhost:{ssh_port}")
-    emit_info(ctx, f"  Internet: {'yes' if not no_internet else 'no'}")
+    emit_info(ctx, f"  Internet: {'has-internet' if not no_internet else 'no-internet'}")
     if is_default:
         emit_info(ctx, "  (default bridge)")
     else:

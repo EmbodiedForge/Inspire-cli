@@ -14,7 +14,7 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Sequence, cast
 
 from inspire import __version__
 
@@ -56,11 +56,16 @@ def redact_text(text: str) -> str:
     if not value:
         return value
 
-    value = _AUTH_BEARER_RE.sub(r"\1\2 <redacted>", value)
+    value = _AUTH_BEARER_RE.sub(r"\1<redacted>", value)
     value = _SENSITIVE_FIELD_RE.sub(r"\1<redacted>", value)
     value = _QUERY_TOKEN_RE.sub(r"\1<redacted>", value)
     value = _PATH_TOKEN_RE.sub(r"\1<redacted>\3", value)
     return value
+
+
+def redact_env_value(key: str, value: object) -> str:
+    """Redact an environment value using its key as sensitivity context."""
+    return redact_text(f"{key}={value}").partition("=")[2]
 
 
 class _RedactingFormatter(logging.Formatter):
@@ -98,12 +103,12 @@ def _stash_logger_state(logger: logging.Logger) -> None:
 def _restore_logger_state(logger: logging.Logger) -> None:
     previous_level = getattr(logger, _DEBUG_PREV_LEVEL, _MISSING)
     if previous_level is not _MISSING:
-        logger.setLevel(previous_level)
+        logger.setLevel(cast(int | str, previous_level))
         delattr(logger, _DEBUG_PREV_LEVEL)
 
     previous_propagate = getattr(logger, _DEBUG_PREV_PROPAGATE, _MISSING)
     if previous_propagate is not _MISSING:
-        logger.propagate = previous_propagate
+        logger.propagate = cast(bool, previous_propagate)
         delattr(logger, _DEBUG_PREV_PROPAGATE)
 
 
@@ -165,7 +170,7 @@ def configure_debug_logging(
     """
     try:
         log_dir = _resolve_debug_log_dir()
-        log_dir.mkdir(parents=True, exist_ok=True)
+        log_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         _prune_old_debug_logs(log_dir, keep=keep_logs)
         log_path = _build_debug_log_path(log_dir)
 
@@ -174,6 +179,10 @@ def configure_debug_logging(
         _remove_previous_debug_handlers(inspire_logger)
 
         handler = logging.FileHandler(log_path, encoding="utf-8")
+        try:
+            os.chmod(log_path, 0o600)
+        except OSError as exc:
+            logging.getLogger("inspire.cli.debug").debug("Could not tighten %s: %s", log_path, exc)
         setattr(handler, _DEBUG_HANDLER_MARKER, True)
         handler.setLevel(logging.DEBUG)
         handler.setFormatter(
@@ -226,6 +235,7 @@ __all__ = [
     "clear_debug_logging",
     "configure_debug_logging",
     "redact_text",
+    "redact_env_value",
     "DEFAULT_DEBUG_LOG_LIMIT",
     "DEFAULT_DEBUG_LOG_DIR",
     "DEBUG_LOG_DIR_ENV",

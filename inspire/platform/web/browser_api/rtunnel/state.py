@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 from pathlib import Path
 from typing import Any, Optional
+
+from inspire.config.toml_write import atomic_write_text
 
 _CACHE_BASENAME = "rtunnel-proxy-state"
 _CACHE_VERSION = 1
@@ -56,14 +57,7 @@ def _load_state_file(path: Path) -> dict[str, Any]:
 
 
 def _save_state_file(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(".tmp")
-    tmp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
-    os.replace(tmp_path, path)
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+    atomic_write_text(path, json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
 
 
 def get_cached_rtunnel_proxy_candidates(

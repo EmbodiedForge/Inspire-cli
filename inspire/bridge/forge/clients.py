@@ -60,9 +60,7 @@ class ForgeClient(ABC):
         else:
             body = None
 
-        req = urlrequest.Request(url, data=body, headers=headers)
-        req.get_method = lambda: method  # type: ignore[assignment]
-        return req
+        return urlrequest.Request(url, data=body, headers=headers, method=method)
 
     def request_json(self, method: str, url: str, data: Optional[dict] = None) -> dict:
         """Make a JSON request with retry."""
@@ -93,12 +91,12 @@ class ForgeClient(ABC):
                 if e.code >= 500 and attempt < max_retries:
                     time.sleep(retry_delay)
                     continue
-                raise ForgeError(msg)
+                raise ForgeError(msg) from e
             except urlerror.URLError as e:
                 if attempt < max_retries:
                     time.sleep(retry_delay)
                     continue
-                raise ForgeError(f"API request failed for {url}: {e}")
+                raise ForgeError(f"API request failed for {url}: {e}") from e
 
         return {}
 
@@ -136,7 +134,7 @@ class ForgeClient(ABC):
                 if e.code >= 500 and attempt < max_retries:
                     time.sleep(retry_delay)
                     continue
-                raise ForgeError(msg)
+                raise ForgeError(msg) from e
             except urlerror.URLError as e:
                 logger.debug(
                     "Forge URLError for %s: %s (attempt %d)",
@@ -147,7 +145,7 @@ class ForgeClient(ABC):
                 if attempt < max_retries:
                     time.sleep(retry_delay)
                     continue
-                raise ForgeError(f"API request failed for {url}: {e}")
+                raise ForgeError(f"API request failed for {url}: {e}") from e
 
         return b""
 

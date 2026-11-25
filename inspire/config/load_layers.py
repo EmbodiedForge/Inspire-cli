@@ -29,6 +29,78 @@ from .load_common import (
 )
 
 
+def _parse_string_list(raw_value: Any, *, field_name: str, config_path: Path | None) -> list[str]:
+    if isinstance(raw_value, str):
+        return [raw_value]
+    if isinstance(raw_value, list):
+        values: list[str] = []
+        for item in raw_value:
+            if not isinstance(item, str):
+                path_label = str(config_path) if config_path else "config.toml"
+                raise ConfigError(
+                    f"{path_label}: remote_runtime.{field_name} entries must be strings."
+                )
+            values.append(item)
+        return values
+
+    path_label = str(config_path) if config_path else "config.toml"
+    raise ConfigError(
+        f"{path_label}: remote_runtime.{field_name} must be a string or list of strings."
+    )
+
+
+def _apply_remote_runtime_section(
+    *,
+    raw_data: dict[str, Any],
+    config_dict: dict[str, Any],
+    sources: dict[str, str],
+    source_name: str,
+    config_path: Path | None,
+) -> None:
+    remote_runtime = raw_data.pop("remote_runtime", None)
+    if remote_runtime is None:
+        return
+    if not isinstance(remote_runtime, dict):
+        path_label = str(config_path) if config_path else f"{source_name} config"
+        raise ConfigError(f"{path_label}: [remote_runtime] must be a table.")
+
+    if "cwd" in remote_runtime:
+        raw_cwd = remote_runtime.get("cwd")
+        if raw_cwd is not None and raw_cwd != "":
+            config_dict["remote_runtime_cwd"] = str(raw_cwd)
+            sources["remote_runtime_cwd"] = source_name
+
+    if "path_prepend" in remote_runtime:
+        raw_paths = remote_runtime.get("path_prepend")
+        if raw_paths not in (None, ""):
+            config_dict["remote_runtime_path_prepend"] = _parse_string_list(
+                raw_paths,
+                field_name="path_prepend",
+                config_path=config_path,
+            )
+            sources["remote_runtime_path_prepend"] = source_name
+
+    if "venv" in remote_runtime:
+        raw_venv = remote_runtime.get("venv")
+        if raw_venv is not None and raw_venv != "":
+            config_dict["remote_runtime_venv"] = str(raw_venv)
+            sources["remote_runtime_venv"] = source_name
+
+    raw_env = remote_runtime.get("env")
+    if raw_env is not None:
+        if not isinstance(raw_env, dict):
+            path_label = str(config_path) if config_path else f"{source_name} config"
+            raise ConfigError(f"{path_label}: [remote_runtime.env] must be a table.")
+        runtime_env = {str(k): str(v) for k, v in raw_env.items()}
+        if source_name == SOURCE_PROJECT:
+            merged_runtime_env = dict(config_dict.get("remote_runtime_env", {}))
+            merged_runtime_env.update(runtime_env)
+            config_dict["remote_runtime_env"] = merged_runtime_env
+        else:
+            config_dict["remote_runtime_env"] = runtime_env
+        sources["remote_runtime_env"] = source_name
+
+
 def _apply_legacy_paths_target_dir(
     *,
     raw_data: dict[str, Any],
@@ -91,12 +163,14 @@ def _apply_global_layer(
     *,
     config_dict: dict[str, Any],
     sources: dict[str, str],
-) -> tuple[Path | None, dict[str, dict[str, Any]]]:
+) -> tuple[Path | None, dict[str, dict[str, Any]], dict[str, Any], dict[str, Any]]:
     global_config_path: Path | None = None
     global_account_catalogs: dict[str, dict[str, Any]] = {}
+    global_context: dict[str, Any] = {}
+    global_profiles: dict[str, Any] = {}
     resolved_global_path = Config.resolve_global_config_path()
     if not resolved_global_path.exists():
-        return global_config_path, global_account_catalogs
+        return global_config_path, global_account_catalogs, global_context, global_profiles
 
     global_config_path = resolved_global_path
     global_raw = _load_toml(resolved_global_path)
@@ -107,6 +181,12 @@ def _apply_global_layer(
     )
     global_workspace_specs = global_raw.pop("workspace_specs", {})
     global_workspace_names = global_raw.pop("workspace_names", {})
+    raw_global_context = global_raw.pop("context", {})
+    if isinstance(raw_global_context, dict):
+        global_context = raw_global_context
+    raw_global_profiles = global_raw.pop("profiles", {})
+    if isinstance(raw_global_profiles, dict):
+        global_profiles = raw_global_profiles
 
     global_defaults: dict[str, Any] = {}
     raw_global_defaults = global_raw.pop("defaults", {})
@@ -116,6 +196,13 @@ def _apply_global_layer(
     # Workspace aliases are account-scoped. Ignore legacy shared [workspaces]
     # during effective config loading.
     global_raw.pop("workspaces", None)
+    _apply_remote_runtime_section(
+        raw_data=global_raw,
+        config_dict=config_dict,
+        sources=sources,
+        source_name=SOURCE_GLOBAL,
+        config_path=global_config_path,
+    )
 
     flat_global = _flatten_toml(global_raw)
     for toml_key, value in flat_global.items():
@@ -163,7 +250,7 @@ def _apply_global_layer(
         config_path=global_config_path,
     )
 
-    return global_config_path, global_account_catalogs
+    return global_config_path, global_account_catalogs, global_context, global_profiles
 
 
 def _apply_project_layer(
@@ -179,6 +266,7 @@ def _apply_project_layer(
         project_context={},
         project_account_catalogs={},
         project_accounts={},
+        project_profiles={},
     )
     if not project_config_path:
         return layer_state
@@ -204,6 +292,9 @@ def _apply_project_layer(
     raw_context = project_raw.pop("context", {})
     if isinstance(raw_context, dict):
         layer_state.project_context = raw_context
+    raw_profiles = project_raw.pop("profiles", {})
+    if isinstance(raw_profiles, dict):
+        layer_state.project_profiles = raw_profiles
 
     project_accounts, project_account_catalogs = _parse_global_accounts(
         project_raw.pop("accounts", {})
@@ -214,6 +305,13 @@ def _apply_project_layer(
     # Workspace aliases are account-scoped. Ignore legacy shared [workspaces]
     # during effective config loading.
     project_raw.pop("workspaces", None)
+    _apply_remote_runtime_section(
+        raw_data=project_raw,
+        config_dict=config_dict,
+        sources=sources,
+        source_name=SOURCE_PROJECT,
+        config_path=project_config_path,
+    )
 
     flat_project = _flatten_toml(project_raw)
     for toml_key, value in flat_project.items():

@@ -5,70 +5,74 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 from pathlib import Path
 from typing import Optional
 
 from .models import BridgeProfile, TunnelConfig, DEFAULT_SSH_USER
+from inspire.config.permissions import harden_state_permissions  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
 
-def _resolve_username_from_config() -> Optional[str]:
-    """Resolve the configured Inspire username using normal config precedence."""
+def _resolve_account_scope_from_config() -> tuple[Optional[str], bool]:
+    """Return the state key and whether it came from an Account Catalog alias."""
     try:
         from inspire.config import Config, ConfigError
 
         config, _ = Config.from_files_and_env(require_credentials=False)
     except (ImportError, ConfigError, OSError, ValueError, TypeError) as error:
         logger.debug("Unable to resolve username from layered config: %s", error)
-        return None
+        return None, False
 
+    account_alias = str(getattr(config, "account_alias", "") or "").strip()
+    if account_alias:
+        return account_alias, True
     username = str(getattr(config, "username", "") or "").strip()
-    return username or None
+    return username or None, False
+
+
+def _resolve_tunnel_scope(account: Optional[str]) -> tuple[Optional[str], bool]:
+    """Resolve the bridge state key and whether strict alias isolation applies."""
+    explicit = (account or "").strip()
+    if explicit:
+        return explicit, True
+
+    bridge_account = (os.environ.get("INSPIRE_BRIDGE_ACCOUNT") or "").strip()
+    if bridge_account:
+        return bridge_account, False
+
+    config_account, alias_backed = _resolve_account_scope_from_config()
+    if config_account:
+        return config_account, alias_backed
+
+    env_username = (os.environ.get("INSPIRE_USERNAME") or "").strip()
+    if env_username:
+        return env_username, False
+
+    return None, False
 
 
 def _resolve_tunnel_account(account: Optional[str]) -> Optional[str]:
     """Resolve the bridge account key used for bridges-<account>.json."""
-    explicit = (account or "").strip()
-    if explicit:
-        return explicit
-
-    # Highest-priority explicit override for bridge profile selection.
-    bridge_account = (os.environ.get("INSPIRE_BRIDGE_ACCOUNT") or "").strip()
-    if bridge_account:
-        return bridge_account
-
-    # Prefer the resolved project/global config username.
-    config_username = _resolve_username_from_config()
-    if config_username:
-        return config_username
-
-    # Fallbacks for compatibility with older env-driven setups.
-    env_username = (os.environ.get("INSPIRE_USERNAME") or "").strip()
-    if env_username:
-        return env_username
-
-    legacy_account = (os.environ.get("INSPIRE_ACCOUNT") or "").strip()
-    if legacy_account:
-        return legacy_account
-
-    return None
+    resolved_account, _ = _resolve_tunnel_scope(account)
+    return resolved_account
 
 
-def _candidate_config_paths(config_dir: Path, resolved_account: Optional[str]) -> list[Path]:
+def _candidate_config_paths(
+    config_dir: Path,
+    resolved_account: Optional[str],
+    *,
+    include_legacy: bool = True,
+) -> list[Path]:
     """Build config read candidates in precedence order."""
     candidates: list[Path] = []
 
     if resolved_account:
         candidates.append(config_dir / f"bridges-{resolved_account}.json")
 
-    # Backward compatibility with alias-scoped files (e.g. primary/secondary).
-    legacy_account = (os.environ.get("INSPIRE_ACCOUNT") or "").strip()
-    if legacy_account and legacy_account != resolved_account:
-        candidates.append(config_dir / f"bridges-{legacy_account}.json")
-
-    # Legacy shared file.
-    candidates.append(config_dir / "bridges.json")
+    if include_legacy or not resolved_account:
+        candidates.append(config_dir / "bridges.json")
 
     unique: list[Path] = []
     seen: set[Path] = set()
@@ -89,31 +93,32 @@ def load_tunnel_config(
     Account resolution order:
       1. *account* parameter (explicit)
       2. ``INSPIRE_BRIDGE_ACCOUNT`` environment variable
-      3. resolved config username (project/global/env precedence)
-      4. ``INSPIRE_ACCOUNT`` environment variable (legacy compatibility)
+      3. resolved config alias, or username for explicit legacy config
+      4. ``INSPIRE_USERNAME`` when layered config cannot be loaded
       5. ``None`` — uses legacy ``bridges.json``
 
-    When an account is resolved, this loader reads the account-scoped file first
-    and merges compatibility fallback files in order:
-      - ``bridges-{account}.json``
-      - ``bridges-{INSPIRE_ACCOUNT}.json`` (if different)
-      - ``bridges.json`` (legacy)
-
-    The first occurrence of each bridge name wins. Saves always target the
-    resolved account file when an account is available.
+    Catalog aliases read only their alias-scoped file. Legacy username and
+    ``INSPIRE_BRIDGE_ACCOUNT`` scopes retain the shared-file fallback for
+    compatibility. Saves target the resolved account file when available.
     """
-    resolved_account = _resolve_tunnel_account(account)
+    resolved_account, alias_backed = _resolve_tunnel_scope(account)
 
     config = TunnelConfig(account=resolved_account)
     if config_dir:
         config.config_dir = config_dir
 
     config.config_dir.mkdir(parents=True, exist_ok=True)
+    # Self-heal state left group/world-readable by older releases; see the helper docstring.
+    harden_state_permissions(config.config_dir)
 
     preferred_defaults: list[str] = []
 
-    # Read and merge new JSON format from all compatible locations.
-    for read_path in _candidate_config_paths(config.config_dir, resolved_account):
+    # Alias-backed state is isolated; legacy state keeps its shared fallback.
+    for read_path in _candidate_config_paths(
+        config.config_dir,
+        resolved_account,
+        include_legacy=not alias_backed,
+    ):
         if not read_path.exists():
             continue
         try:
@@ -185,6 +190,23 @@ def save_tunnel_config(config: TunnelConfig) -> None:
         "bridges": [p.to_dict() for p in config.bridges.values()],
     }
 
-    with open(config.config_file, "w") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            dir=config.config_dir,
+            prefix=f".{config.config_file.name}.",
+            delete=False,
+        ) as f:
+            tmp_path = Path(f.name)
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, config.config_file)
+        os.chmod(config.config_file, 0o600)
+    finally:
+        if tmp_path is not None and tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass

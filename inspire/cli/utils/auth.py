@@ -40,15 +40,7 @@ class AuthManager:
         Returns:
             Tuple of hashable values representing the cache key
         """
-        # Workspace hint: used to detect workspace changes
-        # Actual workspace is resolved at job time based on GPU type,
-        # but we use configured defaults as a hint for cache purposes
-        workspace_hint = (
-            config.job_workspace_id
-            or config.workspace_gpu_id
-            or config.workspace_cpu_id
-            or config.default_workspace_id
-        )
+        workspace_hint = config.job_workspace_id or config.default_workspace_id
 
         return (
             config.base_url,
@@ -106,6 +98,7 @@ class AuthManager:
             auth_endpoint=config.auth_endpoint,
             docker_registry=config.docker_registry,
             compute_groups=config.compute_groups,
+            workspace_specs=config.workspace_specs,
         )
         api = InspireAPI(api_config)
 
@@ -113,9 +106,9 @@ class AuthManager:
         try:
             api.authenticate(config.username, config.password)
         except AuthenticationError as e:
-            raise AuthenticationError(f"Authentication failed: {e}")
+            raise AuthenticationError(f"Authentication failed: {e}") from e
         except Exception as e:
-            raise AuthenticationError(f"Authentication request failed: {e}")
+            raise AuthenticationError(f"Authentication request failed: {e}") from e
 
         # Cache the token (expire 10 minutes early for safety)
         cls._token = api.token

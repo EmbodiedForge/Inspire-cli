@@ -8,12 +8,15 @@ from typing import Optional
 
 from inspire.config.ssh_runtime import SshRuntimeConfig
 from inspire.platform.web.browser_api.core import (
+    PLAYWRIGHT_INSTALL_HINT,
     _in_asyncio_loop,
     _launch_browser,
     _new_context,
     _run_in_thread,
 )
 from inspire.platform.web.session import WebSession, get_web_session
+from inspire.platform.web.session.auth import _get_auth_method
+from inspire.platform.web.session.browser import MissingBrowserError
 
 from .commands import RtunnelSetupPlan, resolve_rtunnel_setup_plan
 from .logging import trace_event
@@ -42,6 +45,8 @@ def _doctor_command(
     sshd_deb_dir = (ssh_runtime.sshd_deb_dir if ssh_runtime else "") or ""
     lines = [
         "set +e",
+        f'PORT="{port}"',
+        f'SSH_PORT="{ssh_port}"',
         'echo "doctor_version=1"',
         "if [ -r /etc/os-release ]; then . /etc/os-release; fi",
         'echo "distro_id=${ID:-}"',
@@ -55,8 +60,8 @@ def _doctor_command(
         f'echo "ssh_port={ssh_port}"',
         "_has_sshd_bin=$( [ -x /usr/sbin/sshd ] && echo 1 || echo 0 )",
         "_has_dropbear_bin=$( [ -x /usr/sbin/dropbear ] && echo 1 || echo 0 )",
-        '_ps_sshd=$(ps -ef | grep -c \\"[s]shd -p $SSH_PORT\\" 2>/dev/null || true)',
-        '_ps_dropbear=$(ps -ef | grep -c \\"[d]ropbear.*-p.*$SSH_PORT\\" 2>/dev/null || true)',
+        '_ps_sshd=$(ps -ef | grep -c "[s]shd -p $SSH_PORT" 2>/dev/null || true)',
+        '_ps_dropbear=$(ps -ef | grep -c "[d]ropbear.*-p.*$SSH_PORT" 2>/dev/null || true)',
         '_ps_rtunnel=$(ss -ltn 2>/dev/null | grep -Ec "[[:space:]](:|\\[::\\]:)?$PORT[[:space:]]" || true)',
         'echo "has_sshd_bin=${_has_sshd_bin}"',
         'echo "has_dropbear_bin=${_has_dropbear_bin}"',
@@ -109,9 +114,9 @@ def _summarize_doctor_output(
         )
     observed_parts.append(f"strategy={setup_plan.bootstrap_strategy}")
     for key in ("has_sshd_bin", "has_dropbear_bin", "ps_sshd", "ps_dropbear", "ps_rtunnel"):
-        value = values.get(key)
-        if value not in {None, ""}:
-            observed_parts.append(f"{key}={value}")
+        field_value = values.get(key)
+        if field_value not in {None, ""}:
+            observed_parts.append(f"{key}={field_value}")
     pkg_lines = [line.strip() for line in text.splitlines() if line.startswith("pkg:")]
     if pkg_lines:
         observed_parts.append("packages=" + "; ".join(pkg_lines[:3]))
@@ -134,14 +139,10 @@ def _collect_notebook_rtunnel_diagnostics_sync(
     notebook_id: str,
     port: int,
     ssh_port: int,
-    ssh_runtime: Optional[SshRuntimeConfig],
-    session: Optional[WebSession],
-    headless: bool,
+    ssh_runtime: Optional[SshRuntimeConfig] = None,
+    session: Optional[WebSession] = None,
+    headless: bool = True,
 ) -> RtunnelDoctorReport | None:
-    from playwright.sync_api import sync_playwright
-
-    from inspire.platform.web.browser_api.playwright_notebooks import open_notebook_lab
-
     if session is None:
         session = get_web_session()
 
@@ -154,37 +155,114 @@ def _collect_notebook_rtunnel_diagnostics_sync(
     )
     trace_event("doctor_collect_start", strategy=setup_plan.bootstrap_strategy)
 
-    with sync_playwright() as p:
-        browser = _launch_browser(p, headless=headless)
-        context = _new_context(browser, storage_state=session.storage_state)
-        page = context.new_page()
+    auth_method = _get_auth_method()
+
+    if auth_method == "http":
+        from inspire.platform.web.browser_api.rtunnel.http_lab_resolution import (
+            get_jupyter_token,
+            resolve_lab_url_http,
+        )
+        from inspire.platform.web.browser_api.rtunnel.transport_factory import create_transport
+
         try:
-            lab_frame = open_notebook_lab(page, notebook_id=notebook_id, timeout=30000)
-            result = _run_terminal_command_capture_via_websocket(
-                context=context,
-                lab_frame=lab_frame,
-                batch_cmd=batch_cmd,
-                timeout_ms=30000,
-                completion_marker=_DOCTOR_DONE_MARKER,
+            lab_url = resolve_lab_url_http(notebook_id, session)
+            base_url, token, host = get_jupyter_token(notebook_id, session)
+
+            transport = create_transport(
+                auth_method="http",
+                session=session,
+                lab_url=lab_url,
+                token=token,
             )
-            output = str(result.get("output", "") or "").strip()
-            if not output:
+
+            term_name = transport.create_terminal()
+            if not term_name:
                 trace_event("doctor_collect_empty")
                 return None
-            report = _summarize_doctor_output(output, setup_plan=setup_plan)
-            _LOG.debug("doctor_observed=%s", report.observed)
-            _LOG.debug("doctor_output=\n%s", report.raw_output)
-            trace_event("doctor_collect_complete", observed=report.observed)
-            return report
+
+            try:
+                result = transport.send_command(batch_cmd, _DOCTOR_DONE_MARKER, timeout=30)
+                output = str(result.get("stdout", "") or "").strip()
+                if not output:
+                    trace_event("doctor_collect_empty")
+                    return None
+                report = _summarize_doctor_output(output, setup_plan=setup_plan)
+                _LOG.debug("doctor_observed=%s", report.observed)
+                _LOG.debug("doctor_output=\n%s", report.raw_output)
+                trace_event("doctor_collect_complete", observed=report.observed)
+                return report
+            finally:
+                transport.cleanup()
+        except MissingBrowserError as exc:
+            trace_event("doctor_collect_failed", error=exc)
+            _LOG.debug("doctor_collect_failed error=%s", exc)
+            raise
         except Exception as exc:
             trace_event("doctor_collect_failed", error=exc)
             _LOG.debug("doctor_collect_failed error=%s", exc)
             return None
-        finally:
+
+    # Playwright path
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        raise RuntimeError(
+            f"{PLAYWRIGHT_INSTALL_HINT}\nOr switch to HTTP auth: export INSPIRE_AUTH_METHOD=http"
+        ) from None
+
+    from inspire.platform.web.browser_api.playwright_notebooks import open_notebook_lab
+
+    playwright_driver = None
+    own_browser = None
+    own_context = None
+    try:
+        playwright_driver = sync_playwright().start()
+        own_browser = _launch_browser(playwright_driver, headless=headless)
+        own_context = _new_context(own_browser, storage_state=session.storage_state)
+
+        page = own_context.new_page()
+        target_lab_frame = open_notebook_lab(page, notebook_id=notebook_id, timeout=30000)
+
+        result = _run_terminal_command_capture_via_websocket(
+            context=own_context,
+            lab_frame=target_lab_frame,
+            batch_cmd=batch_cmd,
+            timeout_ms=30000,
+            completion_marker=_DOCTOR_DONE_MARKER,
+        )
+        output = str(result.get("output", "") or "").strip()
+        if not output:
+            trace_event("doctor_collect_empty")
+            return None
+        report = _summarize_doctor_output(output, setup_plan=setup_plan)
+        _LOG.debug("doctor_observed=%s", report.observed)
+        _LOG.debug("doctor_output=\n%s", report.raw_output)
+        trace_event("doctor_collect_complete", observed=report.observed)
+        return report
+    except MissingBrowserError as exc:
+        trace_event("doctor_collect_failed", error=exc)
+        _LOG.debug("doctor_collect_failed error=%s", exc)
+        raise
+    except Exception as exc:
+        trace_event("doctor_collect_failed", error=exc)
+        _LOG.debug("doctor_collect_failed error=%s", exc)
+        return None
+    finally:
+        if own_context is not None:
             try:
-                context.close()
-            finally:
-                browser.close()
+                own_context.close()
+            except Exception:
+                pass
+        if own_browser is not None:
+            try:
+                own_browser.close()
+            except Exception:
+                pass
+        if playwright_driver is not None:
+            try:
+                playwright_driver.stop()
+            except Exception:
+                pass
 
 
 def collect_notebook_rtunnel_diagnostics(

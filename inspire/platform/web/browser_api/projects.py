@@ -7,10 +7,11 @@ surface; this module contains the SSO-only implementation.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from inspire.platform.web.browser_api.core import _browser_api_path, _get_base_url, _request_json
+from inspire.platform.web.browser_api.errors import ensure_browser_api_success
 from inspire.platform.web.browser_api.jobs import list_job_events, list_jobs
 from inspire.platform.web.session import DEFAULT_WORKSPACE_ID, WebSession, get_web_session
 
@@ -29,6 +30,9 @@ class ProjectInfo:
     project_id: str
     name: str
     workspace_id: str
+    # Every workspace whose live project list returned this project. The scalar above is the first
+    # observation retained for compatibility; it is not an ownership/binding claim.
+    workspace_ids: list[str] = field(default_factory=list)
     # Quota fields
     budget: float = 0.0  # Total budget allocated
     remain_budget: float = 0.0  # Remaining budget
@@ -100,8 +104,7 @@ def list_projects(
         timeout=30,
     )
 
-    if data.get("code") != 0:
-        raise ValueError(f"API error: {data.get('message')}")
+    ensure_browser_api_success(data, action="List projects")
 
     items = data.get("data", {}).get("items", [])
 
@@ -118,6 +121,9 @@ def list_projects(
             project_id=item.get("id", ""),
             name=item.get("name", ""),
             workspace_id=item.get("workspace_id", workspace_id),
+            # The query workspace, not the row's home workspace: a shared project can be
+            # returned by several queries and the row repeats one fixed home ID.
+            workspace_ids=[workspace_id],
             budget=_parse_float(item.get("budget")),
             remain_budget=_parse_float(item.get("remain_budget")),
             member_remain_budget=_parse_float(item.get("member_remain_budget")),
@@ -200,16 +206,29 @@ def select_project(
         except ValueError:
             return 0
 
-    def _order_rank(project: ProjectInfo) -> int:
-        """Return position in user-defined project_order (lower is better).
+    project_ids = {p.project_id for p in projects}
+    name_counts: dict[str, int] = {}
+    for item in projects:
+        normalized_name = item.name.casefold()
+        name_counts[normalized_name] = name_counts.get(normalized_name, 0) + 1
 
-        Projects not in the list get a large rank so they sort after listed ones.
-        Matching is case-insensitive on name, and exact on project_id.
-        """
+    def _order_rank(project: ProjectInfo) -> int:
+        """Return position in project_order, preferring stable IDs over legacy names."""
         if not project_order:
             return 0  # no preference — all equal
+
         for i, entry in enumerate(project_order):
-            if project.name.lower() == entry.lower() or project.project_id == entry:
+            normalized_entry = str(entry or "").strip()
+            if not normalized_entry:
+                continue
+            if project.project_id == normalized_entry:
+                return i
+            if normalized_entry in project_ids:
+                continue
+            if (
+                project.name.casefold() == normalized_entry.casefold()
+                and name_counts.get(project.name.casefold(), 0) == 1
+            ):
                 return i
         return len(project_order)  # unlisted → after all listed
 

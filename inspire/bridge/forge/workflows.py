@@ -45,33 +45,7 @@ def trigger_workflow_dispatch(
         response = client.request_json("POST", url, data)
         return response
     except ForgeError as e:
-        raise ForgeError(f"Failed to trigger workflow: {e}")
-
-
-def trigger_log_retrieval_workflow(
-    config: Config,
-    job_id: str,
-    remote_log_path: str,
-    request_id: str,
-    start_offset: int = 0,
-) -> None:
-    """Trigger the workflow that uploads a job log as an artifact.
-
-    Args:
-        config: CLI configuration
-        job_id: Inspire job ID
-        remote_log_path: Absolute path to log on shared filesystem
-        request_id: Unique request identifier
-        start_offset: Byte offset to start reading from (default: 0 = full file)
-    """
-    inputs = {
-        "job_id": job_id,
-        "remote_log_path": remote_log_path,
-        "request_id": request_id,
-        "start_offset": str(start_offset),
-    }
-    workflow_file = _get_active_workflow_file(config, "log")
-    trigger_workflow_dispatch(config, workflow_file, inputs)
+        raise ForgeError(f"Failed to trigger workflow: {e}") from e
 
 
 def trigger_sync_workflow(
@@ -169,7 +143,7 @@ def get_workflow_runs(config: Config, limit: int = 20) -> list:
         response = client.request_json("GET", url)
         return response.get("workflow_runs", []) or []
     except ForgeError as e:
-        raise ForgeError(f"Failed to get workflow runs: {e}")
+        raise ForgeError(f"Failed to get workflow runs: {e}") from e
 
 
 def get_workflow_run(config: Config, run_id: str) -> dict:
@@ -182,7 +156,7 @@ def get_workflow_run(config: Config, run_id: str) -> dict:
     try:
         return client.request_json("GET", url)
     except ForgeError as e:
-        raise ForgeError(f"Failed to get workflow run: {e}")
+        raise ForgeError(f"Failed to get workflow run: {e}") from e
 
 
 def wait_for_workflow_completion(

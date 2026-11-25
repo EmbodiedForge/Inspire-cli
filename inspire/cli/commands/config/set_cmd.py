@@ -6,11 +6,12 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import click
 import questionary
 import tomlkit
+from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 from questionary import confirm, text
 
@@ -35,6 +36,7 @@ from inspire.config.toml import _find_project_config
 _REMOTE_ENV_PREFIX = "remote_env."
 _DISCOVERY_OWNED_PREFIXES = ("accounts.", "compute_groups", "project_catalog.", "projects.")
 _REMOTE_ENV_CATEGORY = "Remote Environment"
+_SECRET_MASK = "********"
 
 _MENU_BACK_SENTINEL = -2
 _MENU_CANCEL_SENTINEL = -1
@@ -61,30 +63,32 @@ def _pick_menu(
         # Disable CPR probing to avoid redraw glitches and warnings in simpler terminals/PTYS.
         os.environ.setdefault("PROMPT_TOOLKIT_NO_CPR", "1")
         default_index = max(0, min(cursor_index, len(entries) - 1))
+        choices = [
+            questionary.Choice(title=entry, value=index) for index, entry in enumerate(entries)
+        ]
         selected = questionary.select(
             title,
-            choices=[
-                questionary.Choice(title=entry, value=index) for index, entry in enumerate(entries)
-            ],
-            default=default_index,
+            choices=choices,
+            default=choices[default_index],
             instruction="(Left: back, Right/Enter: select)",
             erase_when_done=True,
         )
+        key_bindings = cast(KeyBindings, selected.application.key_bindings)
         enter_handler = next(
             (
                 binding.handler
-                for binding in selected.application.key_bindings.bindings
+                for binding in key_bindings.bindings
                 if binding.keys == (Keys.ControlM,)
             ),
             None,
         )
 
-        @selected.application.key_bindings.add(Keys.Right, eager=True)
+        @key_bindings.add(Keys.Right, eager=True)
         def _right_arrow(event):
             if enter_handler is not None:
                 enter_handler(event)
 
-        @selected.application.key_bindings.add(Keys.Left, eager=True)
+        @key_bindings.add(Keys.Left, eager=True)
         def _left_arrow(event):
             if allow_back:
                 event.app.exit(result=_MENU_BACK_SENTINEL)
@@ -209,30 +213,58 @@ def _complete_config_key(ctx, param, incomplete):
     return [c for c in get_config_key_completions() if c.value.startswith(incomplete)]
 
 
-def _display(value: Any) -> str:
-    if value is None:
+def _is_secret_toml_key(toml_key: str) -> bool:
+    option = get_user_managed_option_by_toml(toml_key)
+    return option is not None and option.secret
+
+
+def _mask_value(value: Any, secret: bool) -> Any:
+    if secret and value is not None and value != "":
+        return _SECRET_MASK
+    return value
+
+
+def _display(value: Any, secret: bool = False) -> str:
+    masked = _mask_value(value, secret)
+    if masked is None:
         return "(not set)"
-    if isinstance(value, list):
-        return json.dumps(value)
-    return str(value)
+    if isinstance(masked, list):
+        return json.dumps(masked)
+    return str(masked)
 
 
-def _display_effective(value: Any, default: Any | None = None) -> str:
+def _display_effective(value: Any, default: Any | None = None, secret: bool = False) -> str:
     if value is not None:
-        return _display(value)
+        return _display(value, secret)
     if default is not None:
         return f"{_display(default)} (default)"
     return _display(value)
 
 
+def _prompt_default_str(current: Any, default: Any | None, secret: bool) -> str:
+    """Pre-fill a value prompt without exposing a stored secret.
+
+    The ``Current:`` line masks secrets, so pre-filling the raw stored value would put
+    it back on screen where the mask cannot reach it.
+    """
+    if secret:
+        return ""
+    if current is not None:
+        return str(current)
+    if default is not None:
+        return _display(default)
+    return ""
+
+
 def _apply_change(ctx, doc, config_path, section, key, toml_key, old, new, dry_run):
+    secret = _is_secret_toml_key(toml_key)
     if dry_run:
         click.echo(click.style("Dry run - would update:", fg="yellow"))
         click.echo(f"  File: {config_path}")
         click.echo(f"  Key:  {toml_key}")
         if old is not None:
-            click.echo(f"  Old:  {_display(old)}")
-        click.echo(f"  New:  {_display(new)}")
+            click.echo(f"  Old:  {_display(old, secret)}")
+        click.echo(f"  New:  {_display(new, secret)}")
         return
 
     _set_toml_value(doc, section, key, new)
@@ -241,13 +273,17 @@ def _apply_change(ctx, doc, config_path, section, key, toml_key, old, new, dry_r
     if old is not None:
         emit_success(
             ctx,
-            payload={"key": toml_key, "old_value": old, "new_value": new},
+            payload={
+                "key": toml_key,
+                "old_value": _mask_value(old, secret),
+                "new_value": _mask_value(new, secret),
+            },
             text=f"Updated {toml_key} in {config_path}",
         )
     else:
         emit_success(
             ctx,
-            payload={"key": toml_key, "new_value": new},
+            payload={"key": toml_key, "new_value": _mask_value(new, secret)},
             text=f"Set {toml_key} in {config_path}",
         )
 
@@ -298,19 +334,17 @@ def _run_semi_interactive(ctx, key, use_global, use_project, dry_run):
         click.echo()
         if not is_remote_env and option:
             click.echo(click.style(f"  {option.description}", dim=True))
-        click.echo(f"  Current: {_display_effective(current, option.default if option else None)}")
+        secret = bool(option and option.secret)
+        current_display = _display_effective(current, option.default if option else None, secret)
+        click.echo(f"  Current: {current_display}")
         click.echo(f"  Config:  {config_path}")
         click.echo()
 
-        if current is not None:
-            default_str = str(current)
-        elif option and option.default is not None:
-            default_str = _display(option.default)
-        else:
-            default_str = ""
+        default_str = _prompt_default_str(current, option.default if option else None, secret)
         new_value = text(
             f"  New value for {toml_key}:",
             default=default_str,
+            is_password=secret,
             erase_when_done=True,
         ).ask()
         if new_value is None:
@@ -446,7 +480,7 @@ def _run_interactive(ctx, use_global, use_project, dry_run):
                 for o in options:
                     sec, name = _parse_toml_key(o.toml_key)
                     cur = _get_current_value(doc, sec, name)
-                    items.append(f"{o.toml_key}  ({_display_effective(cur, o.default)})")
+                    items.append(f"{o.toml_key}  ({_display_effective(cur, o.default, o.secret)})")
 
                 idx = _pick_menu(
                     "Select a setting:",
@@ -474,18 +508,15 @@ def _run_interactive(ctx, use_global, use_project, dry_run):
 
                     click.echo()
                     click.echo(click.style(f"  {chosen.description}", dim=True))
-                    click.echo(f"  Current: {_display_effective(current, chosen.default)}")
+                    current_display = _display_effective(current, chosen.default, chosen.secret)
+                    click.echo(f"  Current: {current_display}")
                     click.echo()
 
-                    if current is not None:
-                        default_str = str(current)
-                    elif chosen.default is not None:
-                        default_str = _display(chosen.default)
-                    else:
-                        default_str = ""
+                    default_str = _prompt_default_str(current, chosen.default, chosen.secret)
                     new_val = text(
                         f"  New value for {chosen.toml_key}:",
                         default=default_str,
+                        is_password=chosen.secret,
                         erase_when_done=True,
                     ).ask()
 

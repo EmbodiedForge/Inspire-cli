@@ -6,9 +6,16 @@ import json
 import os
 import re
 import time
-from dataclasses import dataclass
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Optional, cast
+
+from inspire.config.toml_write import atomic_write_text
+
+if TYPE_CHECKING:
+    from playwright.sync_api import StorageState
 
 # Session cache files
 SESSION_CACHE_DIR = Path.home() / ".cache" / "inspire-cli"
@@ -18,6 +25,14 @@ SESSION_TTL = 3600  # 1 hour
 
 class SessionExpiredError(Exception):
     """Raised when the web session has expired (401 from server)."""
+
+
+class SessionAuthenticationError(RuntimeError):
+    """Raised when CAS rejects an explicit authentication attempt."""
+
+
+class SessionRefreshError(SessionExpiredError):
+    """Raised when one session's single re-authentication attempt fails."""
 
 
 # Default workspace placeholder (override with INSPIRE_WORKSPACE_ID env var)
@@ -41,18 +56,40 @@ def get_session_cache_file(account: Optional[str] = None) -> Path:
     return SESSION_CACHE_DIR / f"web_session-{normalized}.json"
 
 
+def get_auth_failure_cache_file(account: Optional[str] = None) -> Path:
+    """Return the account-scoped cross-process authentication cooldown file."""
+    normalized = normalize_account_for_cache(account) or "default"
+    return SESSION_CACHE_DIR / f"web_auth_failure-{normalized}.json"
+
+
+@contextmanager
+def _lock_web_session_cache(path: Path) -> Iterator[None]:
+    if os.name != "posix":
+        yield
+        return
+
+    import fcntl
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(f".{path.name}.lock")
+    with lock_path.open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 @dataclass
 class WebSession:
     """Captured web session for web-ui APIs.
 
-    We store Playwright `storage_state` because the web-ui APIs behind `/api/v1/*`
+    We store Playwright `storage_state` because the web-ui APIs behind `/api/*`
     are protected by Keycloak/CAS SSO and can require more than just a couple
     of cookies.
     """
 
-    storage_state: dict[str, Any]
+    storage_state: StorageState
     created_at: float
     workspace_id: Optional[str] = None
+    account_alias: Optional[str] = None
     login_username: Optional[str] = None
     base_url: Optional[str] = None
     all_workspace_ids: Optional[list[str]] = None
@@ -60,6 +97,13 @@ class WebSession:
 
     # Back-compat: older cache stored only name->value cookies
     cookies: Optional[dict[str, str]] = None
+    _refresh_attempted: bool = field(default=False, init=False, repr=False, compare=False)
+    _refresh_failure_message: Optional[str] = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def is_valid(self) -> bool:
         """Check if session is still valid (not expired)."""
@@ -70,6 +114,7 @@ class WebSession:
             "storage_state": self.storage_state,
             "cookies": self.cookies,
             "workspace_id": self.workspace_id,
+            "account_alias": self.account_alias,
             "login_username": self.login_username,
             "base_url": self.base_url,
             "all_workspace_ids": self.all_workspace_ids,
@@ -80,7 +125,7 @@ class WebSession:
     @classmethod
     def from_dict(cls, data: dict) -> "WebSession":
         # Back-compat with older cache files that stored only cookies
-        storage_state = data.get("storage_state")
+        storage_state = cast("StorageState | None", data.get("storage_state"))
         cookies = data.get("cookies")
         if storage_state is None:
             storage_state = {"cookies": [], "origins": []}
@@ -88,6 +133,7 @@ class WebSession:
             storage_state=storage_state,
             cookies=cookies,
             workspace_id=data.get("workspace_id"),
+            account_alias=data.get("account_alias"),
             login_username=data.get("login_username"),
             base_url=data.get("base_url"),
             all_workspace_ids=data.get("all_workspace_ids"),
@@ -97,17 +143,22 @@ class WebSession:
 
     def save(self, account: Optional[str] = None) -> None:
         """Save session to cache file."""
-        cache_file = get_session_cache_file(account or self.login_username)
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
-        # Restrict permissions: session contains sensitive cookies/tokens.
-        tmp_path = cache_file.with_suffix(".tmp")
-        with open(tmp_path, "w") as f:
-            json.dump(self.to_dict(), f)
-        os.replace(tmp_path, cache_file)
-        try:
-            os.chmod(cache_file, 0o600)
-        except Exception:
-            pass
+        cache_file = get_session_cache_file(account or self.account_alias or self.login_username)
+        with _lock_web_session_cache(cache_file):
+            atomic_write_text(cache_file, json.dumps(self.to_dict()))
+
+    def save_if_current(self, previous: WebSession, *, account: str) -> bool:
+        """Persist a refresh only if the original scoped cache is still current."""
+        cache_file = get_session_cache_file(account)
+        with _lock_web_session_cache(cache_file):
+            try:
+                cached = WebSession.from_dict(json.loads(cache_file.read_text(encoding="utf-8")))
+            except (FileNotFoundError, json.JSONDecodeError, KeyError):
+                return False
+            if cached.to_dict() != previous.to_dict():
+                return False
+            atomic_write_text(cache_file, json.dumps(self.to_dict()))
+            return True
 
     @classmethod
     def load(

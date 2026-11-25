@@ -8,8 +8,11 @@ import re
 import shlex
 import subprocess
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+from inspire.config.toml_write import atomic_write_text
 
 from .config import load_tunnel_config
 from .models import BridgeProfile, TunnelConfig, TunnelError
@@ -24,6 +27,11 @@ INSPIRE_SSH_LEGACY_HEADER = "# Inspire Bridges (auto-generated)"
 # ---------------------------------------------------------------------------
 # ProxyCommand
 # ---------------------------------------------------------------------------
+
+_RTUNNEL_STDERR_REDACTION_SED = (
+    r"s#([?&](token|access_token|refresh_token)=)[^&[:space:]\"<>]+#\1<redacted>#g; "
+    r"s#(/(jupyter|vscode)/[^/]+/)[^/]+(/(proxy|lab)/)#\1<redacted>\3#g"
+)
 
 
 def _get_proxy_command(bridge: BridgeProfile, rtunnel_bin: Path, quiet: bool = False) -> str:
@@ -47,7 +55,17 @@ def _get_proxy_command(bridge: BridgeProfile, rtunnel_bin: Path, quiet: bool = F
         # Wrap in sh -c to redirect stderr, suppressing rtunnel's verbose output
         cmd = f"{shlex.quote(str(rtunnel_bin))} {shlex.quote(ws_url)} stdio://%h:%p 2>/dev/null"
         return f"sh -c {shlex.quote(cmd)}"
-    return f"{shlex.quote(str(rtunnel_bin))} {shlex.quote(ws_url)} {shlex.quote('stdio://%h:%p')}"
+    cmd = (
+        '_err=$(mktemp "${TMPDIR:-/tmp}/inspire-rtunnel-stderr.XXXXXX") || exit 1; '
+        "trap 'rm -f \"$_err\"' EXIT INT TERM; "
+        f"{shlex.quote(str(rtunnel_bin))} {shlex.quote(ws_url)} "
+        f"{shlex.quote('stdio://%h:%p')} 2>\"$_err\"; "
+        "_rc=$?; "
+        f'sed -E {shlex.quote(_RTUNNEL_STDERR_REDACTION_SED)} "$_err" >&2 || '
+        'cat "$_err" >&2; '
+        "exit $_rc"
+    )
+    return f"sh -c {shlex.quote(cmd)}"
 
 
 def _to_ws_url(proxy_url: str) -> str:
@@ -125,9 +143,228 @@ def _ssh_process_env() -> dict[str, str]:
     return env
 
 
+_SSH_PROBE_TEXT_LIMIT = 4000
+
+
+@dataclass(frozen=True)
+class SSHProbeAttempt:
+    """One concrete SSH preflight command attempt."""
+
+    label: str
+    returncode: int | None = None
+    stdout: str = ""
+    stderr: str = ""
+    error: str = ""
+    timed_out: bool = False
+    timeout: int | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.returncode == 0 and "ok" in self.stdout
+
+
+@dataclass(frozen=True)
+class SSHProbeResult:
+    """Detailed SSH preflight result while preserving the old bool API."""
+
+    bridge_name: str
+    ok: bool
+    attempts: list[SSHProbeAttempt] = field(default_factory=list)
+
+    def format_failure(self) -> str:
+        if self.ok:
+            return "SSH preflight succeeded."
+
+        lines = [f"SSH preflight failed for bridge '{self.bridge_name}'."]
+        if not self.attempts:
+            lines.append("No SSH probe attempts were recorded.")
+            return "\n".join(lines)
+
+        for attempt in self.attempts:
+            status_parts: list[str] = []
+            if attempt.timed_out:
+                status_parts.append(f"timeout after {attempt.timeout}s")
+            elif attempt.returncode is not None:
+                status_parts.append(f"rc={attempt.returncode}")
+            if attempt.error:
+                status_parts.append(_excerpt_ssh_probe_text(attempt.error))
+            status = "; ".join(part for part in status_parts if part) or "failed"
+            lines.append(f"{attempt.label}: {status}")
+
+            stderr = _excerpt_ssh_probe_text(attempt.stderr)
+            if stderr:
+                lines.append(f"{attempt.label} stderr:\n{_indent_probe_block(stderr)}")
+            stdout = _excerpt_ssh_probe_text(attempt.stdout)
+            if stdout:
+                lines.append(f"{attempt.label} stdout:\n{_indent_probe_block(stdout)}")
+
+        if not any(attempt.stdout or attempt.stderr or attempt.error for attempt in self.attempts):
+            lines.append("No stdout/stderr was captured from ssh.")
+        return "\n".join(lines)
+
+
+def _redact_ssh_probe_text(text: str) -> str:
+    value = str(text or "")
+    if not value:
+        return value
+
+    query_token_re = re.compile(r"(?i)([?&](?:token|access_token|refresh_token)=)([^&\s]+)")
+    path_token_re = re.compile(r"(/(?:jupyter|vscode)/[^/]+/)([^/]+)(/proxy/|/lab)")
+    bearer_re = re.compile(r"(?i)(authorization\s*[:=]\s*bearer\s+)([^\s,}\]]+)")
+    field_re = re.compile(
+        r"""(?ix)
+        (
+            [\"']?
+            (?:
+                password|passwd|token|access[_-]?token|refresh[_-]?token|
+                secret|api[_-]?key|authorization|cookie|set-cookie
+            )
+            [\"']?
+            \s*[:=]\s*
+        )
+        (
+            \"[^\"]*\" | '[^']*' | [^\s,}\]]+
+        )
+        """
+    )
+    value = bearer_re.sub(r"\1<redacted>", value)
+    value = field_re.sub(r"\1<redacted>", value)
+    value = query_token_re.sub(r"\1<redacted>", value)
+    value = path_token_re.sub(r"\1<redacted>\3", value)
+    return value
+
+
+def _excerpt_ssh_probe_text(text: str, *, limit: int = _SSH_PROBE_TEXT_LIMIT) -> str:
+    value = _redact_ssh_probe_text(text).strip()
+    if not value:
+        return ""
+    value = "\n".join(line.rstrip() for line in value.splitlines()).strip()
+    if len(value) > limit:
+        value = f"...{value[-limit:]}"
+    return value
+
+
+def _indent_probe_block(text: str) -> str:
+    return "\n".join(f"  {line}" if line else "  " for line in text.splitlines())
+
+
 # ---------------------------------------------------------------------------
 # Connection testing
 # ---------------------------------------------------------------------------
+
+
+def probe_ssh_connection(
+    bridge: BridgeProfile,
+    config: TunnelConfig,
+    timeout: int = 10,
+) -> SSHProbeResult:
+    """Run SSH preflight and retain the concrete subprocess failure details."""
+    attempts: list[SSHProbeAttempt] = []
+
+    try:
+        _ensure_rtunnel_binary(config)
+    except TunnelError as exc:
+        attempts.append(SSHProbeAttempt(label="rtunnel_binary", error=str(exc)))
+        return SSHProbeResult(bridge_name=bridge.name, ok=False, attempts=attempts)
+
+    proxy_cmd = _get_proxy_command(bridge, config.rtunnel_bin, quiet=True)
+    primary_cmd = [
+        "ssh",
+        *_identity_args(bridge),
+        *_ssh_locale_args(),
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        f"ConnectTimeout={timeout}",
+        "-o",
+        f"ProxyCommand={proxy_cmd}",
+        "-o",
+        "LogLevel=ERROR",
+        "-p",
+        str(bridge.ssh_port),
+        f"{bridge.ssh_user}@localhost",
+        "echo ok",
+    ]
+    primary = _run_ssh_probe_command(
+        label="direct",
+        cmd=primary_cmd,
+        timeout=timeout + 5,
+        stdin=subprocess.DEVNULL,
+    )
+    attempts.append(primary)
+    if primary.ok:
+        return SSHProbeResult(bridge_name=bridge.name, ok=True, attempts=attempts)
+
+    from .ssh_exec import get_ssh_command_args
+
+    try:
+        fallback_cmd = get_ssh_command_args(
+            bridge_name=bridge.name,
+            config=config,
+            remote_command="echo ok",
+        )
+    except Exception as exc:
+        attempts.append(SSHProbeAttempt(label="wrapped", error=str(exc)))
+        return SSHProbeResult(bridge_name=bridge.name, ok=False, attempts=attempts)
+
+    fallback = _run_ssh_probe_command(
+        label="wrapped",
+        cmd=fallback_cmd,
+        timeout=timeout + 8,
+        stdin=subprocess.DEVNULL,
+    )
+    attempts.append(fallback)
+    return SSHProbeResult(bridge_name=bridge.name, ok=fallback.ok, attempts=attempts)
+
+
+def _run_ssh_probe_command(
+    *,
+    label: str,
+    cmd: list[str],
+    timeout: int,
+    stdin: int | None = None,
+) -> SSHProbeAttempt:
+    try:
+        result = subprocess.run(
+            cmd,
+            stdin=stdin,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=_ssh_process_env(),
+        )
+        return SSHProbeAttempt(
+            label=label,
+            returncode=result.returncode,
+            stdout=result.stdout or "",
+            stderr=result.stderr or "",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = _timeout_output_text(exc.stdout)
+        stderr = _timeout_output_text(exc.stderr)
+        return SSHProbeAttempt(
+            label=label,
+            stdout=stdout,
+            stderr=stderr,
+            error=str(exc),
+            timed_out=True,
+            timeout=timeout,
+        )
+    except FileNotFoundError as exc:
+        return SSHProbeAttempt(label=label, error=str(exc), timeout=timeout)
+
+
+def _timeout_output_text(value: bytes | str | None) -> str:
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    if isinstance(value, str):
+        return value
+    return ""
 
 
 def _test_ssh_connection(
@@ -145,72 +382,42 @@ def _test_ssh_connection(
     Returns:
         True if SSH connection succeeds, False otherwise.
     """
-    # Ensure rtunnel binary exists
-    try:
-        _ensure_rtunnel_binary(config)
-    except TunnelError:
-        return False
+    result = probe_ssh_connection(bridge, config, timeout=timeout)
+    if not result.ok:
+        logger.debug("%s", result.format_failure())
+    return result.ok
 
-    proxy_cmd = _get_proxy_command(bridge, config.rtunnel_bin, quiet=True)
 
-    try:
-        result = subprocess.run(
-            [
-                "ssh",
-                *_identity_args(bridge),
-                *_ssh_locale_args(),
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                f"ConnectTimeout={timeout}",
-                "-o",
-                f"ProxyCommand={proxy_cmd}",
-                "-o",
-                "LogLevel=ERROR",
-                "-p",
-                str(bridge.ssh_port),
-                f"{bridge.ssh_user}@localhost",
-                "echo ok",
-            ],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=timeout + 5,
-            env=_ssh_process_env(),
+def probe_tunnel_available(
+    bridge_name: Optional[str] = None,
+    config: Optional[TunnelConfig] = None,
+    retries: int = 3,
+    retry_pause: float = 2.0,
+    progressive: bool = True,
+    probe_timeout: int = 10,
+) -> SSHProbeResult:
+    """Check SSH availability with retries and return the final detailed result."""
+    if config is None:
+        config = load_tunnel_config()
+
+    bridge = config.get_bridge(bridge_name)
+    if not bridge:
+        name = bridge_name or config.default_bridge or "<default>"
+        return SSHProbeResult(
+            bridge_name=name,
+            ok=False,
+            attempts=[SSHProbeAttempt(label="config", error=f"Bridge '{name}' not found.")],
         )
-        if result.returncode == 0 and "ok" in result.stdout:
-            return True
-    except subprocess.TimeoutExpired as e:
-        logger.debug("SSH connection test timed out for bridge %s: %s", bridge.name, e)
-    except FileNotFoundError as e:
-        logger.debug("SSH binary not found for bridge %s: %s", bridge.name, e)
 
-    from .ssh_exec import get_ssh_command_args
-
-    try:
-        fallback_cmd = get_ssh_command_args(
-            bridge_name=bridge.name,
-            config=config,
-            remote_command="echo ok",
-        )
-        fallback = subprocess.run(
-            fallback_cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout + 8,
-            env=_ssh_process_env(),
-        )
-        return fallback.returncode == 0 and "ok" in (fallback.stdout or "")
-    except subprocess.TimeoutExpired as e:
-        logger.debug("SSH fallback connection test timed out for bridge %s: %s", bridge.name, e)
-        return False
-    except FileNotFoundError as e:
-        logger.debug("SSH binary not found for fallback test on bridge %s: %s", bridge.name, e)
-        return False
+    last_result: SSHProbeResult | None = None
+    for attempt in range(retries + 1):
+        last_result = probe_ssh_connection(bridge, config, timeout=probe_timeout)
+        if last_result.ok:
+            return last_result
+        if attempt < retries:
+            pause = retry_pause + (attempt * 1.0) if progressive else retry_pause
+            time.sleep(pause)
+    return last_result or SSHProbeResult(bridge_name=bridge.name, ok=False, attempts=[])
 
 
 def is_tunnel_available(
@@ -352,10 +559,10 @@ def install_ssh_config(ssh_config: str, host_alias: str) -> dict:
             content += "\n\n" + ssh_config.rstrip() + "\n"
         else:
             content = ssh_config.rstrip() + "\n"
-        ssh_config_path.write_text(content)
+        atomic_write_text(ssh_config_path, content)
         return {"success": True, "updated": False, "error": None}
 
-    ssh_config_path.write_text("".join(rendered))
+    atomic_write_text(ssh_config_path, "".join(rendered))
     return {"success": True, "updated": True, "error": None}
 
 
@@ -476,16 +683,26 @@ def has_installed_ssh_config(ssh_config_path: Optional[Path] = None) -> bool:
     )
 
 
-def install_all_ssh_configs(config: TunnelConfig) -> dict:
-    """Install all bridge SSH configs as one managed block in ~/.ssh/config."""
+def install_all_ssh_configs(
+    config: TunnelConfig,
+    *,
+    removed_aliases: Optional[set[str]] = None,
+) -> dict:
+    """Install all bridge SSH configs as one managed block in ~/.ssh/config.
+
+    ``removed_aliases`` names bridges that were just deleted from *config*. Their
+    generated host blocks are cleaned up even though the profile is no longer in
+    the config to identify them, while unrelated user-managed hosts survive.
+    """
     ssh_config_path = Path.home() / ".ssh" / "config"
     ssh_config_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
 
     existing_content = ssh_config_path.read_text() if ssh_config_path.exists() else ""
     had_installed_entries = has_installed_ssh_config(ssh_config_path)
+    managed_aliases = set(config.bridges.keys()) | set(removed_aliases or ())
     cleaned_content = _strip_inspire_generated_entries(
         existing_content,
-        managed_aliases=set(config.bridges.keys()),
+        managed_aliases=managed_aliases,
     )
     all_configs = generate_all_ssh_configs(config) if config.bridges else ""
 
@@ -500,7 +717,7 @@ def install_all_ssh_configs(config: TunnelConfig) -> dict:
     else:
         final_content = managed_block
 
-    ssh_config_path.write_text(final_content)
+    atomic_write_text(ssh_config_path, final_content)
     return {"success": True, "updated": had_installed_entries, "error": None}
 
 

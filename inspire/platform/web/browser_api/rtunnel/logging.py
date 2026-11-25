@@ -26,7 +26,8 @@ def _redact_text(text: str) -> str:
         return value
 
     query_token_re = re.compile(r"(?i)([?&](?:token|access_token|refresh_token)=)([^&\s]+)")
-    path_token_re = re.compile(r"(/(?:jupyter|vscode)/[^/]+/)([^/]+)(/proxy/)")
+    path_token_re = re.compile(r"(/(?:jupyter|vscode)/[^/]+/)([^/]+)(/proxy/|/lab)")
+    bearer_re = re.compile(r"(?i)(authorization\s*[:=]\s*bearer\s+)([^\s,}\]]+)")
     field_re = re.compile(
         r"""(?ix)
         (
@@ -43,6 +44,7 @@ def _redact_text(text: str) -> str:
         )
         """
     )
+    value = bearer_re.sub(r"\1<redacted>", value)
     value = field_re.sub(r"\1<redacted>", value)
     value = query_token_re.sub(r"\1<redacted>", value)
     value = path_token_re.sub(r"\1<redacted>\3", value)
@@ -173,6 +175,7 @@ def format_trace_summary(trace: RtunnelTrace | None = None) -> str:
         "terminal_transport",
         "setup_confirmed",
         "setup_errors",
+        "setup_output_tail",
         "bootstrap_mode",
         "bootstrap_strategy",
         "rtunnel_source",

@@ -72,13 +72,9 @@ from .upload import (
 from .flow import _StepTimer as _StepTimer  # noqa: F401
 from .flow import _wait_for_setup_completion as _wait_for_setup_completion  # noqa: F401
 
-# PlaywrightError re-export: used by test stubs that raise it.
-try:
-    from playwright.sync_api import Error as PlaywrightError  # noqa: F401
-except ImportError:  # pragma: no cover
-
-    class PlaywrightError(Exception):  # type: ignore[no-redef]
-        pass
+# PlaywrightError re-export: used by test stubs that raise the same type the
+# terminal helpers catch, including when Playwright is not installed.
+from .terminal import PlaywrightError as PlaywrightError  # noqa: F401
 
 
 __all__ = ["setup_notebook_rtunnel"]

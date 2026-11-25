@@ -78,6 +78,19 @@ SSH_OPTIONS: list[ConfigOption] = [
         parser=_parse_upload_policy,
         value_type=str,
     ),
+    ConfigOption(
+        env_var="INSPIRE_SSH_HOST_KEY_DIR",
+        toml_key="ssh.host_key_dir",
+        field_name="host_key_dir",
+        description=(
+            "Persistent remote directory for the dropbear host key. "
+            "Defaults to <target_dir>/.inspire/ssh/dropbear so the key survives "
+            "notebook restarts (avoid ephemeral /etc and /tmp)."
+        ),
+        default=None,
+        category="SSH",
+        scope="global",
+    ),
 ]
 
 TUNNEL_OPTIONS: list[ConfigOption] = [
@@ -138,24 +151,6 @@ PATHS_OPTIONS: list[ConfigOption] = [
         default=None,
         category="Paths",
         scope="project",
-    ),
-    ConfigOption(
-        env_var="INSPIRE_LOG_PATTERN",
-        toml_key="paths.log_pattern",
-        field_name="log_pattern",
-        description="Log file glob pattern",
-        default="training_master_*.log",
-        category="Paths",
-        scope="project",
-    ),
-    ConfigOption(
-        env_var="INSPIRE_JOB_CACHE",
-        toml_key="paths.job_cache",
-        field_name="job_cache_path",
-        description="Local job cache file path",
-        default="~/.inspire/jobs.json",
-        category="Paths",
-        scope="global",
     ),
     ConfigOption(
         env_var="INSP_LOG_CACHE_DIR",

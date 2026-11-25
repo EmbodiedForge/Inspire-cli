@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 from inspire.config.env import _parse_denylist, _parse_remote_timeout
+from inspire.config.schema_models import _parse_list
 from inspire.config.models import Config, ConfigError
 
 
@@ -98,8 +99,6 @@ def config_from_env(*, require_target_dir: bool = False) -> Config:
         password=password,
         base_url=os.getenv("INSPIRE_BASE_URL", "https://api.example.com"),
         target_dir=target_dir,
-        log_pattern=os.getenv("INSPIRE_LOG_PATTERN", "training_master_*.log"),
-        job_cache_path=os.getenv("INSPIRE_JOB_CACHE", "~/.inspire/jobs.json"),
         timeout=timeout,
         max_retries=max_retries,
         retry_delay=retry_delay,
@@ -117,11 +116,17 @@ def config_from_env(*, require_target_dir: bool = False) -> Config:
         github_sync_workflow=os.getenv("INSP_GITHUB_SYNC_WORKFLOW", "sync_code.yml"),
         github_bridge_workflow=os.getenv("INSP_GITHUB_BRIDGE_WORKFLOW", "run_bridge_action.yml"),
         log_cache_dir=os.getenv("INSP_LOG_CACHE_DIR")
-        or os.getenv("INSPIRE_LOG_CACHE_DIR", "~/.inspire/logs"),
+        or os.getenv("INSPIRE_LOG_CACHE_DIR", "~/.inspire/logs")
+        or "",
         remote_timeout=_parse_remote_timeout(os.getenv("INSP_REMOTE_TIMEOUT", "90")),
         default_remote=os.getenv("INSPIRE_DEFAULT_REMOTE", "origin"),
         bridge_action_timeout=bridge_action_timeout,
         bridge_action_denylist=_parse_denylist(os.getenv("INSPIRE_BRIDGE_DENYLIST")),
+        remote_runtime_cwd=os.getenv("INSPIRE_REMOTE_RUNTIME_CWD"),
+        remote_runtime_path_prepend=_parse_list(
+            os.getenv("INSPIRE_REMOTE_RUNTIME_PATH_PREPEND", "")
+        ),
+        remote_runtime_venv=os.getenv("INSPIRE_REMOTE_RUNTIME_VENV", "auto"),
         ssh_port=_parse_ssh_port(os.getenv("INSPIRE_SSH_PORT")),
     )
 
@@ -194,5 +199,10 @@ def config_from_env_for_sync() -> Config:
         remote_timeout=_parse_remote_timeout(os.getenv("INSP_REMOTE_TIMEOUT", "90")),
         bridge_action_timeout=bridge_action_timeout,
         bridge_action_denylist=_parse_denylist(os.getenv("INSPIRE_BRIDGE_DENYLIST")),
+        remote_runtime_cwd=os.getenv("INSPIRE_REMOTE_RUNTIME_CWD"),
+        remote_runtime_path_prepend=_parse_list(
+            os.getenv("INSPIRE_REMOTE_RUNTIME_PATH_PREPEND", "")
+        ),
+        remote_runtime_venv=os.getenv("INSPIRE_REMOTE_RUNTIME_VENV", "auto"),
         ssh_port=_parse_ssh_port(os.getenv("INSPIRE_SSH_PORT")),
     )

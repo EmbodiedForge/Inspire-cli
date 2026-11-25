@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +9,7 @@ import click
 import questionary
 import tomlkit
 
+from inspire.cli.utils import project_order as project_order_utils
 from inspire.cli.context import (
     Context,
     EXIT_CONFIG_ERROR,
@@ -19,8 +19,37 @@ from inspire.cli.context import (
 from inspire.cli.utils.errors import exit_with_error as _handle_error
 from inspire.cli.utils.notebook_cli import resolve_json_output
 from inspire.cli.utils.output import emit_info, emit_success
-from inspire.config import Config, ConfigError, PROJECT_CONFIG_DIR
+from inspire.config import (
+    SOURCE_ENV,
+    SOURCE_GLOBAL,
+    SOURCE_PROJECT,
+    Config,
+    ConfigError,
+    PROJECT_CONFIG_DIR,
+)
 from inspire.config.toml import _find_project_config
+
+
+def _effective_project_order_layer(config: Config) -> tuple[list[str], str, str | None]:
+    """Return the effective project_order with the layer and file providing it."""
+    sources = getattr(config, "_sources", {}) or {}
+    source = str(sources.get("project_order") or "unknown")
+    if source == SOURCE_PROJECT:
+        path = getattr(config, "_project_config_path", None)
+    elif source == SOURCE_GLOBAL:
+        path = getattr(config, "_global_config_path", None)
+    else:
+        path = None
+    order = [str(entry) for entry in (getattr(config, "project_order", None) or [])]
+    return order, source, (str(path) if path else None)
+
+
+def _project_order_layer_label(source: str, config_path: str | None) -> str:
+    if source == SOURCE_ENV:
+        return "environment variable INSPIRE_PROJECT_ORDER"
+    if config_path:
+        return f"{source} config ({config_path})"
+    return f"{source} configuration"
 
 
 def _build_project_indexes(
@@ -48,7 +77,7 @@ def _resolve_project_entry(
     projects_by_id: dict[str, dict[str, Any]],
     projects_by_unique_name: dict[str, dict[str, Any]],
 ) -> dict[str, Any] | None:
-    """Resolve a project_order entry by ID first, then by unique name."""
+    """Resolve a project_order entry by ID first, then by unique legacy name."""
     entry = str(entry or "").strip()
     if not entry:
         return None
@@ -57,26 +86,9 @@ def _resolve_project_entry(
     return projects_by_unique_name.get(entry.casefold())
 
 
-def _serialize_project_order(
-    ordered_project_ids: list[str],
-    *,
-    projects_by_id: dict[str, dict[str, Any]],
-    name_counts: dict[str, int],
-) -> list[str]:
-    """Serialize project order, preferring unique names and falling back to IDs."""
-    serialized: list[str] = []
-    for pid in ordered_project_ids:
-        project = projects_by_id.get(pid)
-        if project is None:
-            serialized.append(pid)
-            continue
-        name = str(project.get("name") or "").strip()
-        norm = name.casefold()
-        if name and name_counts.get(norm) == 1:
-            serialized.append(name)
-        else:
-            serialized.append(pid)
-    return serialized
+def _serialize_project_order(ordered_project_ids: list[str]) -> list[str]:
+    """Serialize project order as stable project IDs only."""
+    return [str(project_id) for project_id in ordered_project_ids if str(project_id).strip()]
 
 
 def _select_and_order_projects(
@@ -85,7 +97,6 @@ def _select_and_order_projects(
     *,
     projects_by_id: dict[str, dict[str, Any]],
     projects_by_unique_name: dict[str, dict[str, Any]],
-    name_counts: dict[str, int],
 ) -> list[str] | None:
     """Interactive project selection and ordering.
 
@@ -123,9 +134,7 @@ def _select_and_order_projects(
     if not selected:
         return []
     if len(selected) == 1:
-        return _serialize_project_order(
-            selected, projects_by_id=projects_by_id, name_counts=name_counts
-        )
+        return _serialize_project_order(selected)
 
     click.echo("\nNow let's set the priority order (highest priority first):\n")
 
@@ -148,7 +157,7 @@ def _select_and_order_projects(
         ordered.append(choice)
         remaining.remove(choice)
 
-    return _serialize_project_order(ordered, projects_by_id=projects_by_id, name_counts=name_counts)
+    return _serialize_project_order(ordered)
 
 
 def _update_project_config(project_path: Path, project_order: list[str]) -> None:
@@ -212,47 +221,68 @@ def select_projects(
 
         if reset:
             _update_project_config(project_path, [])
-            if effective_json:
-                click.echo(json.dumps({"project_order": [], "action": "reset"}))
-            else:
-                emit_success(ctx, text="Project order cleared", payload={"project_order": []})
+            refreshed, _ = Config.from_files_and_env(require_credentials=False)
+            remaining, source, source_path = _effective_project_order_layer(refreshed)
+
+            if not remaining:
+                emit_success(
+                    ctx,
+                    text="Project order cleared",
+                    payload={"project_order": [], "action": "reset"},
+                )
+                return
+
+            # The project-level key is gone, but another layer still supplies an
+            # effective order, so "cleared" would be a false claim.
+            warning = (
+                "project_order is still effective from "
+                f"{_project_order_layer_label(source, source_path)}; "
+                "only the project-level value was cleared."
+            )
+            emit_success(
+                ctx,
+                text="Project-level project order cleared",
+                payload={
+                    "project_order": remaining,
+                    "action": "reset",
+                    "cleared": False,
+                    "remaining_source": source,
+                    "remaining_config_path": source_path,
+                    "warning": warning,
+                },
+            )
+            if not effective_json:
+                click.echo(click.style(f"Warning: {warning}", fg="yellow"))
             return
 
         if effective_json:
             current_order = config.project_order or []
-            click.echo(
-                json.dumps(
-                    {
-                        "project_order": current_order,
-                        "config_path": str(project_path),
-                    }
-                )
+            emit_success(
+                ctx,
+                payload={
+                    "project_order": current_order,
+                    "config_path": str(project_path),
+                },
             )
             return
 
-        # Build available projects list from catalog + workdirs
-        projects: list[dict[str, Any]] = []
-        if config.project_catalog:
-            for pid, meta in config.project_catalog.items():
-                projects.append({"id": pid, **meta})
-        for pid, workdir in config.project_workdirs.items():
-            if not any(p["id"] == pid for p in projects):
-                catalog = config.project_catalog.get(pid) if config.project_catalog else None
-                projects.append(
-                    {
-                        "id": pid,
-                        "name": (catalog.get("name") if catalog else "") or "",
-                        "workdir": workdir,
-                    }
-                )
+        live_projects = project_order_utils.fetch_current_account_projects(config)
+        projects = [
+            {
+                "id": project.project_id,
+                "name": project.name,
+                "workspace_id": project.workspace_id,
+            }
+            for project in live_projects
+        ]
 
         if not projects:
             _handle_error(
                 ctx,
                 "ConfigError",
-                "No projects found in the discovered project catalog.",
+                "No projects found for the current account.",
                 EXIT_CONFIG_ERROR,
-                hint="Run 'inspire init --discover' to discover projects first.",
+                hint="Run 'inspire project list' to verify current account access.",
             )
             return
 
@@ -269,7 +299,7 @@ def select_projects(
             )
             click.echo()
 
-        projects_by_id, projects_by_unique_name, name_counts = _build_project_indexes(projects)
+        projects_by_id, projects_by_unique_name, _name_counts = _build_project_indexes(projects)
 
         current_order = config.project_order or []
         if current_order:
@@ -294,7 +324,6 @@ def select_projects(
             current_order,
             projects_by_id=projects_by_id,
             projects_by_unique_name=projects_by_unique_name,
-            name_counts=name_counts,
         )
 
         if new_order is None:

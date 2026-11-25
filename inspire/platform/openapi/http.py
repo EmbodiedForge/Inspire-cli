@@ -39,7 +39,7 @@ def make_request_with_retry(
     api, method: str, url: str, **kwargs
 ) -> requests.Response:  # noqa: ANN001
     """Request method with retry mechanism."""
-    last_exception = None
+    last_exception: requests.exceptions.RequestException | None = None
     # Add SSL verification setting to kwargs if not already present
     if "verify" not in kwargs:
         kwargs["verify"] = api.config.verify_ssl
@@ -89,7 +89,7 @@ def make_request_with_retry(
                 logger.warning("Request timeout, retrying in %ss...", api.config.retry_delay)
                 time.sleep(api.config.retry_delay * (attempt + 1))
                 continue
-            raise InspireAPIError(f"Request timeout after {api.config.max_retries} retries")
+            raise InspireAPIError(f"Request timeout after {api.config.max_retries} retries") from e
 
         except requests.exceptions.ConnectionError as e:
             last_exception = e
@@ -97,7 +97,7 @@ def make_request_with_retry(
                 logger.warning("Connection error, retrying in %ss...", api.config.retry_delay)
                 time.sleep(api.config.retry_delay * (attempt + 1))
                 continue
-            raise InspireAPIError(f"Connection error after {api.config.max_retries} retries")
+            raise InspireAPIError(f"Connection error after {api.config.max_retries} retries") from e
 
     # Should not reach here
     raise InspireAPIError(f"Request failed: {str(last_exception)}")
@@ -138,13 +138,13 @@ def make_request(
         # Try to parse JSON response
         try:
             result = response.json()
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
             body_preview = (response.text or "")[: api.ERROR_BODY_PREVIEW_LIMIT]
             raise InspireAPIError(
                 "Failed to parse API response as JSON.\n"
                 f"HTTP {response.status_code} from {url}\n"
                 f"Body (first {api.ERROR_BODY_PREVIEW_LIMIT} chars): {body_preview}"
-            )
+            ) from exc
 
         return result
 

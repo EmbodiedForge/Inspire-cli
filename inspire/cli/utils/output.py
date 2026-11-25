@@ -57,6 +57,7 @@ def emit_error(
     exit_code: int,
     hint: str | None = None,
     human_lines: Iterable[str] | None = None,
+    data: Any | None = None,
 ) -> None:
     """Emit an error message.
 
@@ -74,7 +75,7 @@ def emit_error(
     """
     if ctx.json_output:
         click.echo(
-            json_formatter.format_json_error(error_type, message, exit_code, hint=hint),
+            json_formatter.format_json_error(error_type, message, exit_code, hint=hint, data=data),
             err=True,
         )
         return
@@ -121,7 +122,11 @@ def emit_info(ctx: Context, message: str) -> None:
         message: Info message text
     """
     if ctx.json_output:
-        click.echo(json_formatter.format_json({"info": message}), err=True)
+        # Machine mode keeps stdout to exactly one JSON document. Info lines are
+        # diagnostics, so they stay plain text on stderr. Wrapping them in a JSON
+        # envelope and sending it to stderr meant `cmd --json | jq` read an empty
+        # stdout and found nothing, while the "JSON" nobody asked for went unread.
+        click.echo(message, err=True)
         return
 
     # Only show in debug mode or if explicitly verbose

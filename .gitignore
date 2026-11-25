@@ -53,9 +53,50 @@ config.toml.example
 AGENTS.md
 
 # Development/exploration scripts (contain hardcoded IDs)
-scripts/
+!scripts/
+scripts/*
+!scripts/check_secrets.py
+!scripts/check_wheel_skills.py
+!scripts/ci-local.sh
+!scripts/nightly_local.sh
+!scripts/add_doc_frontmatter.py
+!scripts/check_skip_ci.py
+!scripts/debug_web_session.py
+!scripts/login_web_session.mjs
+!scripts/probe_job_scheduling_contract.py
+!scripts/probe_hpc_ray_contract.py
+!scripts/ablate_cli_surface.py
+!scripts/mutate_surface.py
+!scripts/probe_ray_logs_contract.py
+!scripts/gen_e2e_env_doc.py
+!scripts/platform_snapshot.py
+!scripts/lessons_review.py
+!scripts/opencli_keepalive.sh
+!scripts/web_contract_audit.py
+!scripts/web_contract_matrix.json
+# The live command sweep and the machinery it borrows. Both were invisible to `git add` under
+# the rule above, which meant the enumeration the whole lane is built on existed only on one
+# laptop: a deliverable that cannot be committed is a deliverable nobody can run.
+!scripts/read_surface_sweep.py
+!scripts/live_command_sweep.py
+!scripts/sweep_fixtures.py
+!scripts/benchmark_job_execd.py
 API_ENDPOINTS.md
 .playwright-cli/
 
 # Local-only workflow used for ad-hoc live tests
 .forgejo/workflows/live-cold-notebook-ssh.yml
+
+# Pi agent session artifacts (background task logs, delegate projections)
+.pi/
+
+# Agent session exports: large, personal, and full of tokens/paths. A 266 KB
+# one was sitting at the repo root, one `git add -A` away from history.
+kimi-export-*.md
+
+# Local worktrees (never tracked)
+.worktrees/
+
+# Platform surface snapshots live on the ci/snapshots branch, not on main.
+ci/platform-snapshots/
+.alma-snapshots

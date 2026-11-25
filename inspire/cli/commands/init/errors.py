@@ -6,17 +6,16 @@ import io
 from contextlib import redirect_stderr, redirect_stdout
 
 
-def run_init_action(func, json_mode: bool, *args, **kwargs) -> None:  # noqa: ANN001
+def run_init_action(func, json_mode: bool, *args, **kwargs):  # noqa: ANN001, ANN201
     """Run an init action and normalize machine-mode failures to ValueError."""
     if not json_mode:
-        func(*args, **kwargs)
-        return
+        return func(*args, **kwargs)
 
     stdout_buffer = io.StringIO()
     stderr_buffer = io.StringIO()
     try:
         with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
-            func(*args, **kwargs)
+            return func(*args, **kwargs)
     except SystemExit as e:
         combined = "\n".join([stdout_buffer.getvalue(), stderr_buffer.getvalue()])
         message = extract_error_message(combined) or f"Command exited with code {e.code}"

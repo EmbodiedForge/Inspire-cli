@@ -1,4 +1,4 @@
-"""Proxy-readiness verification: URL redaction and lightweight HTTP probing."""
+"""Proxy-readiness verification: URL redaction and WebSocket probing."""
 
 from __future__ import annotations
 
@@ -15,6 +15,12 @@ except ImportError:  # pragma: no cover
 
 
 import logging
+from http.client import responses as http_status_reasons
+from urllib.parse import urlsplit, urlunsplit
+
+import websocket
+
+from inspire.platform.tls_policy import ssl_options
 
 from .logging import trace_event
 
@@ -52,7 +58,7 @@ def redact_proxy_url(proxy_url: str) -> str:
 
         if parts.query:
             query_items = parse_qsl(parts.query, keep_blank_values=True)
-            redacted_items = []
+            redacted_items: list[tuple[str, str]] = []
             for key, value in query_items:
                 if key.lower() in {"token", "access_token"}:
                     redacted_items.append((key, "<redacted>" if value else value))
@@ -119,45 +125,109 @@ def _summarize_request_error(error: Exception) -> str:
     return _redact_token_like_text(headline)
 
 
+def _proxy_websocket_url(proxy_url: str) -> str:
+    parts = urlsplit(proxy_url)
+    if parts.scheme == "https":
+        scheme = "wss"
+    elif parts.scheme == "http":
+        scheme = "ws"
+    elif parts.scheme in {"ws", "wss"}:
+        scheme = parts.scheme
+    else:
+        raise ValueError(f"Unsupported notebook proxy URL scheme: {parts.scheme or '<empty>'}")
+    return urlunsplit((scheme, parts.netloc, parts.path, parts.query, parts.fragment))
+
+
+def _proxy_cookie_header(*, proxy_url: str, context: Any = None, session: Any = None) -> str:
+    if session is not None and hasattr(session, "prepare_request"):
+        try:
+            import requests
+
+            prepared = session.prepare_request(requests.Request("GET", proxy_url))
+            return str(prepared.headers.get("Cookie") or "")
+        except Exception:
+            pass
+
+    cookies: list[Any] = []
+    try:
+        if context is not None:
+            cookies = list(context.cookies([proxy_url]) or [])
+        elif session is not None:
+            cookies = list(getattr(session, "cookies", []) or [])
+    except Exception:
+        cookies = []
+
+    items: list[str] = []
+    for cookie in cookies:
+        if isinstance(cookie, dict):
+            name = str(cookie.get("name") or "")
+            value = str(cookie.get("value") or "")
+        else:
+            name = str(getattr(cookie, "name", "") or "")
+            value = str(getattr(cookie, "value", "") or "")
+        if not name or not value:
+            continue
+        items.append(f"{name}={value}")
+    return "; ".join(items)
+
+
 def probe_rtunnel_proxy_once(
     *,
     proxy_url: str,
-    context: Any,
+    context: Any = None,
     request_timeout_ms: int = 5000,
+    session: Any = None,
 ) -> tuple[bool, str]:
-    """Run a single HTTP probe against an rtunnel proxy URL.
+    """Try the WebSocket upgrade that SSH will actually depend on.
 
-    Returns ``(ready, summary)`` where *ready* reflects the current HTTP response
-    and *summary* is a single-line, redacted status suitable for debug logs.
+    A plain HTTP GET is ambiguous: a healthy rtunnel endpoint commonly returns
+    404 until the request includes WebSocket upgrade headers.  Returns
+    ``(ready, summary)`` with a redacted single-line diagnostic.
     """
     display_url = redact_proxy_url(proxy_url)
     trace_event("proxy_probe_once_start", proxy_url=display_url, timeout_ms=request_timeout_ms)
+    ws = None
     try:
-        resp = context.request.get(proxy_url, timeout=request_timeout_ms)
-        try:
-            body = resp.text()
-        except (PlaywrightError, AttributeError, RuntimeError, TypeError, ValueError):
-            body = ""
-        summary = _redact_token_like_text(f"{resp.status} {body[:200].strip()}")
-        ready = _is_rtunnel_proxy_ready(status=resp.status, body=body)
+        ws_url = _proxy_websocket_url(proxy_url)
+        cookie = _proxy_cookie_header(
+            proxy_url=proxy_url,
+            context=context,
+            session=session,
+        )
+        options: dict[str, Any] = {
+            "timeout": max(request_timeout_ms, 1) / 1000.0,
+            "enable_multithread": False,
+            # The probe handshakes with the session cookie too, so it follows the same policy as
+            # the tunnel it is checking.
+            "sslopt": ssl_options(),
+        }
+        if cookie:
+            options["cookie"] = cookie
+        ws = websocket.create_connection(ws_url, **options)
+        summary = "websocket 101 Switching Protocols"
         trace_event(
             "proxy_probe_once_result",
             proxy_url=display_url,
-            ready=ready,
+            ready=True,
             status=summary,
         )
-        return ready, summary
-    except (
-        PlaywrightError,
-        ConnectionError,
-        OSError,
-        RuntimeError,
-        TimeoutError,
-        ValueError,
-    ) as exc:
+        return True, summary
+    except websocket.WebSocketBadStatusException as exc:
+        status = int(getattr(exc, "status_code", 0) or 0)
+        reason = http_status_reasons.get(status, "HTTP error") if status else "HTTP error"
+        summary = f"websocket {status or 'rejected'} {reason}"
+        trace_event("proxy_probe_once_result", proxy_url=display_url, ready=False, status=summary)
+        return False, summary
+    except Exception as exc:
         summary = _summarize_request_error(exc)
         trace_event("proxy_probe_once_error", proxy_url=display_url, error=summary)
         return False, summary
+    finally:
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:
+                pass
 
 
 def wait_for_rtunnel_reachable(
@@ -176,7 +246,6 @@ def wait_for_rtunnel_reachable(
     last_status = None
     last_progress_time = start
     attempt = 0
-    consecutive_404 = 0
     while time.time() - start < timeout_s:
         attempt += 1
         elapsed = time.time() - start
@@ -184,24 +253,18 @@ def wait_for_rtunnel_reachable(
             _log.info("  Waiting for rtunnel... (%ds elapsed)", int(elapsed))
             last_progress_time = time.time()
         try:
-            resp = context.request.get(proxy_url, timeout=5000)
-            try:
-                body = resp.text()
-            except (PlaywrightError, AttributeError, RuntimeError, TypeError, ValueError):
-                body = ""
-            last_status = _redact_token_like_text(f"{resp.status} {body[:200].strip()}")
+            ready, last_status = probe_rtunnel_proxy_once(
+                proxy_url=proxy_url,
+                context=context,
+                request_timeout_ms=5000,
+            )
             if attempt <= 3:
                 _log.debug("  Attempt %d: %s", attempt, last_status)
             if attempt <= 5:
                 trace_event("proxy_poll_attempt", attempt=attempt, status=last_status)
-            if _is_rtunnel_proxy_ready(status=resp.status, body=body):
+            if ready:
                 trace_event("proxy_poll_ready", attempt=attempt, status=last_status)
                 return
-            text = (body or "").strip().lower()
-            if resp.status == 404 and "page not found" in text and "<html" not in text:
-                consecutive_404 += 1
-            else:
-                consecutive_404 = 0
         except (
             PlaywrightError,
             ConnectionError,
@@ -216,17 +279,17 @@ def wait_for_rtunnel_reachable(
             if attempt <= 5:
                 trace_event("proxy_poll_attempt_error", attempt=attempt, error=last_status)
 
-        if consecutive_404 >= 3 and (time.time() - start) >= 2:
+        if last_status and "websocket 403 " in last_status.lower():
             trace_event(
-                "proxy_poll_plain_text_404",
-                consecutive_404=consecutive_404,
+                "proxy_poll_platform_denied",
                 elapsed=int(time.time() - start),
             )
             raise ValueError(
-                f"rtunnel server returned plain-text 404 on {consecutive_404} "
-                f"consecutive attempts ({int(time.time() - start)}s elapsed).\n"
+                "Notebook ingress denied the rtunnel WebSocket upgrade (HTTP 403).\n"
                 f"Proxy URL: {display_url}\n"
-                f"Last response: {last_status}"
+                f"Last response: {last_status}\n"
+                "The SSH server inside the notebook may still be healthy; interactive SSH "
+                "requires the platform proxy policy to allow this route."
             )
 
         elapsed = time.time() - start
@@ -250,7 +313,7 @@ def wait_for_rtunnel_reachable(
         "  3. Check if sshd/dropbear is running: ps aux | grep -E 'sshd|dropbear'\n"
         "  4. Check dropbear log: cat /tmp/dropbear.log\n"
         "  5. Try running with --debug-playwright to see the browser\n"
-        "  6. Screenshot saved to /tmp/notebook_terminal_debug.png"
+        "  6. If captured, the screenshot path is shown as screenshot_path in the RTunnel trace summary"
     )
     trace_event("proxy_poll_timeout", timeout_s=timeout_s, last_status=last_status)
     raise ValueError(error_msg)

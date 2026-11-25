@@ -7,7 +7,7 @@ import subprocess
 from typing import Optional
 
 from .models import BridgeProfile
-from .ssh_exec import _resolve_bridge_and_proxy
+from .ssh_helpers import resolve_bridge_and_proxy as _resolve_bridge_and_proxy
 
 logger = logging.getLogger(__name__)
 

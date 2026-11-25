@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shlex
@@ -9,6 +10,7 @@ from typing import Optional
 
 from inspire.config.models import ConfigError
 
+_log = logging.getLogger("inspire.config.env")
 
 _VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ENV_REF_RE = re.compile(
@@ -63,6 +65,12 @@ def resolve_remote_env(env_dict: dict[str, str]) -> dict[str, str]:
                     f"remote_env[{key}] is empty but {env_var} is not set in the local environment"
                 )
             value = os.environ[env_var]
+            _log.debug(
+                "$%s expanded from LOCAL os.environ. "
+                "Set [remote_env].%s in config.toml to avoid implicit local dependencies.",
+                env_var,
+                key,
+            )
         else:
             match = _ENV_REF_RE.match(value)
             if match is not None:
@@ -72,6 +80,13 @@ def resolve_remote_env(env_dict: dict[str, str]) -> dict[str, str]:
                         f"remote_env[{key}] references {env_var} but it is not set in the local environment"
                     )
                 value = os.environ[env_var]
+                _log.debug(
+                    "$%s expanded from LOCAL os.environ for remote_env[%s]. "
+                    "Set [remote_env].%s in config.toml to avoid implicit local dependencies.",
+                    env_var,
+                    key,
+                    key,
+                )
 
         resolved[key] = value
 

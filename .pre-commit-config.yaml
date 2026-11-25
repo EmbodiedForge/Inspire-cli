@@ -1,10 +1,61 @@
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.9.0
+  - repo: local
+    hooks:
+      - id: secret-literal-check
+        name: Check for hardcoded API keys and tokens
+        entry: python scripts/check_secrets.py
+        language: python
+        types: [text]
+      # Releases are derived from commit messages, and this repo is pushed to
+      # main directly rather than only through PRs, so the Conventional Commits
+      # shape has to be gated at commit time. A message outside the pattern
+      # contributes nothing to a version - that is how 316 commits went
+      # unreleased. Exceptional escape hatch: git commit --no-verify (that
+      # commit then releases nothing), or GIT_MERGE_VERBOSITY merges via
+      # --no-verify since "Merge branch ..." is not a conventional message.
+      - id: conventional-commit-msg
+        name: Commit message follows Conventional Commits
+        entry: uvx --from commitizen==4.19.0 cz check --commit-msg-file
+        language: system
+        require_serial: true
+        stages: [commit-msg]
+      # Forgejo/Gitea skip an entire push when any pushed commit message contains
+      # a skip-CI marker, matching over the body too - so prose like "the release
+      # commit carries [skip ci]" silently disabled CI for two pushes to main.
+      # Only the automated release commit (chore(release):) may carry one.
+      - id: skip-ci-guard
+        name: Skip-CI markers only in release commits
+        entry: python scripts/check_skip_ci.py
+        language: python
+        require_serial: true
+        stages: [commit-msg]
+  # ruff and black run from the project lockfile on purpose. A hook-pinned rev is a second
+  # version source, and that is literally how "green locally, red in CI" gets manufactured:
+  # the hook and CI agreed with each other while the toolchain the developer actually
+  # linted, formatted and tested with (uv run, i.e. uv.lock) disagreed with both. --frozen
+  # so a hook can never rewrite uv.lock mid-commit; upgrading is a deliberate `uv lock`.
+  - repo: local
     hooks:
       - id: ruff
-        args: [--fix]
-  - repo: https://github.com/psf/black
-    rev: 25.1.0
-    hooks:
+        name: ruff (lockfile)
+        entry: uv run --frozen ruff check --fix
+        language: system
+        types: [python]
       - id: black
+        name: black (lockfile)
+        entry: uv run --frozen black
+        language: system
+        types: [python]
+  # Advisory documentation lint (https://github.com/scarletkc/seiso). Manual stage on
+  # purpose: 21 of 22 rules are `preview`, and a blocking gate on preview rules makes us
+  # edit prose to please the tool instead of to inform the reader. Run it with
+  # `pre-commit run seiso --all-files` (stable rules) or add `--hook-stage manual`
+  # plus `--args check --preview` to see the full picture.
+  - repo: local
+    hooks:
+      - id: seiso
+        name: seiso (documentation lint, advisory)
+        entry: uvx --from seiso==0.2.0 seiso check
+        language: system
+        pass_filenames: false
+        stages: [manual]

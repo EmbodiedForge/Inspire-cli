@@ -9,6 +9,7 @@ from typing import Any
 from inspire.config.models import SOURCE_DEFAULT
 
 _ACCOUNT_OVERRIDE_FIELDS = {
+    "auth_method",
     "base_url",
     "timeout",
     "max_retries",
@@ -26,6 +27,7 @@ _ACCOUNT_OVERRIDE_FIELDS = {
     "rtunnel_download_url",
     "apt_mirror_url",
     "rtunnel_upload_policy",
+    "host_key_dir",
 }
 
 _ACCOUNT_SECTION_KEY_MAP = {
@@ -49,6 +51,7 @@ _ACCOUNT_SECTION_KEY_MAP = {
         "rtunnel_download_url": "rtunnel_download_url",
         "apt_mirror_url": "apt_mirror_url",
         "rtunnel_upload_policy": "rtunnel_upload_policy",
+        "host_key_dir": "host_key_dir",
     },
 }
 
@@ -60,9 +63,9 @@ _DEFAULTS_FIELD_MAP = {
     "notebook_image": "notebook_image",
     "notebook_resource": "notebook_resource",
     "notebook_post_start": "notebook_post_start",
+    "notebook_post_start_mode": "notebook_post_start_mode",
     "shm_size": "shm_size",
     "target_dir": "target_dir",
-    "log_pattern": "log_pattern",
     "project_order": "project_order",
 }
 
@@ -72,12 +75,7 @@ _LEGACY_FIELD_MAP = {
     ("paths", "target_dir"): ("defaults", "target_dir"),
 }
 
-_CONTEXT_WORKSPACE_FIELD_MAP = {
-    "workspace": "job_workspace_id",
-    "workspace_cpu": "workspace_cpu_id",
-    "workspace_gpu": "workspace_gpu_id",
-    "workspace_internet": "workspace_internet_id",
-}
+_CONTEXT_WORKSPACE_FIELD_MAP = {"workspace": "job_workspace_id"}
 
 
 @dataclass
@@ -88,6 +86,7 @@ class _ProjectLayerState:
     project_context: dict[str, Any]
     project_account_catalogs: dict[str, dict[str, Any]]
     project_accounts: dict[str, str]
+    project_profiles: dict[str, Any]
     prefer_source: str = "env"
 
 
@@ -97,10 +96,12 @@ def _default_config_values() -> dict[str, Any]:
     return {
         "username": "",
         "password": "",
+        "account_alias": None,
+        "password_command": None,
+        "api_key": None,
+        "auth_method": "http",
         "base_url": "https://api.example.com",
         "target_dir": None,
-        "log_pattern": "training_master_*.log",
-        "job_cache_path": "~/.inspire/jobs.json",
         "timeout": 30,
         "max_retries": 3,
         "retry_delay": 1.0,
@@ -138,17 +139,19 @@ def _default_config_values() -> dict[str, Any]:
         "default_image": None,
         "default_priority": None,
         "default_workspace_id": None,
-        "workspace_cpu_id": None,
-        "workspace_gpu_id": None,
-        "workspace_internet_id": None,
-        "workspaces": {},
+        "workspace_selectors": {},
+        "pool_internet": {},
         "projects": {},
+        "project_selectors": {},
         "project_catalog": {},
+        "project_order": [],
         "project_shared_path_groups": {},
         "project_workdirs": {},
         "account_shared_path_group": None,
         "account_train_job_workdir": None,
         "context_account": None,
+        "profiles": {},
+        "profile_sources": {},
         "notebook_resource": None,
         "notebook_image": None,
         "notebook_project_id": None,
@@ -156,6 +159,7 @@ def _default_config_values() -> dict[str, Any]:
         "notebook_workspace_id": None,
         "notebook_shm_size": None,
         "notebook_post_start": None,
+        "notebook_post_start_mode": None,
         "rtunnel_bin": None,
         "sshd_deb_dir": None,
         "dropbear_deb_dir": None,
@@ -163,11 +167,21 @@ def _default_config_values() -> dict[str, Any]:
         "rtunnel_download_url": DEFAULT_RTUNNEL_DOWNLOAD_URL,
         "apt_mirror_url": None,
         "rtunnel_upload_policy": "auto",
+        "host_key_dir": None,
         "tunnel_retries": 3,
         "tunnel_retry_pause": 2.0,
         "shm_size": None,
         "compute_groups": [],
+        "workspace_specs": {},
+        "workspace_names": {},
+        "discovery_state_status": None,
+        "discovery_state_path": None,
+        "discovery_state_updated_at": None,
         "remote_env": {},
+        "remote_runtime_cwd": None,
+        "remote_runtime_path_prepend": [],
+        "remote_runtime_venv": "auto",
+        "remote_runtime_env": {},
         "accounts": {},
     }
 
@@ -288,7 +302,7 @@ def _coerce_project_default(field_name: str, raw_value: Any) -> Any:
         "notebook_image",
         "notebook_resource",
         "notebook_post_start",
-        "log_pattern",
+        "notebook_post_start_mode",
     }:
         return str(raw_value)
     if field_name == "project_order":

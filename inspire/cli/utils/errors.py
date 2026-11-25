@@ -24,6 +24,7 @@ For multi-line output or success messages, use output.py directly:
 from __future__ import annotations
 
 import sys
+from typing import Any, NoReturn
 
 from inspire.cli.context import EXIT_GENERAL_ERROR, Context
 from inspire.cli.utils.output import (
@@ -38,6 +39,7 @@ def emit_error(
     exit_code: int = EXIT_GENERAL_ERROR,
     *,
     hint: str | None = None,
+    data: Any | None = None,
 ) -> int:
     """Emit a formatted error without exiting. Returns exit_code.
 
@@ -61,6 +63,7 @@ def emit_error(
         message=message,
         exit_code=exit_code,
         hint=hint,
+        data=data,
     )
     return exit_code
 
@@ -72,7 +75,8 @@ def exit_with_error(
     exit_code: int = EXIT_GENERAL_ERROR,
     *,
     hint: str | None = None,
-) -> None:
+    data: Any | None = None,
+) -> NoReturn:
     """Print a formatted error and exit with the given code.
 
     This is a convenience wrapper that calls emit_error() then sys.exit().
@@ -84,7 +88,14 @@ def exit_with_error(
         exit_code: Exit code to use
         hint: Optional hint
     """
-    emit_error(ctx, error_type, message, exit_code, hint=hint)
+    emit_error(
+        ctx,
+        error_type=error_type,
+        message=message,
+        exit_code=exit_code,
+        hint=hint,
+        data=data,
+    )
     sys.exit(exit_code)
 
 

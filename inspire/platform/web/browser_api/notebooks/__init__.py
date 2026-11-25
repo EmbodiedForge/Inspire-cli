@@ -8,8 +8,8 @@ from typing import Any, Optional
 
 from inspire.config import Config
 from inspire.platform.web.browser_api.core import _browser_api_path, _get_base_url, _request_json
+from inspire.platform.web.browser_api.errors import ensure_browser_api_success
 from inspire.platform.web.session import DEFAULT_WORKSPACE_ID, WebSession, get_web_session
-
 
 # ---------------------------------------------------------------------------
 # Models
@@ -86,8 +86,7 @@ def _request_notebooks_data(
         timeout=timeout,
     )
 
-    if data.get("code") != 0:
-        raise ValueError(f"API error: {data.get('message')}")
+    ensure_browser_api_success(data, action=f"Notebook request {endpoint_path}")
 
     return data.get("data", default_data)
 
@@ -174,19 +173,20 @@ def list_images(
 def get_notebook_schedule(
     workspace_id: Optional[str] = None,
     session: Optional[WebSession] = None,
+    *,
+    strict: bool = False,
 ) -> dict:
     """Get notebook schedule configuration including resource specs.
 
     Tries path-parameter format first (the format the UI uses), then falls
-    back to query-parameter format.  Returns an empty schedule when neither
-    endpoint is available.
+    back to query-parameter format. ``strict`` preserves a total lookup failure
+    for callers that must distinguish unavailable evidence from empty declarations.
     """
     session, workspace_id = _get_session_and_workspace_id(
         workspace_id=workspace_id, session=session
     )
 
-    # Try both endpoint formats — the UI uses path param, older deployments
-    # may use query param.
+    last_error: ValueError | None = None
     for endpoint in [
         f"/notebook/schedule/{workspace_id}",
         f"/notebook/schedule?workspace_id={workspace_id}",
@@ -199,16 +199,19 @@ def get_notebook_schedule(
                 timeout=30,
                 default_data={},
             )
-        except ValueError:
-            continue
+        except ValueError as exc:
+            last_error = exc
 
-    # Neither endpoint worked — return empty schedule.
+    if strict and last_error is not None:
+        raise last_error
     return {}
 
 
 def get_resource_prices(
     workspace_id: Optional[str] = None,
     logic_compute_group_id: str = "",
+    schedule_config_type: str = "SCHEDULE_CONFIG_TYPE_DSW",
+    strict: bool = False,
     session: Optional[WebSession] = None,
 ) -> list[dict]:
     """Fetch resource spec prices for a compute group.
@@ -223,7 +226,7 @@ def get_resource_prices(
 
     body = {
         "workspace_id": workspace_id,
-        "schedule_config_type": "SCHEDULE_CONFIG_TYPE_DSW",
+        "schedule_config_type": schedule_config_type,
         "logic_compute_group_id": logic_compute_group_id,
     }
 
@@ -237,6 +240,8 @@ def get_resource_prices(
             default_data=[],
         )
     except ValueError:
+        if strict:
+            raise
         return []
 
     if isinstance(data, list):
@@ -393,12 +398,18 @@ def create_notebook(
     session: Optional[WebSession] = None,
     task_priority: Optional[int] = None,
     resource_spec_price: Optional[dict] = None,
+    dataset_info: Optional[list[dict]] = None,
 ) -> dict:
     """Create a new notebook instance.
 
     The request body must match the exact structure the platform UI sends.
     Captured via Playwright network interception — the proto rejects unknown
     fields, so only send fields the backend expects.
+
+    ``dataset_info`` carries the dataset versions to mount, as
+    ``{"dataset_id": code, "version_id": version, "path": backend_path}``. The
+    proto is strict, so it is sent only when the caller resolved some: an empty
+    list is not the shape the UI ever sends for "no datasets".
     """
     session, workspace_id = _get_session_and_workspace_id(
         workspace_id=workspace_id, session=session
@@ -431,6 +442,9 @@ def create_notebook(
 
     if task_priority is not None:
         body["task_priority"] = task_priority
+
+    if dataset_info is not None:
+        body["dataset_info"] = dataset_info
 
     return _request_notebooks_data(
         session,
@@ -486,6 +500,22 @@ def start_notebook(
     )
 
 
+def delete_notebook(
+    notebook_id: str,
+    session: Optional[WebSession] = None,
+) -> dict:
+    """Delete a stopped notebook instance."""
+    session, _ = _get_session_and_workspace_id(workspace_id=None, session=session)
+
+    return _request_notebooks_data(
+        session,
+        "DELETE",
+        f"/notebook/{notebook_id}",
+        timeout=30,
+        default_data={},
+    )
+
+
 def get_notebook_detail(
     notebook_id: str,
     session: Optional[WebSession] = None,
@@ -502,12 +532,42 @@ def get_notebook_detail(
     )
 
 
+def update_notebook(
+    notebook_id: str,
+    payload: dict[str, Any],
+    session: Optional[WebSession] = None,
+) -> dict:
+    """Update a notebook using the platform's full-update payload."""
+    session, _ = _get_session_and_workspace_id(workspace_id=None, session=session)
+
+    return _request_notebooks_data(
+        session,
+        "PUT",
+        f"/notebook/{notebook_id}",
+        body=payload,
+        timeout=30,
+        default_data={},
+    )
+
+
+def get_notebook_launcher_url(notebook_id: str, *, kind: str = "lab") -> str:
+    """Return a sanitized platform launcher URL for a notebook."""
+    normalized_kind = kind.lower()
+    if normalized_kind in {"lab", "jupyter", "jupyterlab"}:
+        path = f"/notebook/lab/{notebook_id}/"
+    elif normalized_kind in {"code", "vscode"}:
+        path = f"/notebook/code/{notebook_id}/"
+    else:
+        raise ValueError("Notebook URL kind must be lab or code")
+    return f"{_get_base_url()}{_browser_api_path(path)}"
+
+
 # ---------------------------------------------------------------------------
 # Wait
 # ---------------------------------------------------------------------------
 
 
-def _try_fetch_events(notebook_id: str, session: WebSession) -> str:
+def get_notebook_events(notebook_id: str, session: WebSession) -> str:
     """Best-effort fetch of notebook events (K8s scheduling/allocation details)."""
     for path in [
         f"/notebook/{notebook_id}/events",
@@ -559,7 +619,7 @@ def wait_for_notebook_running(
             return notebook
 
         if status in _NOTEBOOK_TERMINAL_STATUSES:
-            events = _try_fetch_events(notebook_id, session)
+            events = get_notebook_events(notebook_id, session)
             raise NotebookFailedError(notebook_id, status, notebook, events=events)
 
         if time.time() - start >= timeout:
@@ -571,17 +631,60 @@ def wait_for_notebook_running(
         time.sleep(poll_interval)
 
 
+def wait_for_notebook_status(
+    notebook_id: str,
+    target_statuses: set[str],
+    session: Optional[WebSession] = None,
+    timeout: int = 600,
+    poll_interval: int = 5,
+) -> dict:
+    """Wait for a notebook instance to reach one of ``target_statuses``."""
+    if session is None:
+        session = get_web_session()
+
+    normalized_targets = {status.upper() for status in target_statuses}
+    start = time.time()
+    last_status = None
+
+    while True:
+        notebook = get_notebook_detail(notebook_id=notebook_id, session=session)
+        status = (notebook.get("status") or "").upper()
+        if status:
+            last_status = status
+
+        if status in normalized_targets:
+            return notebook
+
+        if status in {"FAILED", "ERROR"} and status not in normalized_targets:
+            events = get_notebook_events(notebook_id, session)
+            raise NotebookFailedError(notebook_id, status, notebook, events=events)
+
+        if time.time() - start >= timeout:
+            expected = ", ".join(sorted(normalized_targets))
+            raise TimeoutError(
+                f"Notebook '{notebook_id}' did not reach {expected} within {timeout}s "
+                f"(last status: {last_status or 'unknown'})"
+            )
+
+        time.sleep(poll_interval)
+
+
 __all__ = [
     "ImageInfo",
     "NotebookFailedError",
     "create_notebook",
+    "delete_notebook",
     "get_notebook_detail",
+    "get_notebook_events",
+    "get_notebook_launcher_url",
     "get_notebook_schedule",
     "get_resource_prices",
     "list_images",
     "list_notebook_compute_groups",
     "start_notebook",
     "stop_notebook",
+    "update_notebook",
     "wait_for_notebook_running",
+    "wait_for_notebook_status",
     "_config_compute_groups_fallback",
 ]

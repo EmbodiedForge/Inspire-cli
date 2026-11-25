@@ -13,7 +13,12 @@ except ImportError:  # pragma: no cover
         pass
 
 
-from .commands import SETUP_DONE_MARKER, SSHD_MISSING_MARKER, SSH_SERVER_MISSING_MARKER
+from .commands import (
+    SETUP_DONE_MARKER,
+    SSHD_MISSING_MARKER,
+    SSH_SERVER_MISSING_MARKER,
+    STEP_FAILED_PREFIX,
+)
 from ._jupyter import (
     _build_jupyter_xsrf_headers,
     _extract_jupyter_token,
@@ -141,7 +146,7 @@ def _send_terminal_command_via_websocket(
     try:
         result = page_or_frame.evaluate(
             """
-                async ({ wsUrl, stdinData, timeoutMs, promptTimeoutMs, marker, errorMarkers, chunkSize, chunkDelayMs }) => {
+                async ({ wsUrl, stdinData, timeoutMs, promptTimeoutMs, marker, errorMarkers, stepFailedPrefix, outputTailCap, chunkSize, chunkDelayMs }) => {
                   return await new Promise((resolve) => {
                     let settled = false;
                     let sent = false;
@@ -165,6 +170,7 @@ def _send_terminal_command_via_websocket(
                         diagnostics: {
                           wsConnected, promptDetected, commandSent: sent,
                           stdoutReceived, stdoutLen: afterSendBuf.length,
+                          stdoutTail: afterSendBuf.slice(-outputTailCap),
                           wsCloseCode, wsCloseReason,
                           elapsed: Date.now() - startTime
                         }
@@ -178,6 +184,12 @@ def _send_terminal_command_via_websocket(
                       for (const em of errorMarkers) {
                         if (em && afterSendBuf.includes(em) && !foundErrors.includes(em)) {
                           foundErrors.push(em);
+                        }
+                      }
+                      for (const line of afterSendBuf.split(/\\r?\\n/)) {
+                        const item = line.trim();
+                        if (stepFailedPrefix && item.startsWith(stepFailedPrefix) && !foundErrors.includes(item)) {
+                          foundErrors.push(item);
                         }
                       }
                     };
@@ -275,9 +287,11 @@ def _send_terminal_command_via_websocket(
                 "wsUrl": ws_url,
                 "stdinData": stdin_payload,
                 "timeoutMs": int(timeout_ms),
-                "promptTimeoutMs": min(int(timeout_ms) - 500, 3000),
+                "promptTimeoutMs": max(1000, min(int(timeout_ms) - 500, 3000)),
                 "marker": completion_marker or "",
                 "errorMarkers": error_markers or [],
+                "stepFailedPrefix": STEP_FAILED_PREFIX,
+                "outputTailCap": _TERMINAL_STDOUT_TAIL_CAP,
                 "chunkSize": int(_TERMINAL_STDIN_CHUNK),
                 "chunkDelayMs": int(_TERMINAL_STDIN_DELAY_MS),
             },
@@ -318,10 +332,14 @@ def _run_terminal_command_capture_via_websocket(
     timeout_ms: int,
     completion_marker: str,
 ) -> dict[str, Any]:
-    """Run a terminal command and capture bounded stdout until completion marker."""
+    """Run a terminal command and capture bounded stdout until completion marker.
+
+    Creates terminal via API first, then connects to it via WebSocket.
+    Tracks wsConnected and promptDetected for diagnostics.
+    """
     term_name = _create_terminal_via_api(context, lab_frame.url)
     if not term_name:
-        return {"ok": False, "output": ""}
+        return {"ok": False, "output": "", "diagnostics": {"wsConnected": False}}
 
     stdin_payload = batch_cmd.rstrip("\r\n") + "\r"
     try:
@@ -333,6 +351,8 @@ def _run_terminal_command_capture_via_websocket(
                     let settled = false;
                     let sent = false;
                     let socket = null;
+                    let wsConnected = false;
+                    let promptDetected = false;
                     let afterSendBuf = "";
                     const startTime = Date.now();
                     const finish = (ok) => {
@@ -344,7 +364,12 @@ def _run_terminal_command_capture_via_websocket(
                       resolve({
                         ok,
                         output: afterSendBuf,
-                        diagnostics: { elapsed: Date.now() - startTime }
+                        diagnostics: {
+                          elapsed: Date.now() - startTime,
+                          wsConnected,
+                          promptDetected,
+                          commandSent: sent,
+                        }
                       });
                     };
                     const timer = setTimeout(() => finish(false), timeoutMs);
@@ -369,6 +394,12 @@ def _run_terminal_command_capture_via_websocket(
                         idx++;
                         if (idx < chunks.length) {
                           setTimeout(next, DELAY);
+                        } else if (!marker) {
+                          // Command fully sent without marker — wait briefly for output
+                          setTimeout(() => {
+                            clearTimeout(timer);
+                            finish(true);
+                          }, 300);
                         }
                       };
                       next();
@@ -390,6 +421,7 @@ def _run_terminal_command_capture_via_websocket(
                           if (!sent) {
                             stdoutBuf += text;
                             if (promptRe.test(stdoutBuf)) {
+                              promptDetected = true;
                               doSend();
                             }
                           } else {
@@ -406,6 +438,8 @@ def _run_terminal_command_capture_via_websocket(
                       } catch (_) {}
                     });
                     socket.addEventListener("open", () => {
+                      wsConnected = true;
+                      // Fall back after promptTimeoutMs in case shell never emits a prompt
                       setTimeout(() => doSend(), promptTimeoutMs);
                     });
                     socket.addEventListener("error", () => {
@@ -425,7 +459,7 @@ def _run_terminal_command_capture_via_websocket(
                 "wsUrl": ws_url,
                 "stdinData": stdin_payload,
                 "timeoutMs": int(timeout_ms),
-                "promptTimeoutMs": min(int(timeout_ms) - 500, 3000),
+                "promptTimeoutMs": max(1000, min(int(timeout_ms) - 500, 3000)),
                 "marker": completion_marker,
                 "outputCap": 20000,
                 "chunkSize": int(_TERMINAL_STDIN_CHUNK),
@@ -433,10 +467,18 @@ def _run_terminal_command_capture_via_websocket(
             },
         )
         trace_event("terminal_ws_capture_command_result", ok=bool(result.get("ok")))
+        diag = result.get("diagnostics", {})
+        trace_event(
+            "terminal_ws_capture_diagnostics",
+            wsConnected=diag.get("wsConnected"),
+            promptDetected=diag.get("promptDetected"),
+            commandSent=diag.get("commandSent"),
+            elapsed=diag.get("elapsed"),
+        )
         return result if isinstance(result, dict) else {"ok": False, "output": ""}
     except (PlaywrightError, AttributeError, RuntimeError, TypeError, ValueError) as exc:
         trace_event("terminal_ws_capture_command_exception", error=exc)
-        return {"ok": False, "output": ""}
+        return {"ok": False, "output": "", "diagnostics": {"wsConnected": False}}
     finally:
         _delete_terminal_via_api(context, lab_url=lab_frame.url, term_name=term_name)
 
@@ -469,6 +511,16 @@ def _send_setup_command_via_terminal_ws(
         _delete_terminal_via_api(context, lab_url=lab_frame.url, term_name=term_name)
 
 
+_REMOTE_BASH_RESOLVER = (
+    "$(if [ -x /bin/bash ]; then printf %s /bin/bash; "
+    "else command -v bash 2>/dev/null || printf %s bash; fi)"
+)
+_REMOTE_BASE64_RESOLVER = (
+    "$(if [ -x /usr/bin/base64 ]; then printf %s /usr/bin/base64; "
+    "else command -v base64 2>/dev/null || printf %s base64; fi)"
+)
+
+
 def _build_batch_setup_script(cmd_lines: list[str]) -> str:
     """Encode setup commands as a heredoc-wrapped base64 bash payload."""
     import base64
@@ -477,7 +529,10 @@ def _build_batch_setup_script(cmd_lines: list[str]) -> str:
     encoded = base64.b64encode(script.encode()).decode()
     wrapped = "\n".join(encoded[idx : idx + 160] for idx in range(0, len(encoded), 160))
     marker = "__INSPIRE_RTUNNEL_B64__"
-    return f"cat <<'{marker}' | base64 -d | bash\n{wrapped}\n{marker}"
+    return (
+        f"{_REMOTE_BASE64_RESOLVER} -d <<'{marker}' | "
+        f"{_REMOTE_BASH_RESOLVER}\n{wrapped}\n{marker}"
+    )
 
 
 _TERMINAL_TAB_SELECTOR = "li.lm-TabBar-tab:has-text('Terminal'), li.lm-TabBar-tab:has-text('终端')"
@@ -505,6 +560,11 @@ _FOCUS_TEXTAREA_ATTACH_TIMEOUT_MS = 3000
 _FOCUS_RETRY_PASSES = 4
 _TERMINAL_STDIN_CHUNK = 512
 _TERMINAL_STDIN_DELAY_MS = 20
+_TERMINAL_STDOUT_TAIL_CAP = 6000
+
+
+# DEPRECATED: Playwright DOM helpers — kept for backward compatibility with
+# auth_method="playwright" fallback paths. These are not used by the HTTP path.
 
 
 def _wait_for_terminal_surface(
@@ -525,6 +585,9 @@ def _wait_for_terminal_surface(
         except (PlaywrightError, RuntimeError, AttributeError, TypeError, ValueError):
             pass
     return False
+
+
+# DEPRECATED: Playwright DOM helper
 
 
 def _wait_for_terminal_surface_progressive(
@@ -566,6 +629,9 @@ def _wait_for_terminal_surface_progressive(
         page.wait_for_timeout(max(40, min(poll_ms, remaining_ms)))
 
 
+# DEPRECATED: Playwright DOM helper
+
+
 def _wait_for_file_menu_ready(
     lab_frame: Any,
     *,
@@ -582,6 +648,9 @@ def _wait_for_file_menu_ready(
         except (PlaywrightError, TimeoutError, RuntimeError, AttributeError, ValueError):
             pass
     return False
+
+
+# DEPRECATED: Playwright DOM helper
 
 
 def _click_terminal_tab(
@@ -601,6 +670,9 @@ def _click_terminal_tab(
         return True
     except (PlaywrightError, TimeoutError, RuntimeError, AttributeError, ValueError, TypeError):
         return False
+
+
+# DEPRECATED: Playwright DOM helper
 
 
 def _open_terminal_from_file_menu(
@@ -624,6 +696,9 @@ def _open_terminal_from_file_menu(
     return False
 
 
+# DEPRECATED: Playwright DOM helper
+
+
 def _verify_terminal_focus(lab_frame: Any) -> bool:
     """Check that document.activeElement is the xterm textarea."""
     try:
@@ -632,6 +707,9 @@ def _verify_terminal_focus(lab_frame: Any) -> bool:
         return tag == "textarea" and "xterm" in cls
     except (PlaywrightError, TimeoutError, RuntimeError, AttributeError, ValueError, TypeError):
         return False
+
+
+# DEPRECATED: Playwright DOM helper
 
 
 def _focus_terminal_input(
@@ -704,6 +782,7 @@ def _log_ws_diagnostics(diag: dict) -> None:
         f"commandSent={diag.get('commandSent')}",
         f"stdoutReceived={diag.get('stdoutReceived')}",
         f"stdoutLen={diag.get('stdoutLen', 0)}",
+        f"stdoutTailLen={len(str(diag.get('stdoutTail') or ''))}",
         f"wsCloseCode={diag.get('wsCloseCode')}",
         f"wsCloseReason={diag.get('wsCloseReason', '')!r}",
         f"elapsed={diag.get('elapsed', 0)}ms",
@@ -766,6 +845,9 @@ def _open_terminal_via_rest_api(
     return _wait_for_api_terminal_surface(lab_frame, page), True, term_name
 
 
+# DEPRECATED: Playwright DOM helper
+
+
 def _recover_api_terminal_surface(
     *,
     lab_frame: Any,
@@ -816,6 +898,9 @@ def _wait_for_terminal_entry_point(
         _wait_for_file_menu_ready(lab_frame, timeout_ms=45000)
 
 
+# DEPRECATED: Playwright DOM helper
+
+
 def _dismiss_terminal_dialog_once(
     *,
     lab_frame: Any,
@@ -849,6 +934,9 @@ def _dismiss_terminal_dialog_once(
     return False
 
 
+# DEPRECATED: Playwright DOM helper
+
+
 def _open_terminal_card(
     *,
     lab_frame: Any,
@@ -863,6 +951,9 @@ def _open_terminal_card(
         return True
     except (PlaywrightError, TimeoutError, RuntimeError, AttributeError, ValueError):
         return False
+
+
+# DEPRECATED: Playwright DOM helper
 
 
 def _open_terminal_card_from_launcher(
@@ -882,6 +973,9 @@ def _open_terminal_card_from_launcher(
         return False
 
     return _open_terminal_card(lab_frame=lab_frame, api_term_created=api_term_created)
+
+
+# DEPRECATED: Playwright DOM helper
 
 
 def _open_terminal_via_dom_fallback(
@@ -912,6 +1006,9 @@ def _open_terminal_via_dom_fallback(
         return True
 
     return api_term_created and _wait_for_terminal_surface(lab_frame, timeout_ms=1200)
+
+
+# DEPRECATED: Playwright DOM helper
 
 
 def _open_or_create_terminal(
@@ -975,24 +1072,27 @@ def _attach_ws_output_listener(
 
     Sets up ``window._inspireWsCapture`` (state dict) and
     ``window._inspireWsCaptureSocket`` (WebSocket ref) on the target frame.
-    The internal stdout buffer is used for marker matching only — it is never
-    exposed to Python to avoid leaking sensitive setup output (e.g. SSH keys).
+    The stdout buffer is capped and returned as ``stdoutTail`` so callers can
+    show the remote setup failure that actually appeared in the terminal.
 
     Returns ``True`` if the JS setup succeeded.
     """
     try:
         result = page_or_frame.evaluate(
             """
-            ({ wsUrl, completionMarker, errorMarkers, bufCap }) => {
+            ({ wsUrl, completionMarker, errorMarkers, stepFailedPrefix, markerPlaceholder, markerLineCap, bufCap }) => {
               try {
                 window._inspireWsCapture = {
                   done: false, errors: [], markerFound: false,
                   wsConnected: false, stdoutReceived: false, stdoutLen: 0,
+                  stdoutTail: "",
                   wsCloseCode: null, wsCloseReason: "", elapsed: 0
                 };
                 const state = window._inspireWsCapture;
                 const startTime = Date.now();
                 let buf = "";
+                let tailLineBuf = "";
+                let markerLineBuf = "";
 
                 const socket = new WebSocket(wsUrl);
                 window._inspireWsCaptureSocket = socket;
@@ -1007,26 +1107,67 @@ def _attach_ws_output_listener(
                   state.wsConnected = true;
                 });
 
+                const pushError = (item) => {
+                  if (item && !state.errors.includes(item)) {
+                    state.errors.push(item);
+                  }
+                };
+
+                const scanRawText = (text) => {
+                  for (const em of errorMarkers) {
+                    if (em && text.includes(em)) pushError(em);
+                  }
+                  const combined = markerLineBuf + text;
+                  const parts = combined.split("\\n");
+                  const complete = combined.endsWith("\\n") ? parts.slice(0, -1) : parts.slice(0, -1);
+                  markerLineBuf = combined.endsWith("\\n") ? "" : parts[parts.length - 1];
+                  for (const line of complete) {
+                    const item = line.trim();
+                    if (stepFailedPrefix && item.startsWith(stepFailedPrefix)) pushError(item);
+                  }
+                  if (markerLineBuf.length > markerLineCap) {
+                    markerLineBuf = markerLineBuf.trim().startsWith(stepFailedPrefix)
+                      ? markerLineBuf.slice(0, markerLineCap)
+                      : markerLineBuf.slice(-markerLineCap);
+                  }
+                };
+
+                const appendTailText = (text) => {
+                  const combined = tailLineBuf + text;
+                  const parts = combined.split("\\n");
+                  const complete = combined.endsWith("\\n") ? parts.slice(0, -1) : parts.slice(0, -1);
+                  tailLineBuf = combined.endsWith("\\n") ? "" : parts[parts.length - 1];
+                  for (const line of complete) {
+                    buf += (line.trim().startsWith(stepFailedPrefix) ? markerPlaceholder : line) + "\\n";
+                    if (buf.length > bufCap) buf = buf.slice(-bufCap);
+                  }
+                  if (tailLineBuf.length > markerLineCap) {
+                    tailLineBuf = tailLineBuf.trim().startsWith(stepFailedPrefix)
+                      ? tailLineBuf.slice(0, markerLineCap)
+                      : tailLineBuf.slice(-markerLineCap);
+                  }
+                  const suffix = tailLineBuf.trim().startsWith(stepFailedPrefix)
+                    ? markerPlaceholder
+                    : tailLineBuf;
+                  let displayBuf = buf + suffix;
+                  if (displayBuf.length > bufCap) displayBuf = displayBuf.slice(-bufCap);
+                  state.stdoutLen = displayBuf.length;
+                  state.stdoutTail = displayBuf;
+                };
+
                 socket.addEventListener("message", (ev) => {
                   try {
                     const msg = JSON.parse(ev.data);
                     if (Array.isArray(msg) && msg[0] === "stdout") {
                       const text = String(msg[1]);
                       state.stdoutReceived = true;
-                      buf += text;
-                      if (buf.length > bufCap) buf = buf.slice(-bufCap);
-                      state.stdoutLen = buf.length;
-
-                      for (const em of errorMarkers) {
-                        if (em && buf.includes(em) && !state.errors.includes(em)) {
-                          state.errors.push(em);
-                        }
-                      }
+                      scanRawText(text);
+                      appendTailText(text);
                       if (state.errors.length > 0) {
                         finish();
                         return;
                       }
-                      if (completionMarker && buf.includes(completionMarker)) {
+                      if (completionMarker && (text.includes(completionMarker) || state.stdoutTail.includes(completionMarker))) {
                         state.markerFound = true;
                         finish();
                       }
@@ -1054,6 +1195,9 @@ def _attach_ws_output_listener(
                 "wsUrl": ws_url,
                 "completionMarker": completion_marker,
                 "errorMarkers": error_markers,
+                "stepFailedPrefix": STEP_FAILED_PREFIX,
+                "markerPlaceholder": f"{STEP_FAILED_PREFIX}<omitted>",
+                "markerLineCap": 262144,
                 "bufCap": _WS_CAPTURE_BUF_CAP,
             },
         )
@@ -1083,6 +1227,7 @@ def _poll_ws_capture(page_or_frame: Any) -> dict:
         "wsConnected": False,
         "stdoutReceived": False,
         "stdoutLen": 0,
+        "stdoutTail": "",
         "wsCloseCode": None,
         "wsCloseReason": "",
         "elapsed": 0,

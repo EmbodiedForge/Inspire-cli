@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import sys
+
 import click
 
 from inspire.bridge.tunnel import get_tunnel_status
-from inspire.cli.context import Context, pass_context
+from inspire.cli.context import EXIT_GENERAL_ERROR, Context, pass_context
 from inspire.cli.formatters import json_formatter
 from inspire.cli.utils.common import json_option
 from inspire.cli.utils.notebook_cli import resolve_json_output
@@ -18,7 +20,6 @@ from inspire.platform.web.browser_api.rtunnel import redact_proxy_url
 @json_option
 @pass_context
 def tunnel_status(ctx: Context, bridge: str, json_output: bool = False) -> None:
-    json_output = resolve_json_output(ctx, json_output)
     """Check tunnel configuration and SSH connectivity.
 
     \b
@@ -26,9 +27,32 @@ def tunnel_status(ctx: Context, bridge: str, json_output: bool = False) -> None:
         inspire tunnel status          # Show all bridges
         inspire tunnel status -b mybridge
     """
+
+    json_output = resolve_json_output(ctx, json_output)
     status = get_tunnel_status(bridge_name=bridge)
+    if status.get("proxy_url"):
+        status["proxy_url"] = redact_proxy_url(status["proxy_url"])
 
     if ctx.json_output:
+        if bridge or status["bridge_name"]:
+            if not status["configured"]:
+                emit_error(
+                    ctx,
+                    error_type="NotFound",
+                    message="Bridge not found",
+                    exit_code=EXIT_GENERAL_ERROR,
+                    data=status,
+                )
+                sys.exit(EXIT_GENERAL_ERROR)
+            if not status["ssh_works"]:
+                emit_error(
+                    ctx,
+                    error_type="TunnelError",
+                    message=status["error"] or "SSH connection failed",
+                    exit_code=EXIT_GENERAL_ERROR,
+                    data=status,
+                )
+                sys.exit(EXIT_GENERAL_ERROR)
         click.echo(json_formatter.format_json(status))
         return
 
@@ -73,6 +97,8 @@ def tunnel_status(ctx: Context, bridge: str, json_output: bool = False) -> None:
 
         if status["error"] and status["configured"]:
             emit_error(ctx, error_type="TunnelError", message=status["error"], exit_code=1)
+        if not status["configured"] or not status["ssh_works"]:
+            sys.exit(EXIT_GENERAL_ERROR)
         return
 
     if not status["bridges"]:

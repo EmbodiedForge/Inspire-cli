@@ -4,7 +4,49 @@ from __future__ import annotations
 
 import platform
 
-RTUNNEL_RELEASE_BASE_URL = "https://github.com/Sarfflow/rtunnel/releases/download/nightly"
+# Pinned upstream release. This used to point at the release literally tagged ``nightly``,
+# which turned out to be the worst of both worlds: the name floats, so nothing is
+# reproducible, while the artefacts had not been rebuilt since 2025-12-05 - months older
+# than the v1.1.0 tag we now use. A tag is immutable, so a pinned checksum can mean
+# something, and upgrading is a deliberate one-line change reviewed like any other change.
+RTUNNEL_RELEASE_VERSION = "v1.1.0"
+RTUNNEL_RELEASE_BASE_URL = (
+    f"https://github.com/Sarfflow/rtunnel/releases/download/{RTUNNEL_RELEASE_VERSION}"
+)
+
+# sha256 of each release archive, taken from the artefacts published with the tag above and
+# cross-checked against .forgejo/ci-scripts/rtunnel-baseline.txt (a test asserts the two agree,
+# so the reviewed baseline and the runtime pin cannot drift). The CLI execs this binary to
+# carry credentials through the tunnel, so downloading it without verification would let a
+# broken or substituted artefact run with our Jupyter token.
+RTUNNEL_ARTIFACT_SHA256: dict[str, str] = {
+    "linux-amd64": "5c5f5bd6e61f4a5880ae875296bd45294e6f5a2e502946c0d740bfdd906c953d",
+    "linux-arm64": "e5547b807e40f889cd38541e93c3108438d0f37f8b488ff0b14579924743ec5c",
+    "darwin-amd64": "21eb6218612ef887811a62cb7a2f64dc0886558da80e91087f0cc44f0ff08248",
+    "darwin-arm64": "3403264ec5ad9387aba9fb3bdbe77d46c6f286cab324077914d963170978be14",
+}
+
+
+def rtunnel_artifact_name(os_name: str, arch: str) -> str:
+    """Release archive name for a normalized ``(_normalize_os, _normalize_arch)`` pair."""
+    return f"rtunnel-{os_name}-{arch}.tar.gz"
+
+
+def expected_rtunnel_sha256(url: str) -> str | None:
+    """Return the pinned checksum for *url*, or ``None`` when it is not one we pin.
+
+    ``None`` means "we have no reviewed digest for this source", which callers treat as
+    skip-with-note rather than reject: ``rtunnel_download_url`` exists so people on mirrors
+    and on machines we do not publish for can still connect. It is not a silent opt-out -
+    ``config check`` reports that key whenever it comes from the environment.
+    """
+    if not url.startswith(RTUNNEL_RELEASE_BASE_URL + "/"):
+        return None
+    name = url.rsplit("/", 1)[-1]
+    for key, digest in RTUNNEL_ARTIFACT_SHA256.items():
+        if name == rtunnel_artifact_name(*key.split("-", 1)):
+            return digest
+    return None
 
 
 def _normalize_arch(machine: str) -> str:
@@ -58,7 +100,7 @@ def default_rtunnel_download_url() -> str:
     """
     os_name = _normalize_os(platform.system())
     arch = _normalize_arch(platform.machine())
-    return f"{RTUNNEL_RELEASE_BASE_URL}/rtunnel-{os_name}-{arch}.tar.gz"
+    return f"{RTUNNEL_RELEASE_BASE_URL}/{rtunnel_artifact_name(os_name, arch)}"
 
 
 def _fallback_rtunnel_download_url() -> str:
@@ -72,7 +114,7 @@ def _fallback_rtunnel_download_url() -> str:
         arch = _normalize_arch(platform.machine())
     except ValueError:
         arch = "amd64"
-    return f"{RTUNNEL_RELEASE_BASE_URL}/rtunnel-linux-{arch}.tar.gz"
+    return f"{RTUNNEL_RELEASE_BASE_URL}/{rtunnel_artifact_name('linux', arch)}"
 
 
 #: Cached result of ``default_rtunnel_download_url()`` for the current platform.
@@ -102,7 +144,11 @@ def rtunnel_download_url_shell_snippet() -> str:
 
 __all__ = [
     "DEFAULT_RTUNNEL_DOWNLOAD_URL",
+    "RTUNNEL_ARTIFACT_SHA256",
     "RTUNNEL_RELEASE_BASE_URL",
+    "RTUNNEL_RELEASE_VERSION",
     "default_rtunnel_download_url",
+    "expected_rtunnel_sha256",
+    "rtunnel_artifact_name",
     "rtunnel_download_url_shell_snippet",
 ]

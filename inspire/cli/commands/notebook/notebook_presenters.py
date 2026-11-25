@@ -7,7 +7,14 @@ from typing import TYPE_CHECKING
 import click
 
 from inspire.cli.formatters import json_formatter
-from .notebook_lookup import _format_notebook_resource
+from inspire.cli.utils.timestamps import format_timestamp_utc
+from .notebook_lookup import (
+    _GPU_TYPE_BY_RAM_GB,
+    _NOTEBOOK_UUID_RE,
+    _format_notebook_resource,
+    _notebook_id_from_item,
+    _normalize_notebook_id,
+)
 
 if TYPE_CHECKING:
     pass
@@ -25,11 +32,17 @@ COLUMN_SPECS = {
     "memory": ("Memory", 10),
     "image": ("Image", 25),
     "project": ("Project", 20),
+    "priority": ("Priority", 20),
     "workspace": ("Workspace", 15),
     "node": ("Node", 15),
     "uptime": ("Uptime", 10),
     "tunnel": ("Tunnel", 15),
 }
+
+#: The one default column set for the human `notebook list` table. The click option in
+#: ``notebook_commands.list_notebooks`` and the presenter's own fallback both read this
+#: constant, so the two defaults cannot drift apart again.
+DEFAULT_NOTEBOOK_LIST_COLUMNS = "name,status,resource,id"
 
 
 def _format_uptime(item: dict) -> str:
@@ -54,11 +67,23 @@ def _format_memory(item: dict) -> str:
     return f"{memory}GiB" if memory else "N/A"
 
 
-def _normalize_notebook_id(notebook_id: str) -> str:
-    """Normalize notebook ID to UUID format (without notebook- prefix)."""
-    if notebook_id.startswith("notebook-"):
-        return notebook_id[len("notebook-") :]
-    return notebook_id
+def _format_priority(item: dict) -> str:
+    """Render notebook priority with an explicit LOW/preemptible marker."""
+    project = item.get("project") or {}
+    priority = project.get("priority_name") or item.get("task_priority")
+    if not priority:
+        return "-"
+    display = str(priority)
+    priority_level = str(project.get("priority_level") or "").strip()
+    if priority_level:
+        display = f"{display} ({priority_level})"
+    else:
+        try:
+            if int(priority) <= 3:
+                display = f"{display} (LOW, preemptible)"
+        except (TypeError, ValueError):
+            pass
+    return display
 
 
 def _get_tunnel_name(item: dict, tunnel_config) -> str:
@@ -73,6 +98,34 @@ def _get_tunnel_name(item: dict, tunnel_config) -> str:
     return "-"
 
 
+def _public_notebook_list_item(item: dict) -> dict:
+    """Shape one platform list row for CLI output.
+
+    The platform row carries a numeric primary key in ``id`` and the usable reference in
+    ``notebook_id``. Output keeps the platform's ``notebook_id`` untouched, moves the
+    primary key to ``internal_id``, and makes ``id`` the bare notebook UUID so a caller
+    can feed it straight back into ``notebook status``/``stop``/... Rows whose reference
+    is not a UUID (test doubles, unknown shapes) pass through unchanged.
+    """
+    result = dict(item)
+    reference = _notebook_id_from_item(item)
+    normalized = _normalize_notebook_id(reference) if reference else ""
+    if normalized and _NOTEBOOK_UUID_RE.match(normalized):
+        raw_id = item.get("id")
+        if raw_id is not None and str(raw_id) != normalized:
+            result["internal_id"] = raw_id
+        result["id"] = normalized
+    if "created_at" in result:
+        # One UTC ISO 8601 spelling; the .NET empty-date sentinel and non-positive epochs
+        # are "never set" and become null.
+        result["created_at"] = format_timestamp_utc(result.get("created_at"))
+    return result
+
+
+def _public_notebook_list_items(items: list) -> list:
+    return [_public_notebook_list_item(item) for item in items]
+
+
 def _format_column(item: dict, col: str, tunnel_config=None) -> str:
     """Format a single column value."""
     if col == "name":
@@ -84,7 +137,9 @@ def _format_column(item: dict, col: str, tunnel_config=None) -> str:
     elif col == "id":
         return item.get("notebook_id") or item.get("id", "N/A")
     elif col == "created":
-        return str(item.get("created_at", "N/A"))
+        # Unset sentinels (.NET empty date, non-positive epoch) render as Unknown, not
+        # as 0001-01-01 or 1970-01-01.
+        return format_timestamp_utc(item.get("created_at")) or "Unknown"
     elif col == "gpu":
         quota = item.get("quota") or {}
         return str(quota.get("gpu_count", 0))
@@ -100,6 +155,8 @@ def _format_column(item: dict, col: str, tunnel_config=None) -> str:
         return f"{name}:{version}" if name and version else name or "N/A"
     elif col == "project":
         return item.get("project", {}).get("name") or item.get("project_name", "N/A")
+    elif col == "priority":
+        return _format_priority(item)
     elif col == "workspace":
         return item.get("workspace", {}).get("name", "N/A")
     elif col == "node":
@@ -131,8 +188,13 @@ def _print_notebook_detail(notebook: dict) -> None:
     if isinstance(node_gpu_info, dict):
         gpu_type = node_gpu_info.get("gpu_product_simple", "")
     if not gpu_type:
-        spec = notebook.get("resource_spec") or {}
-        gpu_type = spec.get("gpu_type", "")
+        spec = notebook.get("resource_spec_price") or {}
+        gpu_info = spec.get("gpu_info") or {}
+        gpu_type = gpu_info.get("gpu_product_simple", "")
+    if not gpu_type:
+        gpu_type = quota.get("gpu_type") or _GPU_TYPE_BY_RAM_GB.get(
+            int(quota.get("gpu_ram") or 0), ""
+        )
 
     gpu_count = quota.get("gpu_count", 0)
     gpu_str = f"{gpu_count}x {gpu_type}" if gpu_type and gpu_count else str(gpu_count or "N/A")
@@ -159,7 +221,7 @@ def _print_notebook_detail(notebook: dict) -> None:
         ("ID", notebook.get("notebook_id") or notebook.get("id")),
         ("Status", notebook.get("status")),
         ("Project", project.get("name") or notebook.get("project_name")),
-        ("Priority", project.get("priority_name")),
+        ("Priority", _format_priority(notebook)),
         ("Compute Group", compute_group.get("name")),
         ("Image", img_str),
         ("GPU", gpu_str),
@@ -170,7 +232,7 @@ def _print_notebook_detail(notebook: dict) -> None:
         ("Host IP", extra.get("HostIP") or None),
         ("Uptime", uptime or None),
         ("Workspace", workspace.get("name")),
-        ("Created", notebook.get("created_at")),
+        ("Created", format_timestamp_utc(notebook.get("created_at")) or "Unknown"),
     ]
 
     for label, value in fields:
@@ -183,7 +245,7 @@ def _print_notebook_detail(notebook: dict) -> None:
 def _print_notebook_list(
     items: list,
     json_output: bool,
-    columns: str = "name,status,resource,id",
+    columns: str = DEFAULT_NOTEBOOK_LIST_COLUMNS,
     tunnel_config=None,
 ) -> None:
     """Print notebook list in appropriate format with customizable columns."""
@@ -200,7 +262,7 @@ def _print_notebook_list(
     # Validate columns
     valid_columns = [c for c in column_list if c in COLUMN_SPECS]
     if not valid_columns:
-        valid_columns = ["name", "status", "resource", "id"]
+        valid_columns = DEFAULT_NOTEBOOK_LIST_COLUMNS.split(",")
 
     # Build header
     headers = []
@@ -232,5 +294,8 @@ def _print_notebook_list(
 __all__ = [
     "_print_notebook_detail",
     "_print_notebook_list",
+    "_public_notebook_list_item",
+    "_public_notebook_list_items",
     "COLUMN_SPECS",
+    "DEFAULT_NOTEBOOK_LIST_COLUMNS",
 ]

@@ -26,7 +26,15 @@ from inspire.cli.utils.tunnel_reconnect import (
     retry_pause_seconds,
     should_attempt_ssh_reconnect,
 )
-from inspire.config import Config, ConfigError, build_env_exports
+from inspire.config import (
+    Config,
+    ConfigError,
+    build_runtime_activate_command,
+    build_runtime_cd_command,
+    build_runtime_export_commands,
+    load_runtime_session_state_for_config,
+    resolve_effective_remote_runtime,
+)
 from inspire.config.ssh_runtime import resolve_ssh_runtime_config
 from inspire.platform.web import browser_api as browser_api_module
 
@@ -39,7 +47,6 @@ _RUNNING_NOTEBOOK_STATUS = "RUNNING"
 @json_option
 @pass_context
 def bridge_ssh(ctx: Context, bridge: Optional[str], json_output: bool = False) -> None:
-    json_output = resolve_json_output(ctx, json_output)
     """Open an interactive SSH shell to Bridge.
 
     Requires a configured bridge profile with a reachable SSH tunnel.
@@ -49,8 +56,10 @@ def bridge_ssh(ctx: Context, bridge: Optional[str], json_output: bool = False) -
         inspire notebook ssh <notebook-id> --save-as mybridge
         inspire bridge ssh --bridge mybridge
     """
+
+    json_output = resolve_json_output(ctx, json_output)
     try:
-        config, _ = Config.from_files_and_env(require_target_dir=True, require_credentials=False)
+        config, _ = Config.from_files_and_env(require_target_dir=False, require_credentials=False)
     except ConfigError as e:
         _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
 
@@ -74,12 +83,23 @@ def bridge_ssh(ctx: Context, bridge: Optional[str], json_output: bool = False) -
     bridge_name = selected_bridge.name
     logger.debug("bridge_ssh start bridge=%s", bridge_name)
 
-    # Build interactive SSH command with env exports and cd to target dir
     try:
-        env_exports = build_env_exports(config.remote_env)
+        runtime = resolve_effective_remote_runtime(
+            config,
+            require_cwd=True,
+            session_state=load_runtime_session_state_for_config(config),
+        )
     except ConfigError as e:
         _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
-    remote_command = f'{env_exports}cd "{config.target_dir}" && exec $SHELL -l'
+    command_parts = build_runtime_export_commands(runtime)
+    activate_command = build_runtime_activate_command(runtime)
+    if activate_command:
+        command_parts.append(activate_command)
+    cd_command = build_runtime_cd_command(runtime)
+    if cd_command:
+        command_parts.append(cd_command)
+    command_parts.append("exec $SHELL -l")
+    remote_command = " && ".join(command_parts)
     reconnect_limit = max(0, int(getattr(config, "tunnel_retries", 0)))
     reconnect_pause = float(getattr(config, "tunnel_retry_pause", 0.0) or 0.0)
     reconnect_attempt = 0
@@ -158,8 +178,8 @@ def bridge_ssh(ctx: Context, bridge: Optional[str], json_output: bool = False) -
                             f"is {rendered_status}."
                         ),
                         hint=(
-                            "Wait until it reports RUNNING via "
-                            f"'inspire notebook status {notebook_id}', then retry."
+                            f"Start it with 'inspire notebook start {notebook_id}' "
+                            "or wait until it reports RUNNING, then retry."
                         ),
                     )
             except Exception as status_error:  # noqa: BLE001

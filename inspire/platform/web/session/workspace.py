@@ -3,171 +3,82 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable
 
 from .models import WebSession
-
 
 logger = logging.getLogger(__name__)
 
 
-def fetch_node_specs(
+def fetch_node_dimensions(
     session: WebSession,
-    compute_group_id: str,
     *,
     request_json_fn: Callable[..., dict],
     base_url: str = "https://api.example.com",
+    workspace_id: str,
+    logic_compute_group_id: str,
+    page_size: int = 1000,
 ) -> dict:
-    """Fetch detailed node specs for a compute group using web session.
+    """Fetch node-dimension metrics for one workspace compute group.
 
-    This API returns per-GPU task information via node_dimensions.
-
-    Note: This endpoint is a web UI internal API that requires Keycloak
-    authentication. We use the captured browser cookies for HTTP requests.
+    This endpoint is readable by normal workspace users and includes dynamic
+    GPU/CPU/memory availability plus task counts. It is the preferred source
+    for full-node availability; ``cluster_nodes/list`` is admin-only on the
+    current platform.
     """
     if not session.storage_state or not session.storage_state.get("cookies"):
         if not session.cookies:
             raise ValueError("Session expired or invalid (missing storage state)")
 
-    url = f"{base_url}/api/v1/compute_resources/node_specs/logic_compute_groups/{compute_group_id}"
-    return request_json_fn(
-        session,
-        "GET",
-        url,
-        headers={"Referer": f"{base_url}/jobs/distributedTraining"},
-        timeout=30,
-    )
-
-
-def fetch_workspace_availability(
-    session: WebSession,
-    *,
-    request_json_fn: Callable[..., dict],
-    base_url: str = "https://api.example.com",
-    workspace_id: str | None = None,
-    progress_callback: Optional[Callable[[int, int], None]] = None,
-) -> list[dict]:
-    """Fetch workspace-specific GPU availability.
-
-    Uses the browser API endpoint POST /api/v1/cluster_nodes/list which returns
-    nodes with complete task_list data for accurate free node counting.
-    This matches what the user sees in the browser.
-
-    Args:
-        session: Web session with storage_state and workspace_id
-        request_json_fn: Callable used to issue authenticated requests
-        base_url: Base URL for the API
-        progress_callback: Optional callback(fetched, total) for progress updates
-
-    Returns:
-        List of node dictionaries with availability info.
-
-    Raises:
-        ValueError: If session is invalid or workspace_id is missing.
-    """
-    _ = progress_callback  # currently unused (retained for API compatibility)
-    if not session.storage_state or not session.storage_state.get("cookies"):
-        if not session.cookies:
-            raise ValueError("Session expired or invalid (missing storage state)")
-
-    resolved_workspace_id = str(workspace_id or session.workspace_id or "").strip()
+    resolved_workspace_id = str(workspace_id or "").strip()
     if not resolved_workspace_id:
-        raise ValueError("No workspace_id in session. Please login again.")
+        raise ValueError("workspace_id is required for node-dimension availability")
+    resolved_group_id = str(logic_compute_group_id or "").strip()
+    if not resolved_group_id:
+        raise ValueError("logic_compute_group_id is required for node-dimension availability")
 
-    url = f"{base_url}/api/v1/cluster_nodes/list"
-    body = {
-        "page_num": 1,
-        "page_size": -1,  # Get all nodes
-        "filter": {"workspace_id": resolved_workspace_id},
-    }
+    # The console reads this action from the workspace service.  The same account gets
+    # AccessForbidden from cluster?Action=ListNodeDimension even though the console can
+    # show the per-node data; using the service the browser uses is what makes the probe
+    # useful to a normal member.
+    url = f"{base_url}/api/v2/workspace?Action=ListNodeDimension"
+    page_num = 1
+    nodes: list[dict] = []
+    total = 0
 
-    data = request_json_fn(
-        session,
-        "POST",
-        url,
-        body=body,
-        headers={"Referer": f"{base_url}/jobs/distributedTraining"},
-        timeout=30,
-    )
-    return data.get("data", {}).get("nodes", [])
-
-
-@dataclass
-class GPUAvailability:
-    """Per-GPU availability for a compute group."""
-
-    group_id: str
-    group_name: str
-    gpu_type: str
-    total_gpus: int
-    free_gpus: int
-    low_priority_gpus: int  # GPUs used by low-priority tasks
-
-
-def fetch_gpu_availability(
-    session: WebSession,
-    compute_group_ids: list[str],
-    *,
-    request_json_fn: Callable[..., dict],
-    base_url: str = "https://api.example.com",
-) -> list[GPUAvailability]:
-    """Fetch accurate per-GPU availability for compute groups."""
-    results = []
-
-    for group_id in compute_group_ids:
-        try:
-            data = fetch_node_specs(
-                session,
-                group_id,
-                request_json_fn=request_json_fn,
-                base_url=base_url,
+    while True:
+        body = {
+            "page_num": page_num,
+            "page_size": page_size,
+            "filter": {
+                "workspace_id": resolved_workspace_id,
+                "logic_compute_group_id": resolved_group_id,
+            },
+        }
+        payload = request_json_fn(
+            session,
+            "POST",
+            url,
+            body=body,
+            headers={"Referer": f"{base_url}/jobs/distributedTraining"},
+            timeout=30,
+        )
+        # v2 Action envelope (#82): failures arrive as HTTP 200 with
+        # ResponseMetadata.Error, so decode the envelope instead of checking a code field.
+        error = ((payload.get("ResponseMetadata") or {}).get("Error")) or {}
+        if isinstance(error, dict) and error:
+            message = error.get("Message", "unknown error")
+            raise ValueError(
+                f"List node dimensions failed: API error {error.get('Code', 'Error')}: {message}"
             )
+        data = payload.get("Result") or {}
+        if not isinstance(data, dict):
+            data = {}
+        page_nodes = data.get("node_dimensions", []) or []
+        nodes.extend(page_nodes)
+        total = int(data.get("total", len(nodes)) or 0)
+        if len(nodes) >= total or not page_nodes:
+            break
+        page_num += 1
 
-            # Parse the response to count free GPUs
-            nodes = data.get("data", {}).get("node_dimensions", [])
-
-            total_gpus = 0
-            free_gpus = 0
-            low_priority_gpus = 0
-            group_name = ""
-            gpu_type = ""
-
-            for node in nodes:
-                gpu_count = node.get("gpu_count", 8)
-                total_gpus += gpu_count
-
-                # Check tasks_associated for each GPU dimension
-                tasks = node.get("tasks_associated", [])
-                if not tasks:
-                    free_gpus += gpu_count
-                else:
-                    # Check if tasks are low priority
-                    for task in tasks:
-                        priority = task.get("priority", 10)
-                        if priority < 5:  # Low priority threshold
-                            low_priority_gpus += 1
-
-                if not group_name:
-                    group_name = node.get("logic_compute_group_name", "Unknown")
-                if not gpu_type:
-                    gpu_info = node.get("gpu_info", {})
-                    gpu_type = gpu_info.get("gpu_type_display", "Unknown")
-
-            results.append(
-                GPUAvailability(
-                    group_id=group_id,
-                    group_name=group_name,
-                    gpu_type=gpu_type,
-                    total_gpus=total_gpus,
-                    free_gpus=free_gpus,
-                    low_priority_gpus=low_priority_gpus,
-                )
-            )
-
-        except Exception as e:
-            # Skip groups that fail
-            logger.warning("Failed to fetch compute group %s: %s", group_id, e)
-            continue
-
-    return results
+    return {"data": {"node_dimensions": nodes, "total": total or len(nodes)}}

@@ -11,11 +11,13 @@ from typing import Callable, Optional
 from inspire.bridge.tunnel import BridgeProfile, TunnelConfig, save_tunnel_config
 from inspire.config.ssh_runtime import SshRuntimeConfig
 from inspire.platform.web import browser_api as browser_api_module
+from inspire.platform.web.browser_api.notebooks import get_notebook_detail
 from inspire.platform.web.session import WebSession
 
 DEFAULT_RTUNNEL_PORT = 31337
 SSH_DISCONNECT_RETURN_CODES = {255}
 _PROXY_PORT_RE = re.compile(r"/proxy/(\d+)/")
+_NOTEBOOK_TERMINAL_STATUSES = frozenset({"FAILED", "ERROR", "STOPPED", "DELETED"})
 
 
 class NotebookBridgeReconnectStatus(str, Enum):
@@ -25,6 +27,7 @@ class NotebookBridgeReconnectStatus(str, Enum):
     RETRY_LATER = "retry_later"
     EXHAUSTED = "exhausted"
     NOT_REBUILDABLE = "not_rebuildable"
+    STALE_NOTEBOOK = "stale_notebook"
 
 
 @dataclass
@@ -80,6 +83,31 @@ def retry_pause_seconds(attempt: int, *, base_pause: float, progressive: bool = 
     if not progressive:
         return base
     return base + float(max(0, attempt - 1))
+
+
+def _is_notebook_stale(notebook_id: str, session: WebSession) -> tuple[bool, str]:
+    """Check if a notebook is in a terminal/stale state.
+
+    Returns:
+        (is_stale, status): Tuple where is_stale is True if the notebook
+        is in a terminal state (STOPPED, DELETED, etc.), and status is
+        the notebook's current status or error message.
+    """
+    try:
+        detail = get_notebook_detail(notebook_id=notebook_id, session=session)
+        status = (detail.get("status") or "").upper()
+        if status in _NOTEBOOK_TERMINAL_STATUSES:
+            return True, status
+        if status == "CREATING":
+            return False, "CREATING"
+        return False, status
+    except Exception as e:
+        # If we can't fetch details, assume it might be stale
+        # (e.g., notebook_id not found, network error, etc.)
+        error_msg = str(e).lower()
+        if "not found" in error_msg or "404" in error_msg:
+            return True, "NOT_FOUND"
+        return False, f"unknown ({e})"
 
 
 def load_ssh_public_key_material(pubkey_path: Optional[str] = None) -> str:
@@ -158,7 +186,9 @@ def rebuild_notebook_bridge_profile(
         proxy_url=proxy_url,
         ssh_user=bridge.ssh_user,
         ssh_port=bridge.ssh_port,
-        has_internet=bridge.has_internet,
+        gpu_type=bridge.gpu_type,
+        _has_internet_stored=bridge._has_internet_stored,
+        priority=bridge.priority,
         identity_file=bridge.identity_file,
         notebook_id=notebook_id,
         rtunnel_port=tunnel_port,
@@ -225,6 +255,23 @@ def attempt_notebook_bridge_rebuild(
             attempt=attempt,
         )
     except Exception as error:  # noqa: BLE001
+        # Check if the notebook is in a terminal/stale state
+        if state.web_session is not None:
+            try:
+                is_stale, status = _is_notebook_stale(notebook_id, state.web_session)
+                if is_stale:
+                    return NotebookBridgeReconnectResult(
+                        status=NotebookBridgeReconnectStatus.STALE_NOTEBOOK,
+                        attempt=attempt,
+                        error=RuntimeError(
+                            f"Notebook '{notebook_id}' is in terminal state: {status}. "
+                            "The notebook may have been recycled or deleted."
+                        ),
+                    )
+            except Exception:
+                # If we can't check, continue with normal retry logic
+                pass
+
         if state.reconnect_attempt >= state.reconnect_limit:
             return NotebookBridgeReconnectResult(
                 status=NotebookBridgeReconnectStatus.EXHAUSTED,
@@ -249,6 +296,7 @@ __all__ = [
     "NotebookBridgeReconnectResult",
     "NotebookBridgeReconnectState",
     "NotebookBridgeReconnectStatus",
+    "_is_notebook_stale",
     "attempt_notebook_bridge_rebuild",
     "extract_rtunnel_port",
     "load_ssh_public_key_material",

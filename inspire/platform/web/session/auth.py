@@ -2,28 +2,55 @@
 
 from __future__ import annotations
 
+import json
 import os
-import re
 import time
 from typing import Optional
 
-from inspire.config import Config
+from inspire.config import AccountContext, Config
+from inspire.platform import tls_policy
 
-from .models import DEFAULT_WORKSPACE_ID, WebSession
+from .browser import (
+    MISSING_BROWSER_HINT,
+    PLAYWRIGHT_INSTALL_HINT,
+    MissingBrowserError,
+)
+from .http_auth import (
+    _classify_cas_login_error,
+    _extract_workspaces,
+    login_with_requests,
+)
+from .models import (
+    DEFAULT_WORKSPACE_ID,
+    SessionAuthenticationError,
+    WebSession,
+    get_auth_failure_cache_file,
+)
 from .proxy import get_playwright_proxy
 
 
-def _load_runtime_config() -> Config:
-    config, _ = Config.from_files_and_env(require_credentials=False, require_target_dir=False)
+def _load_runtime_config(account_alias: str | None = None) -> Config:
+    config, _ = Config.from_files_and_env(
+        require_credentials=False,
+        require_target_dir=False,
+        account_alias=account_alias,
+    )
     return config
 
 
-def _session_matches_username(cached: WebSession, username: str) -> bool:
-    if not username:
-        return True
-    if not cached.login_username:
+def _session_matches_account_context(
+    cached: WebSession,
+    account_context: AccountContext,
+) -> bool:
+    if not account_context.username:
         return False
-    return cached.login_username == username
+    cached_alias = str(cached.account_alias or "").strip() or None
+    if cached_alias != account_context.alias:
+        return False
+    if str(cached.login_username or "").strip() != account_context.username:
+        return False
+    cached_base_url = str(cached.base_url or "").rstrip("/")
+    return not cached_base_url or cached_base_url == account_context.base_url
 
 
 def _has_real_workspace_id(session: WebSession) -> bool:
@@ -31,9 +58,61 @@ def _has_real_workspace_id(session: WebSession) -> bool:
     return bool(value) and value != DEFAULT_WORKSPACE_ID
 
 
+def _auth_failure_cooldown_seconds(message: str) -> int:
+    normalized = str(message or "").lower()
+    if "locked" in normalized or "锁定" in normalized:
+        return 30 * 60
+    return 5 * 60
+
+
+def _record_auth_failure(account: str, message: str) -> None:
+    path = get_auth_failure_cache_file(account)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    payload = {
+        "schema": "inspire.web-auth-failure.v1",
+        "message": str(message or "CAS authentication failed"),
+        "created_at": now,
+        "retry_after": now + _auth_failure_cooldown_seconds(message),
+    }
+    temporary = path.with_suffix(f".tmp-{os.getpid()}")
+    temporary.write_text(json.dumps(payload) + "\n")
+    os.replace(temporary, path)
+    try:
+        os.chmod(path, 0o600)
+    except Exception:
+        pass
+
+
+def _clear_auth_failure(account: str) -> None:
+    try:
+        get_auth_failure_cache_file(account).unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _raise_during_auth_cooldown(account: str) -> None:
+    path = get_auth_failure_cache_file(account)
+    try:
+        payload = json.loads(path.read_text())
+        retry_after = float(payload["retry_after"])
+    except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return
+    remaining = retry_after - time.time()
+    if remaining <= 0:
+        _clear_auth_failure(account)
+        return
+    message = str(payload.get("message") or "CAS authentication failed")
+    wait_seconds = max(1, int(remaining + 0.999))
+    raise SessionAuthenticationError(
+        f"CAS authentication paused for this account for {wait_seconds}s after: {message}"
+    )
+
+
 def _maybe_apply_workspace_override(
     cached: WebSession,
     env_workspace_id: Optional[str],
+    cache_key: str,
 ) -> None:
     if not env_workspace_id:
         return
@@ -41,9 +120,24 @@ def _maybe_apply_workspace_override(
         return
     cached.workspace_id = env_workspace_id
     try:
-        cached.save(account=cached.login_username)
+        cached.save(account=cache_key)
     except Exception:
         pass
+
+
+def _get_auth_method(config: Config | None = None) -> str:
+    """Determine authentication method from config or env."""
+    env_method = os.environ.get("INSPIRE_AUTH_METHOD", "").strip().lower()
+    if env_method in ("http", "playwright"):
+        return env_method
+    try:
+        runtime_config = config or _load_runtime_config()
+        method = (runtime_config.auth_method or "http").strip().lower()
+        if method in ("http", "playwright"):
+            return method
+    except Exception:
+        pass
+    return "http"
 
 
 def get_credentials() -> tuple[str, str]:
@@ -54,8 +148,9 @@ def get_credentials() -> tuple[str, str]:
 
     if not username or not password:
         raise ValueError(
-            "Missing web authentication credentials. Set [auth].username in project config and "
-            'configure password via INSPIRE_PASSWORD or [accounts."<username>"].password.'
+            "Missing web authentication credentials. Select an account alias and configure "
+            'its username/password under [accounts."<alias>"], or use the legacy '
+            "INSPIRE_USERNAME/INSPIRE_PASSWORD settings."
         )
 
     return username, password
@@ -71,7 +166,11 @@ def login_with_playwright(
 
     The login flow: qz/login -> CAS (Keycloak broker) -> Keycloak -> qz.
     """
-    from inspire.platform.web.browser_api.core import _in_asyncio_loop, _run_in_thread
+    from inspire.platform.web.browser_api.core import (
+        _in_asyncio_loop,
+        _launch_browser,
+        _run_in_thread,
+    )
 
     if _in_asyncio_loop():
         return _run_in_thread(
@@ -82,22 +181,31 @@ def login_with_playwright(
             headless=headless,
         )
 
-    from playwright.sync_api import sync_playwright
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        raise RuntimeError(
+            f"{PLAYWRIGHT_INSTALL_HINT}\nOr switch to HTTP auth: export INSPIRE_AUTH_METHOD=http"
+        ) from None
 
     proxy = get_playwright_proxy()
     with sync_playwright() as p:
         try:
-            browser = p.chromium.launch(headless=headless, proxy=proxy)
-        except Exception as exc:
-            if "Executable doesn't exist" in str(exc):
-                raise RuntimeError(
-                    "Playwright browser not found. First login requires a browser to "
-                    "complete SSO authentication.\n\n"
-                    "  Install with:  playwright install chromium\n"
-                    "  Or if using uv tool:  uvx --from inspire-cli playwright install chromium"
-                ) from None
-            raise
-        context = browser.new_context(proxy=proxy, ignore_https_errors=True)
+            # Shared launcher: headless containers need the no-sandbox flags, and a
+            # missing Chromium binary is reported as an install step rather than a
+            # raw Playwright traceback.
+            browser = _launch_browser(p, headless=headless)
+        except MissingBrowserError:
+            raise MissingBrowserError(
+                "Playwright browser not found. First login requires a browser to "
+                f"complete SSO authentication.\n\n{MISSING_BROWSER_HINT}"
+            ) from None
+        # The login flow types the password into this context and ends up holding CAS/Keycloak
+        # cookies, so it verifies certificates by default; True only via api.skip_ssl_verify,
+        # which warns on stderr.
+        context = browser.new_context(
+            proxy=proxy, ignore_https_errors=tls_policy.ignore_https_errors()
+        )
         page = context.new_page()
 
         # Navigate to login page; use domcontentloaded since CAS may have
@@ -150,6 +258,18 @@ def login_with_playwright(
             except Exception:
                 pass
 
+        def _raise_if_cas_login_error() -> None:
+            try:
+                if "cas.sii.edu.cn" not in page.url:
+                    return
+                body_text = page.locator("body").inner_text(timeout=2000)
+            except Exception:
+                return
+
+            login_error = _classify_cas_login_error(body_text)
+            if login_error:
+                raise SessionAuthenticationError(login_error)
+
         pass_locator = _fill_login_form()
         if not pass_locator:
             try:
@@ -161,6 +281,8 @@ def login_with_playwright(
 
         if pass_locator:
             _submit_login_form(pass_locator)
+            page.wait_for_timeout(1000)
+            _raise_if_cas_login_error()
 
         # Visit a real page to ensure app session cookies and localStorage are set.
         # Use domcontentloaded with fallback since some pages have long-polling.
@@ -173,6 +295,7 @@ def login_with_playwright(
                 f"{base_url}/jobs/distributedTraining", wait_until="domcontentloaded", timeout=30000
             )
         page.wait_for_timeout(1000)
+        _raise_if_cas_login_error()
 
         def _wait_for_api_auth() -> None:
             deadline = time.time() + 30
@@ -182,16 +305,24 @@ def login_with_playwright(
             }
             while time.time() < deadline:
                 try:
-                    resp = context.request.get(
-                        f"{base_url}/api/v1/user/detail",
+                    # v2 Action API: /api/v1 is retired (#82). A failure arrives as HTTP 200
+                    # with ResponseMetadata.Error, so a 200 alone is not proof of a session.
+                    resp = context.request.post(
+                        f"{base_url}/api/v2/user?Action=GetUserDetail",
                         headers=headers,
+                        data={},
                         timeout=10000,
                     )
                     if resp.status == 200:
-                        return
+                        payload = resp.json()
+                        error = ((payload.get("ResponseMetadata") or {}).get("Error")) or {}
+                        if not error:
+                            return
                 except Exception:
                     pass
+                _raise_if_cas_login_error()
                 page.wait_for_timeout(500)
+            _raise_if_cas_login_error()
             raise ValueError("Login did not complete; check credentials")
 
         _wait_for_api_auth()
@@ -212,45 +343,26 @@ def login_with_playwright(
         if not workspace_id:
             workspace_id = DEFAULT_WORKSPACE_ID
 
-        # Discover all workspace IDs via /api/v1/user/routes/{spaceId}
-        # The response contains a "userWorkspaceList" route with all workspaces
-        # the user can access, each with name (display name) and path (ws-... ID).
         all_workspace_ids: list[str] = []
         all_workspace_names: dict[str, str] = {}
-        if workspace_id and workspace_id != DEFAULT_WORKSPACE_ID:
-            try:
-                routes_resp = context.request.get(
-                    f"{base_url}/api/v1/user/routes/{workspace_id}",
-                    headers={
-                        "Accept": "application/json",
-                        "Referer": f"{base_url}/jobs/distributedTraining",
-                    },
-                    timeout=15000,
-                )
-                if routes_resp.status == 200:
-                    routes_data = routes_resp.json()
-                    ws_pattern = re.compile(
-                        r"^ws-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-                    )
-                    # Find the "userWorkspaceList" route group
-                    for route_group in (routes_data.get("data") or {}).get("routes") or []:
-                        if not isinstance(route_group, dict):
-                            continue
-                        if route_group.get("name") != "userWorkspaceList":
-                            continue
-                        for entry in route_group.get("routes") or []:
-                            if not isinstance(entry, dict):
-                                continue
-                            ws_id = str(entry.get("path") or "").strip()
-                            ws_name = str(entry.get("name") or "").strip()
-                            if ws_id and ws_pattern.match(ws_id) and ws_id != DEFAULT_WORKSPACE_ID:
-                                if ws_id not in all_workspace_names:
-                                    all_workspace_ids.append(ws_id)
-                                    all_workspace_names[ws_id] = ws_name
-            except Exception:
-                pass
+        try:
+            workspaces_resp = context.request.post(
+                f"{base_url}/api/v2/workspace?Action=ListWorkspaces",
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "Referer": f"{base_url}/jobs/distributedTraining",
+                },
+                data={},
+                timeout=15000,
+            )
+            if workspaces_resp.status == 200:
+                all_workspace_ids, all_workspace_names = _extract_workspaces(workspaces_resp.json())
+        except Exception:
+            pass
 
-        # Ensure the primary workspace_id is included
+        if workspace_id == DEFAULT_WORKSPACE_ID and all_workspace_ids:
+            workspace_id = all_workspace_ids[0]
         if workspace_id and workspace_id != DEFAULT_WORKSPACE_ID:
             if workspace_id not in all_workspace_ids:
                 all_workspace_ids.insert(0, workspace_id)
@@ -262,7 +374,11 @@ def login_with_playwright(
         cookies = context.cookies()
         cookie_dict = {c["name"]: c["value"] for c in cookies}
 
+        context.close()
         browser.close()
+        # Give Playwright a moment to finish background cleanup tasks
+        # before the sync_playwright greenlet exits.
+        time.sleep(0.1)
 
         session = WebSession(
             storage_state=storage_state,
@@ -274,17 +390,20 @@ def login_with_playwright(
             all_workspace_names=all_workspace_names or None,
             created_at=time.time(),
         )
-        session.save(account=username)
-
         return session
 
 
-def get_web_session(force_refresh: bool = False, require_workspace: bool = False) -> WebSession:
+def get_web_session(
+    force_refresh: bool = False,
+    require_workspace: bool = False,
+    account: Optional[str] = None,
+) -> WebSession:
     """Get a valid web session, logging in if necessary.
 
     Args:
         force_refresh: Force a new login even if cached session exists.
         require_workspace: Force re-login if workspace_id is missing.
+        account: Optional account alias. The alias is resolved to platform credentials.
 
     Returns:
         A valid WebSession with storage_state and optionally workspace_id.
@@ -292,55 +411,86 @@ def get_web_session(force_refresh: bool = False, require_workspace: bool = False
     # Check for workspace override from environment
     env_workspace_id = os.environ.get("INSPIRE_WORKSPACE_ID", "").strip()
 
-    # Resolve credentials early so we can avoid reusing a cache from another user.
+    config = _load_runtime_config(account_alias=account) if account else _load_runtime_config()
+    account_context = config.get_account_context()
+    lookup_account = account_context.cache_key or None
     credentials_error: Optional[ValueError] = None
-    try:
-        username, password = get_credentials()
-    except ValueError as e:
-        credentials_error = e
-        try:
-            username = (_load_runtime_config().username or "").strip()
-        except Exception:
-            username = ""
-        password = ""
+    if not account_context.username or not account_context.password:
+        credentials_error = ValueError(
+            "Missing web authentication credentials for "
+            f"account {account_context.alias or account_context.username or '<unselected>'}."
+        )
 
     if not force_refresh:
-        cached = WebSession.load(account=username or None)
-        if cached and cached.storage_state.get("cookies"):
-            _maybe_apply_workspace_override(cached, env_workspace_id)
+        cached = WebSession.load(account=lookup_account)
+        if (
+            cached
+            and cached.storage_state.get("cookies")
+            and _session_matches_account_context(cached, account_context)
+        ):
+            _maybe_apply_workspace_override(cached, env_workspace_id, account_context.cache_key)
             if require_workspace and not _has_real_workspace_id(cached):
-                pass
-            elif username and not _session_matches_username(cached, username):
-                # Credentials are available and don't match the cached login user.
-                # Force fresh login so the active account follows current config.
                 pass
             else:
                 return cached
 
     # If we can't refresh (missing credentials), try the cached session anyway.
     if credentials_error is not None:
-        cached = WebSession.load(allow_expired=True, account=username or None)
-        if cached and cached.storage_state.get("cookies"):
-            _maybe_apply_workspace_override(cached, env_workspace_id)
+        cached = WebSession.load(allow_expired=True, account=lookup_account)
+        if (
+            cached
+            and cached.storage_state.get("cookies")
+            and _session_matches_account_context(cached, account_context)
+        ):
+            _maybe_apply_workspace_override(cached, env_workspace_id, account_context.cache_key)
 
-            if require_workspace and not _has_real_workspace_id(cached):
-                raise credentials_error
-            return cached
+            if not require_workspace or _has_real_workspace_id(cached):
+                return cached
         raise credentials_error
 
     # Use cached session if available and has cookies, even if beyond TTL.
     # The session cookies may still be valid server-side; let API calls determine validity.
     # Skip this when force_refresh is set — the caller explicitly wants a fresh login.
     if not force_refresh:
-        cached = WebSession.load(allow_expired=True, account=username or None)
-        if cached and cached.storage_state.get("cookies"):
-            _maybe_apply_workspace_override(cached, env_workspace_id)
-            if (
-                not require_workspace or _has_real_workspace_id(cached)
-            ) and _session_matches_username(cached, username):
+        cached = WebSession.load(allow_expired=True, account=lookup_account)
+        if (
+            cached
+            and cached.storage_state.get("cookies")
+            and _session_matches_account_context(cached, account_context)
+        ):
+            _maybe_apply_workspace_override(cached, env_workspace_id, account_context.cache_key)
+            if not require_workspace or _has_real_workspace_id(cached):
                 # Use cached session; server will reject if truly invalid.
                 return cached
 
     # Session is missing or has no cookies, perform fresh login
-    base_url = _load_runtime_config().base_url
-    return login_with_playwright(username, password, base_url=base_url)
+    _raise_during_auth_cooldown(account_context.cache_key)
+    auth_method = _get_auth_method(config)
+    try:
+        if auth_method == "http":
+            session = login_with_requests(
+                account_context.username,
+                account_context.password,
+                base_url=account_context.base_url,
+            )
+        else:
+            session = login_with_playwright(
+                account_context.username,
+                account_context.password,
+                base_url=account_context.base_url,
+            )
+    except SessionAuthenticationError as exc:
+        _record_auth_failure(account_context.cache_key, str(exc))
+        raise
+
+    _clear_auth_failure(account_context.cache_key)
+
+    session.account_alias = account_context.alias
+    if str(session.login_username or "").strip() != account_context.username:
+        raise ValueError(
+            "Authenticated session username does not match configured platform identity: "
+            f"expected {account_context.username!r}, got {session.login_username!r}."
+        )
+    session.base_url = account_context.base_url
+    session.save(account=account_context.cache_key)
+    return session

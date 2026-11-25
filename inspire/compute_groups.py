@@ -11,6 +11,7 @@ class ComputeGroupDefinition:
     compute_group_id: str
     gpu_type: str
     location: str = ""
+    workspace_ids: tuple[str, ...] = ()
 
 
 # Default empty tuple - compute groups are loaded from config
@@ -36,12 +37,14 @@ def load_compute_groups_from_config(raw_list: list[dict]) -> tuple[ComputeGroupD
     groups = []
     for item in raw_list:
         try:
+            ws_ids_raw = item.get("workspace_ids", []) or []
             groups.append(
                 ComputeGroupDefinition(
                     name=item.get("name", ""),
                     compute_group_id=item.get("id", ""),
                     gpu_type=item.get("gpu_type", ""),
                     location=item.get("location", ""),
+                    workspace_ids=tuple(str(w) for w in ws_ids_raw),
                 )
             )
         except (KeyError, TypeError):

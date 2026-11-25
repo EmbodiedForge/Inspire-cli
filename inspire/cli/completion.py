@@ -27,13 +27,11 @@ def get_config_key_completions() -> list[CompletionItem]:
 
 def get_workspace_alias_completions() -> list[str]:
     """Get workspace alias completions."""
-    # Standard aliases
-    aliases = ["cpu", "gpu", "internet"]
+    aliases: list[str] = []
 
-    # Try to load from config
     try:
         config, _ = Config.from_files_and_env(require_credentials=False, require_target_dir=False)
-        aliases.extend(config.workspaces.keys())
+        aliases.extend(config.workspace_selectors.keys())
     except Exception:
         pass
 
@@ -65,6 +63,17 @@ def get_project_name_completions() -> list[CompletionItem]:
                     help=f"Alias for {project_id[:30]}...",
                 )
             )
+
+        for alias, selector in config.project_selectors.items():
+            name = str(selector.get("name") or "").strip()
+            workspace = str(selector.get("workspace") or "").strip()
+            target = f"{workspace}/{name}" if workspace else name
+            completions.append(
+                CompletionItem(
+                    alias,
+                    help=f"Live selector for {target}",
+                )
+            )
     except Exception:
         pass
 
@@ -79,7 +88,7 @@ def get_resource_spec_completions() -> list[CompletionItem]:
         CompletionItem("4xH200", help="4x H200 GPU (multi-node)"),
         CompletionItem("1xH100", help="1x H100 GPU"),
         CompletionItem("4xH100", help="4x H100 GPU (multi-node)"),
-        CompletionItem("1x4090", help="1x RTX 4090 GPU (with internet)"),
+        CompletionItem("1x4090", help="1x RTX 4090 GPU"),
         CompletionItem("4CPU", help="4 CPU cores"),
         CompletionItem("8CPU", help="8 CPU cores"),
     ]

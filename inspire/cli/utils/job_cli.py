@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 
 from inspire.platform.openapi import _validate_job_id_format
 from inspire.cli.context import Context, EXIT_JOB_NOT_FOUND
@@ -23,7 +22,7 @@ def resolve_job_id(ctx: Context, job_id: str) -> str:
 
     Resolution order:
     1. Full UUID (with or without ``job-`` prefix) -> return directly.
-    2. Partial hex -> search local cache, then web API.
+    2. Partial hex -> search the platform's job listing.
     3. Not hex -> error with format hint.
     """
     job_id = job_id.strip()
@@ -40,10 +39,7 @@ def resolve_job_id(ctx: Context, job_id: str) -> str:
     # Partial hex
     if is_partial_id(job_id, prefix="job-"):
         partial = normalize_partial(job_id, prefix="job-")
-        matches = _search_job_cache(partial)
-
-        if not matches:
-            matches = _search_job_api(partial)
+        matches = _search_job_api(partial)
 
         return resolve_partial_id(
             ctx,
@@ -66,53 +62,29 @@ def resolve_job_id(ctx: Context, job_id: str) -> str:
     return ""  # unreachable, exit_with_error calls sys.exit
 
 
-def _search_job_cache(partial: str) -> list[tuple[str, str]]:
-    """Search local job cache for IDs starting with *partial*."""
-    from inspire.cli.utils.job_cache_api import JobCache
-    from inspire.config import Config, ConfigError
-
-    try:
-        config = Config.from_env(require_target_dir=False)
-        cache_path = config.get_expanded_cache_path()
-    except (ConfigError, OSError, ValueError, TypeError) as error:
-        logger.debug(
-            "Falling back to INSPIRE_JOB_CACHE for partial lookup (%s): %s", partial, error
-        )
-        cache_path = os.getenv("INSPIRE_JOB_CACHE")
-
-    if not cache_path:
-        return []
-
-    try:
-        cache = JobCache(cache_path)
-        jobs = cache.list_jobs(limit=0)
-    except (OSError, ValueError, TypeError) as error:
-        logger.debug("Unable to read local job cache %s: %s", cache_path, error)
-        return []
-
-    matches: list[tuple[str, str]] = []
-    for job in jobs:
-        jid = job.get("job_id", "")
-        # Strip prefix for comparison
-        uuid_part = jid[4:] if jid.lower().startswith("job-") else jid
-        if uuid_part.lower().startswith(partial):
-            label = job.get("name") or job.get("status") or ""
-            matches.append((jid, label))
-    return matches
+# The jobs list documents no ceiling; 1000 is the only page_size limit documented for this platform
+# (API_ENDPOINTS.md, cluster nodes), so a lookup page stops there instead of being refused.
+_SEARCH_PAGE_SIZE = 1000
 
 
 def _search_job_api(partial: str) -> list[tuple[str, str]]:
-    """Try the web API for job listing, silently return [] on failure."""
+    """Search the platform's job listing for *partial*; return [] on any failure.
+
+    A job matches on an exact name or on a prefix of the hex part of its ID, so ``resolve_partial_id``
+    still decides between "nothing matched" and "several did".
+    """
     try:
         from inspire.platform.web.browser_api.jobs import list_jobs as web_list_jobs
 
-        items, _ = web_list_jobs(page_size=100)
+        items, _ = web_list_jobs(page_size=_SEARCH_PAGE_SIZE)
         matches: list[tuple[str, str]] = []
         for job in items:
             jid = job.job_id
             uuid_part = jid[4:] if jid.lower().startswith("job-") else jid
-            if uuid_part.lower().startswith(partial):
-                label = job.name or job.status or ""
+            label = job.name or job.status or ""
+            id_match = uuid_part.lower().startswith(partial)
+            name_match = bool(job.name) and job.name.lower() == partial
+            if id_match or name_match:
                 matches.append((jid, label))
         return matches
     except Exception as error:  # noqa: BLE001 - graceful fallback by design for resolver UX

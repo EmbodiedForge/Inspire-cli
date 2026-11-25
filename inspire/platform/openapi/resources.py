@@ -32,29 +32,22 @@ def parse_resource_request(resource_str: str) -> tuple[GPUType, int]:
         raise ValueError("Resource description cannot be empty")
 
     resource_str = resource_str.upper().strip()
+    compact_resource = resource_str.replace(" ", "").replace("_", "").replace("-", "")
 
     patterns = [
-        r"^(\d+)[xX]?(H100|H200)$",
-        r"^(H100|H200)[xX]?(\d+)?$",
-        r"^(\d+)\s+(H100|H200)$",
+        r"^(?P<count>\d+)[xX]?(?P<gpu>H100|H200|RTX4090|4090)$",
+        r"^(?P<gpu>H100|H200|RTX4090|4090)[xX]?(?P<count>\d+)?$",
     ]
 
     gpu_count = 1
     gpu_type_str = None
 
     for pattern in patterns:
-        match = re.match(pattern, resource_str.replace(" ", ""))
+        match = re.match(pattern, compact_resource)
         if match:
-            groups = match.groups()
-            if len(groups) == 2:
-                if groups[0].isdigit():
-                    gpu_count = int(groups[0])
-                    gpu_type_str = groups[1]
-                elif groups[1] and groups[1].isdigit():
-                    gpu_type_str = groups[0]
-                    gpu_count = int(groups[1])
-                else:
-                    gpu_type_str = groups[0] if not groups[0].isdigit() else groups[1]
+            gpu_type_str = match.group("gpu")
+            if match.group("count"):
+                gpu_count = int(match.group("count"))
             break
 
     if not gpu_type_str:
@@ -62,15 +55,20 @@ def parse_resource_request(resource_str: str) -> tuple[GPUType, int]:
             gpu_type_str = "H200"
         elif "H100" in resource_str:
             gpu_type_str = "H100"
+        elif "4090" in resource_str:
+            gpu_type_str = "4090"
 
     if not gpu_type_str:
         raise ValueError(f"Unrecognized GPU type: {resource_str}")
+
+    if "4090" in gpu_type_str:
+        gpu_type_str = "4090"
 
     try:
         gpu_type = GPUType(gpu_type_str)
     except ValueError as e:
         raise ValueError(
-            f"Unsupported GPU type: {gpu_type_str}, supported types: H100, H200"
+            f"Unsupported GPU type: {gpu_type_str}, supported types: H100, H200, 4090"
         ) from e
 
     if gpu_count <= 0:
@@ -88,6 +86,8 @@ def normalize_gpu_type(gpu_type_raw: str) -> str:
         return GPUType.H200.value
     if "H100" in normalized:
         return GPUType.H100.value
+    if "4090" in normalized:
+        return GPUType.RTX4090.value
     return normalized
 
 
@@ -116,9 +116,12 @@ def find_matching_specs(
 
 
 def find_compute_groups(
-    compute_groups: list[ComputeGroup], *, gpu_type: GPUType
+    compute_groups: list[ComputeGroup], *, gpu_type: GPUType, workspace_id: Optional[str] = None
 ) -> list[ComputeGroup]:
-    return [group for group in compute_groups if group.gpu_type == gpu_type]
+    result = [group for group in compute_groups if group.gpu_type == gpu_type]
+    if workspace_id:
+        result = [g for g in result if workspace_id in g.workspace_ids]
+    return result
 
 
 def select_compute_group(
@@ -223,6 +226,7 @@ def display_available_resources(
     logger.info("  • --resource '4xH200'   -> 4x H200 GPU")
     logger.info("  • --resource '8 H200'   -> 8x H200 GPU")
     logger.info("  • --resource 'H100'     -> 1x H100 GPU")
+    logger.info("  • --resource '4090'     -> 1x RTX 4090 GPU")
     logger.info("=" * 60)
 
 
@@ -271,6 +275,7 @@ class ResourceManager:
                     compute_group_id=group.compute_group_id,
                     gpu_type=gpu_type,
                     location=group.location,
+                    workspace_ids=group.workspace_ids,
                 )
             )
 
@@ -338,11 +343,18 @@ class ResourceManager:
     def find_matching_specs(self, gpu_type: GPUType, gpu_count: int) -> list[ResourceSpec]:
         return find_matching_specs(self.resource_specs, gpu_type=gpu_type, gpu_count=gpu_count)
 
-    def find_compute_groups(self, gpu_type: GPUType) -> list[ComputeGroup]:
-        return find_compute_groups(self.compute_groups, gpu_type=gpu_type)
+    def find_compute_groups(
+        self, gpu_type: GPUType, workspace_id: Optional[str] = None
+    ) -> list[ComputeGroup]:
+        return find_compute_groups(
+            self.compute_groups, gpu_type=gpu_type, workspace_id=workspace_id
+        )
 
     def get_recommended_config(
-        self, resource_str: str, prefer_location: Optional[str] = None
+        self,
+        resource_str: str,
+        prefer_location: Optional[str] = None,
+        workspace_id: Optional[str] = None,
     ) -> tuple[str, str]:
         gpu_type, gpu_count = self.parse_resource_request(resource_str)
 
@@ -358,9 +370,11 @@ class ResourceManager:
 
         selected_spec = matching_specs[0]
 
-        matching_groups = self.find_compute_groups(gpu_type)
+        matching_groups = self.find_compute_groups(
+            selected_spec.gpu_type, workspace_id=workspace_id
+        )
         if not matching_groups:
-            raise ValueError(f"No compute group found supporting {gpu_type.value}")
+            raise ValueError(f"No compute group found supporting {selected_spec.gpu_type.value}")
 
         selected_group = select_compute_group(matching_groups, prefer_location=prefer_location)
         return selected_spec.spec_id, selected_group.compute_group_id

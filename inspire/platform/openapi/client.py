@@ -21,8 +21,8 @@ import os
 from typing import Any, Dict, Optional
 
 import requests
-import urllib3
 
+from inspire.platform import tls_policy
 from inspire.platform.openapi.auth import authenticate as _authenticate
 from inspire.platform.openapi.auth import check_authentication as _check_authentication
 from inspire.platform.openapi.http import make_request as _make_request
@@ -38,7 +38,9 @@ from inspire.platform.openapi.errors import (
 from inspire.platform.openapi.models import InspireConfig
 from inspire.platform.openapi.resources import ResourceManager
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# urllib3's InsecureRequestWarning used to be silenced here, unconditionally, at import: a request
+# that skipped verification then looked exactly like one that did not. It is silenced only from the
+# api.skip_ssl_verify path now (see inspire.platform.tls_policy), after that path has said so.
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +124,9 @@ class InspireAPI:
         if _env_enabled("INSPIRE_SKIP_SSL_VERIFY"):
             self.config.verify_ssl = False
 
+        if not self.config.verify_ssl:
+            tls_policy.warn_insecure_channel("OpenAPI client")
+
         self.base_url = self.config.base_url.rstrip("/")
         self.token = None
         self.headers = {"Content-Type": "application/json", "Accept": "application/json"}
@@ -196,6 +201,8 @@ class InspireAPI:
         max_running_time_ms: Optional[str] = None,
         shm_gi: Optional[int] = None,
         auto_fault_tolerance: bool = False,
+        keep_alive_on_success: Optional[int] = None,
+        keep_alive_on_fail: Optional[int] = None,
     ) -> Dict[str, Any]:
         return _create_training_job_smart(
             self,
@@ -212,6 +219,8 @@ class InspireAPI:
             max_running_time_ms=max_running_time_ms,
             shm_gi=shm_gi,
             auto_fault_tolerance=auto_fault_tolerance,
+            keep_alive_on_success=keep_alive_on_success,
+            keep_alive_on_fail=keep_alive_on_fail,
         )
 
     def get_job_detail(self, job_id: str) -> Dict[str, Any]:

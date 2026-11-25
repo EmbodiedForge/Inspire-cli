@@ -33,8 +33,6 @@ retry_delay = 1.0
 
 [paths]
 target_dir = "/shared/EBM_dev"
-log_pattern = "training_master_*.log"
-job_cache = "~/.inspire/jobs.json"
 log_cache_dir = "~/.inspire/logs"
 
 [git]
@@ -97,6 +95,7 @@ denylist = ["*.tmp", ".git/*"]
 # priority = 6
 # shm_size = 32
 # post_start = "bash /workspace/bootstrap.sh"  # none | shell command
+# post_start_mode = "start"  # start | run
 
 [remote_env]
 # Environment variables exported before bridge exec, job commands,
@@ -106,7 +105,26 @@ denylist = ["*.tmp", ".git/*"]
 # APT_MIRROR_URL = "http://nexus.example.com/repository/ubuntu/"  # fallback for notebook ssh bootstrap
 # WANDB_API_KEY = "$WANDB_API_KEY"
 # HF_TOKEN = "$HF_TOKEN"
+
+[remote_runtime]
+# White-box remote runtime for bridge exec, bridge ssh, and job wrappers.
+# Durable defaults live here; temporary agent overrides belong in
+# "inspire runtime ... --scope session".
+# cwd = "/inspire/hdd/global_user/your-user/openpi"
+# path_prepend = ["~/.local/bin", ".venv/bin"]
+# venv = "auto"      # auto | off | "/abs/path/to/venv" | ".venv-name"
+#
+# [remote_runtime.env]
+# UV_LINK_MODE = "copy"
+# Inspect with: inspire runtime show
+# Explain with: inspire runtime explain
 """
+
+
+def _abort_declined() -> None:
+    """Declining a write is not a success: mirror click.Abort (stderr + exit 1)."""
+    click.echo("Aborted.", err=True)
+    raise SystemExit(1)
 
 
 def _init_template_mode(global_flag: bool, project_flag: bool, force: bool) -> None:
@@ -140,8 +158,7 @@ def _init_template_mode(global_flag: bool, project_flag: bool, force: bool) -> N
     if config_path.exists() and not force:
         click.echo(click.style(f"Config file already exists: {config_path}", fg="yellow"))
         if not click.confirm("\nOverwrite existing config?"):
-            click.echo("Aborted.")
-            return
+            _abort_declined()
 
     config_dir.mkdir(parents=True, exist_ok=True)
 
@@ -179,8 +196,7 @@ def _write_single_file(
     if output_path.exists() and not force:
         click.echo(click.style(f"Config file already exists: {output_path}", fg="yellow"))
         if not click.confirm("\nOverwrite existing config?"):
-            click.echo("Aborted.")
-            return
+            _abort_declined()
 
     toml_content = _generate_toml_content(detected)
 
@@ -230,6 +246,7 @@ def _write_auto_split(
 
     if not files_to_write:
         click.echo("No files written.")
+        _abort_declined()
         return
 
     for scope, path in files_to_write:

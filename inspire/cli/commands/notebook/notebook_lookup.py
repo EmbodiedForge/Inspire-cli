@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Iterable
 
 import click
 
@@ -44,19 +44,31 @@ def _sort_notebook_items(items: list[dict]) -> list[dict]:
     return sorted(items, key=lambda item: str(item.get("created_at") or ""), reverse=True)
 
 
-def _normalize_notebook_id(notebook_id: str) -> str:
-    """Normalize notebook ID to UUID format (without notebook- prefix)."""
-    if notebook_id.startswith("notebook-"):
-        return notebook_id[len("notebook-") :]
-    return notebook_id
+def _normalize_notebook_id(notebook_id: object) -> str:
+    """Normalize a notebook reference to the bare UUID form.
+
+    The single accepted spelling for every notebook path: bare UUID, ``nb-<uuid>``, and
+    ``notebook-<uuid>`` all normalize to ``<uuid>``. Non-string values (a platform row's
+    numeric primary key, None) are stringified first so callers never crash on them.
+    """
+    value = str(notebook_id if notebook_id is not None else "").strip()
+    if value.startswith("notebook-"):
+        return value[len("notebook-") :]
+    if value.startswith("nb-"):
+        return value[len("nb-") :]
+    return value
+
+
+def _normalized_tunnel_notebook_ids(tunneled_ids: Iterable[object] | None) -> set[str]:
+    """Normalize bridge-bound notebook IDs (bare UUID for comparison)."""
+    return {_normalize_notebook_id(tid) for tid in tunneled_ids or () if str(tid or "").strip()}
 
 
 def _sort_notebook_items_by_tunnel_priority(
     items: list[dict], tunneled_ids: set[str]
 ) -> list[dict]:
     """Sort notebooks: those with tunnels first, then by created_at descending."""
-    # Normalize tunnel IDs to UUID format for comparison
-    normalized_tunnel_ids = {_normalize_notebook_id(tid) for tid in tunneled_ids}
+    normalized_tunnel_ids = _normalized_tunnel_notebook_ids(tunneled_ids)
 
     # Separate tunneled and non-tunneled notebooks
     tunneled = []
@@ -85,6 +97,10 @@ def _looks_like_notebook_id(value: str) -> bool:
         return False
     if value.startswith("notebook-"):
         return True
+    if value.startswith("nb-"):
+        # Accept the platform's nb-<uuid> form as-is; a non-UUID remainder stays
+        # eligible for name or partial-ID resolution.
+        return bool(_NOTEBOOK_UUID_RE.match(value[len("nb-") :]))
     return bool(_NOTEBOOK_UUID_RE.match(value))
 
 
@@ -95,13 +111,29 @@ def _notebook_id_from_item(item: dict) -> str | None:
     return str(notebook_id)
 
 
+# Per-GPU HBM size (GB) -> product name, for list responses where
+# `resource_spec_price` is null and `quota.gpu_type` is empty.
+_GPU_TYPE_BY_RAM_GB = {
+    141: "H200",
+    96: "H20",
+    80: "H100",
+    48: "4090",
+    24: "4090",
+}
+
+
 def _format_notebook_resource(item: dict) -> str:
     quota = item.get("quota") or {}
     gpu_count = quota.get("gpu_count", 0)
 
     if gpu_count and gpu_count > 0:
         gpu_info = (item.get("resource_spec_price") or {}).get("gpu_info") or {}
-        gpu_type = gpu_info.get("gpu_product_simple") or quota.get("gpu_type") or "GPU"
+        gpu_type = (
+            gpu_info.get("gpu_product_simple")
+            or quota.get("gpu_type")
+            or _GPU_TYPE_BY_RAM_GB.get(int(quota.get("gpu_ram") or 0))
+            or "GPU"
+        )
         return f"{gpu_count}x{gpu_type}"
 
     cpu_count = quota.get("cpu_count", 0)
@@ -116,10 +148,13 @@ def _try_get_current_user_ids(
     base_url: str,
 ) -> list[str]:
     try:
-        user_data = web_session_module.request_json(
+        from inspire.platform.web.browser_api.core import _request_json as browser_request
+
+        user_data = browser_request(
             session,
             "GET",
-            f"{base_url}/api/v1/user/detail",
+            "/api/v1/user/detail",
+            referer=f"{base_url}/jobs/interactiveModeling",
             timeout=30,
         )
         user_id = user_data.get("data", {}).get("id")
@@ -135,10 +170,13 @@ def _get_current_user_detail(
     *,
     base_url: str,
 ) -> dict:
-    user_data = web_session_module.request_json(
+    from inspire.platform.web.browser_api.core import _request_json as browser_request
+
+    user_data = browser_request(
         session,
         "GET",
-        f"{base_url}/api/v1/user/detail",
+        "/api/v1/user/detail",
+        referer=f"{base_url}/jobs/interactiveModeling",
         timeout=30,
     )
     return user_data.get("data", {}) if isinstance(user_data, dict) else {}
@@ -263,10 +301,13 @@ def _list_notebooks_for_workspace(
         "order_by": [{"field": "created_at", "order": "desc"}],
     }
 
-    data = web_session_module.request_json(
+    from inspire.platform.web.browser_api.core import _request_json as browser_request
+
+    data = browser_request(
         session,
         "POST",
-        f"{base_url}/api/v1/notebook/list",
+        "/api/v1/notebook/list",
+        referer=f"{base_url}/jobs/interactiveModeling",
         body=body,
         timeout=30,
     )
@@ -285,40 +326,35 @@ def _collect_workspace_ids_for_lookup(
     session: web_session_module.WebSession,
     config: Any,
 ) -> list[str]:
-    candidates: list[str] = []
-    for ws_id in (
-        getattr(config, "workspace_cpu_id", None),
-        getattr(config, "workspace_gpu_id", None),
-        getattr(config, "workspace_internet_id", None),
-    ):
-        if ws_id:
-            candidates.append(str(ws_id))
+    from inspire.platform.web.browser_api.workspaces import try_enumerate_workspaces
 
-    workspaces_map = getattr(config, "workspaces", None)
-    if isinstance(workspaces_map, dict):
-        candidates.extend(str(value) for value in workspaces_map.values() if value)
-    if getattr(session, "workspace_id", None):
-        candidates.append(str(session.workspace_id))
-
-    workspace_ids = _unique_workspace_ids(candidates)
+    candidates = [str(item.get("id") or "") for item in try_enumerate_workspaces(session)]
+    candidates.extend(str(ws or "") for ws in (getattr(session, "all_workspace_ids", None) or []))
+    candidates.append(str(getattr(session, "workspace_id", "") or ""))
+    workspace_ids = [
+        ws_id for ws_id in _unique_workspace_ids(candidates) if ws_id != _ZERO_WORKSPACE_ID
+    ]
     if workspace_ids:
         return workspace_ids
 
-    resolved_ws = None
-    try:
-        resolved_ws = select_workspace_id(
-            config,
-            legacy_workspace_id=getattr(config, "job_workspace_id", None)
-            or getattr(config, "default_workspace_id", None)
-            or getattr(config, "notebook_workspace_id", None),
-        )
-    except Exception:
-        resolved_ws = None
+    for alias in getattr(config, "workspace_selectors", {}):
+        try:
+            resolved = select_workspace_id(
+                config,
+                explicit_workspace_name=alias,
+                session=session,
+            )
+        except Exception:
+            continue
+        if resolved and resolved != _ZERO_WORKSPACE_ID:
+            return [resolved]
 
-    resolved_ws = resolved_ws or getattr(session, "workspace_id", None)
-    if resolved_ws and resolved_ws != _ZERO_WORKSPACE_ID:
-        return [str(resolved_ws)]
-    return []
+    resolved = (
+        getattr(config, "job_workspace_id", None)
+        or getattr(config, "default_workspace_id", None)
+        or getattr(config, "notebook_workspace_id", None)
+    )
+    return [str(resolved)] if resolved and resolved != _ZERO_WORKSPACE_ID else []
 
 
 def _resolve_partial_notebook_id(
@@ -352,7 +388,7 @@ def _resolve_partial_notebook_id(
             if not nid or nid in seen_ids:
                 continue
             seen_ids.add(nid)
-            uuid_part = nid[9:] if nid.lower().startswith("notebook-") else nid
+            uuid_part = _normalize_notebook_id(nid)
             if uuid_part.lower().startswith(partial):
                 label = item.get("name") or item.get("status") or ""
                 nb_matches.append((nid, label))
@@ -381,10 +417,10 @@ def _resolve_notebook_id(
         )
 
     if _looks_like_notebook_id(identifier):
-        return identifier, None
+        return _normalize_notebook_id(identifier), None
 
-    if is_partial_id(identifier, prefix="notebook-"):
-        partial = normalize_partial(identifier, prefix="notebook-")
+    if is_partial_id(identifier, prefix="notebook-") or is_partial_id(identifier, prefix="nb-"):
+        partial = normalize_partial(normalize_partial(identifier, prefix="notebook-"), prefix="nb-")
         resolved_partial = _resolve_partial_notebook_id(
             ctx,
             session=session,
@@ -498,6 +534,7 @@ __all__ = [
     "_looks_like_notebook_id",
     "_normalize_notebook_id",
     "_notebook_id_from_item",
+    "_normalized_tunnel_notebook_ids",
     "_resolve_notebook_id",
     "_resolve_partial_notebook_id",
     "_sort_notebook_items",

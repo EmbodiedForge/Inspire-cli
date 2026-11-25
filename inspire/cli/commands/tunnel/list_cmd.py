@@ -13,6 +13,7 @@ from inspire.cli.context import Context, pass_context
 from inspire.cli.formatters import json_formatter
 from inspire.cli.utils.common import json_option
 from inspire.cli.utils.notebook_cli import resolve_json_output
+from inspire.platform.web.browser_api.rtunnel import redact_proxy_url
 
 # Valid columns for tunnel list
 VALID_COLUMNS = {
@@ -33,6 +34,9 @@ DEFAULT_LIMIT = 10
 def _fetch_notebook_info(bridges) -> dict[str, tuple[str, str]]:
     """Fetch notebook names for bridges with notebook_id.
 
+    Uses cached notebook_name from BridgeProfile where available,
+    only calls the API for bridges without a cached name.
+
     Returns a dict mapping notebook_id to (name, id) tuple.
     Falls back to (id, id) if fetch fails.
     """
@@ -41,13 +45,17 @@ def _fetch_notebook_info(bridges) -> dict[str, tuple[str, str]]:
 
     notebook_info: dict[str, tuple[str, str]] = {}
 
-    # Collect unique notebook IDs
-    notebook_ids = set()
+    # Collect unique notebook IDs that don't already have a cached name
+    notebook_ids_needing_fetch: set[str] = set()
     for bridge in bridges:
         if bridge.notebook_id:
-            notebook_ids.add(bridge.notebook_id)
+            if bridge.notebook_name:
+                # Use cached name directly — no API call needed
+                notebook_info[bridge.notebook_id] = (bridge.notebook_name, bridge.notebook_id)
+            else:
+                notebook_ids_needing_fetch.add(bridge.notebook_id)
 
-    if not notebook_ids:
+    if not notebook_ids_needing_fetch:
         return notebook_info
 
     # Try to get a web session
@@ -55,12 +63,12 @@ def _fetch_notebook_info(bridges) -> dict[str, tuple[str, str]]:
         session = get_web_session()
     except Exception:
         # No auth, use IDs as names
-        for nid in notebook_ids:
+        for nid in notebook_ids_needing_fetch:
             notebook_info[nid] = (nid, nid)
         return notebook_info
 
     # Fetch notebook details
-    for nid in notebook_ids:
+    for nid in notebook_ids_needing_fetch:
         try:
             detail = get_notebook_detail(nid, session=session)
             name = detail.get("name") or nid
@@ -76,9 +84,17 @@ def _check_bridges(bridges, config, timeout=5):
 
     Returns a dict mapping bridge name to bool (True = connected).
     """
-    results: dict[str, bool] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(bridges)) as pool:
-        futures = {pool.submit(_test_ssh_connection, b, config, timeout): b.name for b in bridges}
+    results: dict[str, bool] = {
+        bridge.name: False for bridge in bridges if not str(bridge.proxy_url or "").strip()
+    }
+    ssh_bridges = [bridge for bridge in bridges if str(bridge.proxy_url or "").strip()]
+    if not ssh_bridges:
+        return results
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(ssh_bridges)) as pool:
+        futures = {
+            pool.submit(_test_ssh_connection, bridge, config, timeout): bridge.name
+            for bridge in ssh_bridges
+        }
         for future in concurrent.futures.as_completed(futures):
             name = futures[future]
             try:
@@ -141,9 +157,9 @@ def _format_column(
             return name
         return bridge.notebook_id
     elif col == "internet":
-        return "yes" if bridge.has_internet else "no"
+        return "has-internet" if bridge.has_internet else "no-internet"
     elif col == "url":
-        return bridge.proxy_url
+        return redact_proxy_url(bridge.proxy_url)
     elif col == "user":
         return bridge.ssh_user
     elif col == "rtunnel":
@@ -196,7 +212,6 @@ def tunnel_list(
     show_all: bool,
     json_output: bool = False,
 ) -> None:
-    json_output = resolve_json_output(ctx, json_output)
     """List all configured bridges.
 
     By default, shows up to 10 tunnels with connected ones listed first.
@@ -210,6 +225,8 @@ def tunnel_list(
         inspire tunnel list -n 20
         inspire tunnel list --all
     """
+
+    json_output = resolve_json_output(ctx, json_output)
     config = load_tunnel_config()
 
     bridges = config.list_bridges()
@@ -234,6 +251,8 @@ def tunnel_list(
         bridge_dicts = []
         for b in ordered_bridges:
             d = b.to_dict()
+            if d.get("proxy_url"):
+                d["proxy_url"] = redact_proxy_url(d["proxy_url"])
             if not no_check:
                 d["ssh_works"] = ssh_status.get(b.name, False)
             bridge_dicts.append(d)
@@ -326,7 +345,7 @@ def _print_verbose(bridges, *, config, ssh_status, no_check):
     for bridge in bridges:
         is_default = bridge.name == config.default_bridge
         default_mark = "* " if is_default else "  "
-        no_internet_mark = " [no internet]" if not bridge.has_internet else ""
+        no_internet_mark = " [no-internet]" if not bridge.has_internet else ""
 
         status_mark = ""
         if not no_check:
@@ -336,9 +355,9 @@ def _print_verbose(bridges, *, config, ssh_status, no_check):
                 status_mark = " " + click.style("[not responding]", fg="red")
 
         click.echo(f"{default_mark}{bridge.name}:{no_internet_mark}{status_mark}")
-        click.echo(f"    URL: {bridge.proxy_url}")
+        click.echo(f"    URL: {redact_proxy_url(bridge.proxy_url)}")
         click.echo(f"    SSH: {bridge.ssh_user}@localhost:{bridge.ssh_port}")
-        click.echo(f"    Internet: {'yes' if bridge.has_internet else 'no'}")
+        click.echo(f"    Internet: {'has-internet' if bridge.has_internet else 'no-internet'}")
         if bridge.notebook_id:
             info = notebook_info.get(bridge.notebook_id)
             if info:

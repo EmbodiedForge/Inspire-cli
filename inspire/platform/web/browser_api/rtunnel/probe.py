@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import re
 from typing import Optional
 
@@ -14,6 +15,7 @@ from .state import (
     get_cached_rtunnel_proxy_candidates,
     save_rtunnel_proxy_state,
 )
+from .verify import probe_rtunnel_proxy_once
 
 _PROXY_PORT_PATTERN = re.compile(r"/proxy/\d+/")
 
@@ -24,19 +26,6 @@ def _rewrite_proxy_port(proxy_url: str, port: int) -> str:
     if _PROXY_PORT_PATTERN.search(proxy_url):
         return _PROXY_PORT_PATTERN.sub(f"/proxy/{port}/", proxy_url, count=1)
     return proxy_url
-
-
-def _is_reachable_proxy_response(*, status_code: int, body: str) -> bool:
-    text = (body or "").strip().lower()
-
-    if status_code == 200:
-        if "econnrefused" in text or "connection refused" in text:
-            return False
-        if "<html" in text:
-            return False
-        return True
-
-    return False
 
 
 def _candidate_urls_from_tunnel_config(
@@ -57,6 +46,24 @@ def _candidate_urls_from_tunnel_config(
             continue
         candidates.append(_rewrite_proxy_port(proxy_url, port))
     return candidates
+
+
+def _probe_single_url(session: WebSession, base_url: str, url: str) -> str | None:
+    try:
+        http = build_requests_session(session, base_url)
+        try:
+            ready, _summary = probe_rtunnel_proxy_once(
+                proxy_url=url,
+                session=http,
+                request_timeout_ms=5000,
+            )
+            if ready:
+                return url
+        finally:
+            http.close()
+    except Exception:
+        pass
+    return None
 
 
 def probe_existing_rtunnel_proxy_url(
@@ -94,36 +101,25 @@ def probe_existing_rtunnel_proxy_url(
         )
     )
     deduped_urls = list(dict.fromkeys(urls))
+    if not deduped_urls:
+        return None
 
-    http: Optional[object] = None
-    try:
-        http = build_requests_session(session, base_url)
-        for url in deduped_urls:
-            try:
-                resp = http.get(url, timeout=5)  # type: ignore[attr-defined]
-            except (ConnectionError, OSError, RuntimeError, TimeoutError, ValueError):
-                continue
-            body = resp.text[:400] if getattr(resp, "text", "") else ""  # type: ignore[attr-defined]
-            if not _is_reachable_proxy_response(status_code=resp.status_code, body=body):  # type: ignore[attr-defined]
-                continue
-            try:
-                save_rtunnel_proxy_state(
-                    notebook_id=notebook_id,
-                    proxy_url=url,
-                    port=port,
-                    ssh_port=22222,
-                    base_url=base_url,
-                    account=resolved_account,
-                )
-            except OSError:
-                pass
-            return url
-        return None
-    except (OSError, ValueError, RuntimeError, AttributeError):
-        return None
-    finally:
-        try:
-            if http is not None:
-                http.close()  # type: ignore[attr-defined]
-        except (OSError, AttributeError):
-            pass
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(deduped_urls), 8)) as pool:
+        futures = [pool.submit(_probe_single_url, session, base_url, url) for url in deduped_urls]
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result:
+                try:
+                    save_rtunnel_proxy_state(
+                        notebook_id=notebook_id,
+                        proxy_url=result,
+                        port=port,
+                        ssh_port=22222,
+                        base_url=base_url,
+                        account=resolved_account,
+                    )
+                except OSError:
+                    pass
+                return result
+
+    return None

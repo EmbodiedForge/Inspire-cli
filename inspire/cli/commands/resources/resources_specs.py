@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import click
 
@@ -18,7 +18,11 @@ from inspire.cli.utils.common import json_option
 from inspire.cli.utils.errors import exit_with_error
 from inspire.cli.utils.notebook_cli import resolve_json_output
 from inspire.config import Config
-from inspire.platform.openapi.workspace_specs import fetch_workspace_specs, save_specs_to_config
+from inspire.platform.openapi.workspace_specs import (
+    fetch_workspace_specs,
+    load_specs_from_config,
+    save_specs_to_config,
+)
 from inspire.platform.web.session import get_web_session
 
 if TYPE_CHECKING:
@@ -80,7 +84,7 @@ def show_specs(ctx: Context, workspace_id: str | None, refresh: bool, json_outpu
     except Exception:
         config = Config.from_env()
 
-    if not config.workspace_specs:
+    if not config.workspace_specs and not refresh:
         if json_output:
             click.echo(json_formatter.format_json({"workspaces": {}}))
         else:
@@ -89,12 +93,7 @@ def show_specs(ctx: Context, workspace_id: str | None, refresh: bool, json_outpu
 
     if refresh:
         # Get workspace to refresh
-        ws_id = workspace_id or (
-            config.job_workspace_id
-            or config.workspace_gpu_id
-            or config.workspace_cpu_id
-            or config.default_workspace_id
-        )
+        ws_id = workspace_id or config.job_workspace_id or config.default_workspace_id
         if not ws_id:
             try:
                 session = get_web_session(require_workspace=False)
@@ -116,12 +115,12 @@ def show_specs(ctx: Context, workspace_id: str | None, refresh: bool, json_outpu
             save_specs_to_config(config, ws_id, specs)
 
             if json_output:
-                output = {
+                refresh_output = {
                     "workspace_id": ws_id,
                     "source": "refreshed",
                     "specs": _specs_to_dict(specs),
                 }
-                click.echo(json_formatter.format_json(output))
+                click.echo(json_formatter.format_json(refresh_output))
             else:
                 click.echo(f"\n📋 Refreshed specs for workspace: {ws_id}")
                 click.echo(_format_specs(specs))
@@ -136,17 +135,22 @@ def show_specs(ctx: Context, workspace_id: str | None, refresh: bool, json_outpu
             )
             return
 
-    # Show cached specs
-    workspaces_to_show = {}
+    # Show cached specs. config.workspace_specs holds raw TOML dicts, while the
+    # formatters need ResourceSpec objects, so normalize before rendering.
+    workspaces_to_show: dict[str, list] = {}
+    unparseable: list[str] = []
     if workspace_id:
-        if workspace_id in config.workspace_specs:
-            workspaces_to_show = {workspace_id: config.workspace_specs[workspace_id]}
+        cached = load_specs_from_config(config, workspace_id) or []
+        if cached:
+            workspaces_to_show = {workspace_id: cached}
         else:
+            if config.workspace_specs.get(workspace_id):
+                unparseable.append(workspace_id)
             # Try to fetch
             try:
                 specs = fetch_workspace_specs(workspace_id)
                 save_specs_to_config(config, workspace_id, specs)
-                workspaces_to_show = {workspace_id: _specs_to_dict(specs)}
+                workspaces_to_show = {workspace_id: specs}
             except RuntimeError as e:
                 exit_with_error(
                     ctx,
@@ -156,26 +160,44 @@ def show_specs(ctx: Context, workspace_id: str | None, refresh: bool, json_outpu
                 )
                 return
     else:
-        workspaces_to_show = dict(config.workspace_specs)
+        for cached_ws_id in config.workspace_specs:
+            cached = load_specs_from_config(config, cached_ws_id) or []
+            if cached:
+                workspaces_to_show[cached_ws_id] = cached
+            else:
+                unparseable.append(cached_ws_id)
 
     if json_output:
-        output = {"workspaces": workspaces_to_show}
+        output: dict[str, Any] = {
+            "workspaces": {
+                ws_id: _specs_to_dict(specs) for ws_id, specs in workspaces_to_show.items()
+            },
+            "unparseable_workspaces": unparseable,
+        }
         click.echo(json_formatter.format_json(output))
     else:
         if not workspaces_to_show:
             click.echo("No specs to display.")
+            if unparseable:
+                click.echo(
+                    "Cached entries could not be parsed (unknown gpu_type or missing fields). "
+                    "Run: inspire resources specs --refresh"
+                )
             return
+
+        if unparseable:
+            click.echo(
+                click.style(
+                    f"Warning: {len(unparseable)} cached workspace(s) have unreadable specs; "
+                    "run 'inspire resources specs --refresh' to re-probe.",
+                    fg="yellow",
+                )
+            )
 
         lines = ["", "📋 Cached Resource Specs", ""]
         for ws_id, specs in workspaces_to_show.items():
             name = config.workspace_names.get(ws_id, "")
-            alias = None
-            for a, wid in (config.workspaces or {}).items():
-                if wid == ws_id:
-                    alias = a
-                    break
-
-            display = f"{name} [{alias}]" if name and alias else (name or alias or ws_id)
+            display = name or ws_id
             lines.append(f"Workspace: {display} ({ws_id})")
             lines.append(_format_specs(specs))
             lines.append(f"Total: {len(specs)} specs\n")

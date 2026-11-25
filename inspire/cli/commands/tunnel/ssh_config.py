@@ -28,7 +28,6 @@ from inspire.cli.utils.output import emit_info, emit_success
 @json_option
 @pass_context
 def tunnel_ssh_config(ctx: Context, bridge: str, install: bool, json_output: bool = False) -> None:
-    json_output = resolve_json_output(ctx, json_output)
     """Generate SSH config for direct SSH access to all bridges.
 
     This allows using 'ssh <bridge-name>', 'scp', 'rsync', etc.
@@ -36,7 +35,7 @@ def tunnel_ssh_config(ctx: Context, bridge: str, install: bool, json_output: boo
 
     \b
     Benefits:
-        - Works with scp, rsync, git, and all SSH-based tools
+        - Works with scp, git, and every other SSH-based tool
         - Each connection gets a fresh tunnel
         - No background process to manage
 
@@ -51,7 +50,16 @@ def tunnel_ssh_config(ctx: Context, bridge: str, install: bool, json_output: boo
         ssh <bridge-name>
         scp file.txt <bridge-name>:/path/
         rsync -av ./local/ <bridge-name>:/remote/
+
+    \b
+    rsync caveat: these entries only cover the local side. Plain rsync also needs an
+    rsync binary inside the container, and the pods do not ship one, so the example above
+    fails with "remote command rsync not found" until you install it. 'inspire bridge sync'
+    installs it on demand and drives rsync over this same ProxyCommand, so prefer it for
+    whole-directory pushes.
     """
+
+    json_output = resolve_json_output(ctx, json_output)
     try:
         config = load_tunnel_config()
 
@@ -76,22 +84,23 @@ def tunnel_ssh_config(ctx: Context, bridge: str, install: bool, json_output: boo
                 )
 
             ssh_config = generate_ssh_config(bridge_profile, rtunnel_path, host_alias=bridge)
+            # --install has to happen before the JSON branch returns, otherwise
+            # `--json --install` reported success having installed nothing.
+            install_result = install_ssh_config(ssh_config, bridge) if install else None
 
             if ctx.json_output:
-                click.echo(
-                    json_formatter.format_json(
-                        {
-                            "bridge": bridge,
-                            "config": ssh_config,
-                            "rtunnel_path": str(rtunnel_path),
-                        }
-                    )
-                )
+                payload: dict = {
+                    "bridge": bridge,
+                    "config": ssh_config,
+                    "rtunnel_path": str(rtunnel_path),
+                }
+                if install_result is not None:
+                    payload["install"] = install_result
+                click.echo(json_formatter.format_json(payload))
                 return
 
-            if install:
-                result = install_ssh_config(ssh_config, bridge)
-                if result["updated"]:
+            if install_result is not None:
+                if install_result["updated"]:
                     emit_success(
                         ctx,
                         payload={
@@ -115,29 +124,29 @@ def tunnel_ssh_config(ctx: Context, bridge: str, install: bool, json_output: boo
                 emit_info(ctx, "You can now use:")
                 emit_info(ctx, f"  ssh {bridge}")
             else:
-                click.echo(f"SSH config for bridge '{bridge}':\n")
-                click.echo("-" * 50)
+                # stdout is the artifact: `inspire tunnel ssh-config > ~/.ssh/config` and
+                # `ssh -F <(inspire tunnel ssh-config)` must both work, so prose goes to stderr and the
+                # separator is a `#` comment, which ssh_config actually allows. See issue #32.
+                click.echo(f"SSH config for bridge '{bridge}':", err=True)
+                click.echo(f"# bridge: {bridge}")
                 click.echo(ssh_config)
-                click.echo("-" * 50)
             return
 
         all_configs = generate_all_ssh_configs(config)
+        install_result = install_all_ssh_configs(config) if install else None
 
         if ctx.json_output:
-            click.echo(
-                json_formatter.format_json(
-                    {
-                        "bridges": list(config.bridges.keys()),
-                        "config": all_configs,
-                        "rtunnel_path": str(rtunnel_path),
-                    }
-                )
-            )
+            payload = {
+                "bridges": list(config.bridges.keys()),
+                "config": all_configs,
+                "rtunnel_path": str(rtunnel_path),
+            }
+            if install_result is not None:
+                payload["install"] = install_result
+            click.echo(json_formatter.format_json(payload))
             return
 
-        if install:
-            install_all_ssh_configs(config)
-
+        if install_result is not None:
             emit_success(
                 ctx,
                 payload={
@@ -152,10 +161,9 @@ def tunnel_ssh_config(ctx: Context, bridge: str, install: bool, json_output: boo
             for b in sorted(config.bridges.keys()):
                 emit_info(ctx, f"  ssh {b}")
         else:
-            click.echo("SSH config for all bridges:\n")
-            click.echo("-" * 50)
+            click.echo("SSH config for all bridges:", err=True)
+            click.echo("# generated by inspire tunnel ssh-config")
             click.echo(all_configs)
-            click.echo("-" * 50)
             emit_info(ctx, "")
             emit_info(ctx, "Or run with --install to auto-add:")
             emit_info(ctx, "  inspire tunnel ssh-config --install")

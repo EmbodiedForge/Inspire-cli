@@ -16,10 +16,8 @@ from typing import Optional
 
 from inspire.config import Config
 from .artifacts import (
-    _find_artifact_by_name,
     download_bridge_artifact,
     fetch_bridge_output_log,
-    wait_for_log_artifact,
 )
 from .clients import (
     ForgeClient,
@@ -42,11 +40,6 @@ from .helpers import (
     _matches_inputs,
     _parse_event_inputs,
 )
-from .logs import (
-    _prune_old_logs,
-    fetch_remote_log_incremental,
-    fetch_remote_log_via_bridge,
-)
 from .models import (
     ForgeAuthError,
     ForgeError,
@@ -58,7 +51,6 @@ from .workflows import (
     get_workflow_run,
     get_workflow_runs,
     trigger_bridge_action_workflow,
-    trigger_log_retrieval_workflow,
     trigger_sync_workflow,
     trigger_workflow_dispatch,
     wait_for_workflow_completion,
@@ -155,20 +147,14 @@ __all__ = [
     "_matches_inputs",
     "_find_run_by_inputs",
     "_artifact_name",
-    "_find_artifact_by_name",
-    "_prune_old_logs",
     # Workflows
     "trigger_workflow_dispatch",
-    "trigger_log_retrieval_workflow",
     "trigger_sync_workflow",
     "trigger_bridge_action_workflow",
     "get_workflow_runs",
     "get_workflow_run",
     "wait_for_workflow_completion",
-    # Artifacts / logs
-    "wait_for_log_artifact",
-    "fetch_remote_log_via_bridge",
-    "fetch_remote_log_incremental",
+    # Artifacts
     "wait_for_bridge_action_completion",
     "download_bridge_artifact",
     "fetch_bridge_output_log",

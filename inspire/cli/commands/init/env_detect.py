@@ -42,6 +42,10 @@ def _detect_env_vars() -> list[tuple[ConfigOption, str]]:
     return detected
 
 
+def _toml_string(value: object) -> str:
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def _generate_toml_content(
     detected: list[tuple[ConfigOption, str]], scope_filter: str | None = None
 ) -> str:
@@ -101,9 +105,9 @@ def _generate_toml_content(
             elif isinstance(parsed, (int, float)):
                 toml_value = str(parsed)
             elif isinstance(parsed, list):
-                toml_value = "[" + ", ".join(f'"{item}"' for item in parsed) + "]"
+                toml_value = "[" + ", ".join(_toml_string(item) for item in parsed) + "]"
             else:
-                toml_value = '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+                toml_value = _toml_string(value)
 
             lines.append(f"{key} = {toml_value}")
 

@@ -51,12 +51,17 @@ def _get_config_paths() -> tuple[Path, Path]:
     "--force",
     "-f",
     is_flag=True,
-    help="Overwrite existing files without prompting",
+    help="Overwrite existing files without overwrite prompts",
 )
 @click.option(
     "--discover",
     is_flag=True,
     help="Discover projects/workspaces and write per-account catalog",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Observe and diff discovery without writing config, state, project, or SSH files",
 )
 @click.option(
     "--probe-shared-path",
@@ -144,6 +149,7 @@ def init(
     project_flag: bool,
     force: bool,
     discover: bool,
+    dry_run: bool,
     probe_shared_path: bool,
     probe_limit: int,
     probe_keep_notebooks: bool,
@@ -216,6 +222,9 @@ def init(
             "--username, --base-url, and --target-dir are only effective with --discover and were ignored."
         )
 
+    if dry_run and not discover:
+        raise click.UsageError("--dry-run requires --discover")
+
     try:
         if global_flag and project_flag:
             raise ValueError("Cannot specify both --global and --project")
@@ -231,10 +240,18 @@ def init(
 
             from .wizard import run_wizard
 
-            success = run_wizard(global_path, project_path, force=force, yes=yes)
-            if success:
-                # Run auto-validation after wizard completes
-                _run_auto_validation(ctx)
+            success = run_wizard(
+                global_path,
+                project_path,
+                force=force,
+                yes=yes,
+                account_alias=ctx.account_alias,
+            )
+            if not success:
+                click.echo("Aborted.", err=True)
+                raise SystemExit(1)
+            # Run auto-validation after wizard completes
+            _run_auto_validation(ctx)
             return
 
         if discover:
@@ -242,19 +259,26 @@ def init(
                 raise ValueError("Cannot combine --discover with --template")
             if global_flag or project_flag:
                 raise ValueError("--discover always writes both global and project config")
+            if dry_run and probe_shared_path:
+                raise ValueError("--dry-run cannot be combined with --probe-shared-path")
 
             if not probe_shared_path and (
                 probe_limit or probe_keep_notebooks or probe_pubkey or probe_timeout != 900
             ):
                 _warn("Probe options require --probe-shared-path and were ignored.")
 
-            if effective_json and not force and (global_path.exists() or project_path.exists()):
+            if (
+                effective_json
+                and not dry_run
+                and not force
+                and (global_path.exists() or project_path.exists())
+            ):
                 raise ValueError(
                     "JSON mode is non-interactive for discover updates; rerun with --force when "
                     "config files already exist."
                 )
 
-            run_init_action(
+            discover_report = run_init_action(
                 _init_discover_mode,
                 effective_json,
                 force,
@@ -266,6 +290,9 @@ def init(
                 cli_username=username,
                 cli_base_url=base_url,
                 cli_target_dir=target_dir,
+                dry_run=dry_run,
+                yes=yes,
+                interactive=not effective_json,
             )
 
             emit_init_json(
@@ -275,6 +302,7 @@ def init(
                 detected=[],
                 warnings=warnings,
                 discover={
+                    **(discover_report or {}),
                     "probe_enabled": bool(probe_shared_path),
                     "probe_limit": int(probe_limit),
                     "probe_keep_notebooks": bool(probe_keep_notebooks),
@@ -284,8 +312,14 @@ def init(
                 effective_json=effective_json,
             )
 
+            # The user declined the overwrite prompt: nothing was written, so a
+            # successful exit would claim a discovery that never happened.
+            if (discover_report or {}).get("cancelled"):
+                raise SystemExit(EXIT_GENERAL_ERROR)
+
             # Run auto-validation after init completes
-            _run_auto_validation(ctx)
+            if not dry_run:
+                _run_auto_validation(ctx)
             return
 
         if probe_shared_path:

@@ -64,6 +64,38 @@ DEFAULTS_OPTIONS: list[ConfigOption] = [
     ),
 ]
 
+RUNTIME_OPTIONS: list[ConfigOption] = [
+    ConfigOption(
+        env_var="INSPIRE_REMOTE_RUNTIME_CWD",
+        toml_key="remote_runtime.cwd",
+        field_name="remote_runtime_cwd",
+        description="Remote working directory for bridge exec, bridge ssh, and job wrappers",
+        default=None,
+        category="Runtime",
+        scope="project",
+    ),
+    ConfigOption(
+        env_var="INSPIRE_REMOTE_RUNTIME_PATH_PREPEND",
+        toml_key="remote_runtime.path_prepend",
+        field_name="remote_runtime_path_prepend",
+        description="Paths to prepend to remote PATH before bridge exec, bridge ssh, and job wrappers",
+        default=[],
+        category="Runtime",
+        parser=_parse_list,
+        scope="project",
+        value_type=list,
+    ),
+    ConfigOption(
+        env_var="INSPIRE_REMOTE_RUNTIME_VENV",
+        toml_key="remote_runtime.venv",
+        field_name="remote_runtime_venv",
+        description="Remote virtualenv mode: auto, off, or a virtualenv path",
+        default="auto",
+        category="Runtime",
+        scope="project",
+    ),
+]
+
 JOB_OPTIONS: list[ConfigOption] = [
     ConfigOption(
         env_var="INSPIRE_JOB_RESOURCE",
@@ -171,6 +203,15 @@ NOTEBOOK_OPTIONS: list[ConfigOption] = [
         category="Notebook",
         scope="project",
     ),
+    ConfigOption(
+        env_var="INSPIRE_NOTEBOOK_POST_START_MODE",
+        toml_key="notebook.post_start_mode",
+        field_name="notebook_post_start_mode",
+        description='Post-start notebook mode: "start" backgrounds the action, "run" waits',
+        default=None,
+        category="Notebook",
+        scope="project",
+    ),
 ]
 
 SYNC_OPTIONS: list[ConfigOption] = [
@@ -185,32 +226,4 @@ SYNC_OPTIONS: list[ConfigOption] = [
     ),
 ]
 
-WORKSPACES_OPTIONS: list[ConfigOption] = [
-    ConfigOption(
-        env_var="INSPIRE_WORKSPACE_CPU_ID",
-        toml_key="workspaces.cpu",
-        field_name="workspace_cpu_id",
-        description="Workspace ID for CPU workloads (default workspace)",
-        default=None,
-        category="Workspaces",
-        scope="project",
-    ),
-    ConfigOption(
-        env_var="INSPIRE_WORKSPACE_GPU_ID",
-        toml_key="workspaces.gpu",
-        field_name="workspace_gpu_id",
-        description="Workspace ID for GPU workloads (H100/H200)",
-        default=None,
-        category="Workspaces",
-        scope="project",
-    ),
-    ConfigOption(
-        env_var="INSPIRE_WORKSPACE_INTERNET_ID",
-        toml_key="workspaces.internet",
-        field_name="workspace_internet_id",
-        description="Workspace ID for internet-enabled workloads (e.g. RTX 4090)",
-        default=None,
-        category="Workspaces",
-        scope="project",
-    ),
-]
+WORKSPACES_OPTIONS: list[ConfigOption] = []

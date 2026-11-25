@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import posixpath
+import shlex
 from typing import Optional
 
 from inspire.config.rtunnel_defaults import (
@@ -16,7 +18,10 @@ from inspire.config.ssh_runtime import (
 )
 
 BOOTSTRAP_SENTINEL = "/tmp/.inspire_rtunnel_bootstrap_v1"
+SSHD_SENTINEL = "${HOME:-/root}/.inspire/ssh_state/.sshd_ready"
+RTUNNEL_SENTINEL = "${HOME:-/root}/.inspire/ssh_state/.rtunnel_ready"
 SETUP_DONE_MARKER = "INSPIRE_RTUNNEL_SETUP_DONE"
+STEP_FAILED_PREFIX = "INSPIRE_STEP_FAILED="
 SSHD_MISSING_MARKER = "INSPIRE_SSHD_INSTALL_FAILED"
 SSH_SERVER_MISSING_MARKER = "INSPIRE_SSH_SERVER_MISSING"
 
@@ -177,58 +182,118 @@ def _build_rtunnel_bin_lines(
     return lines
 
 
-def _build_curl_rtunnel_block(*, skip_curl: bool) -> str:
+def _step_block(step_id: str, body_lines: list[str]) -> list[str]:
+    """Wrap bash lines with start/success markers."""
+    return [
+        f'__INSPIRE_STEP="{step_id}"',
+        f'__inspire_mark START "{step_id}"',
+        *body_lines,
+        f'__inspire_mark OK "{step_id}"',
+        '__INSPIRE_STEP="setup"',
+    ]
+
+
+def _step_block_checked(step_id: str, body_lines: list[str], check_cmd: str) -> list[str]:
+    """Wrap bash lines with start/success markers and verify the step succeeded.
+
+    After the body executes, *check_cmd* is run.  If it exits non-zero the step
+    is reported as FAILED with the captured stderr.
+    """
+    return [
+        f'__INSPIRE_STEP="{step_id}"',
+        f'__inspire_mark START "{step_id}"',
+        *body_lines,
+        "set +e",
+        f"_step_out=$({check_cmd} 2>&1)",
+        "_step_rc=$?",
+        "set -e",
+        "if [ $_step_rc -ne 0 ]; then",
+        f'  __inspire_fail $_step_rc $LINENO {shlex.quote(check_cmd)} "$_step_out"',
+        "  exit $_step_rc",
+        "else",
+        f'  __inspire_mark OK "{step_id}"',
+        "fi",
+        '__INSPIRE_STEP="setup"',
+    ]
+
+
+def _step_cmd(step_id: str, cmd: str) -> list[str]:
+    """Wrap a single command with error capture."""
+    return [
+        f'__INSPIRE_STEP="{step_id}"',
+        f'__inspire_mark START "{step_id}"',
+        "set +e",
+        f"_step_out=$({cmd} 2>&1)",
+        "_step_rc=$?",
+        "set -e",
+        "if [ $_step_rc -ne 0 ]; then",
+        f'  __inspire_fail $_step_rc $LINENO {shlex.quote(cmd)} "$_step_out"',
+        "  exit $_step_rc",
+        "else",
+        f'  __inspire_mark OK "{step_id}"',
+        "fi",
+        '__INSPIRE_STEP="setup"',
+    ]
+
+
+def _build_probe_inet_step() -> list[str]:
+    return _step_block(
+        "probe_inet",
+        [
+            "_INET=0",
+            "timeout 3 \"$__INSPIRE_BASH\" -c 'exec 3<>/dev/tcp/archive.ubuntu.com/80' 2>/dev/null && _INET=1 || true",
+        ],
+    )
+
+
+def _build_bootstrap_openssh_step(*, sshd_deb_dir: Optional[str]) -> list[str]:
+    body = (
+        'if { [ ! -f "$SSHD_SENTINEL" ] && [ ! -f "$BOOTSTRAP_SENTINEL" ]; } || [ ! -x /usr/sbin/sshd ]; then '
+        "if [ ! -x /usr/sbin/sshd ]; then "
+    )
+    if sshd_deb_dir:
+        body += (
+            'if [ -n "${SSHD_DEB_DIR:-}" ] && ls "$SSHD_DEB_DIR"/*.deb >/dev/null 2>&1; then '
+            'dpkg -i "$SSHD_DEB_DIR"/*.deb >/dev/null 2>&1 || true; '
+            'elif [ -z "${SSHD_DEB_DIR:-}" ] && [ "$_INET" = 1 ]; then '
+        )
+    else:
+        body += 'if [ "$_INET" = 1 ]; then '
+    body += (
+        "export DEBIAN_FRONTEND=noninteractive; "
+        "timeout 30 apt-get -o Acquire::Retries=0 -o Acquire::http::Timeout=10 update -qq && "
+        "timeout 30 apt-get install -y -qq openssh-server; fi; fi; "
+        'if [ -x /usr/sbin/sshd ]; then mkdir -p "${SSHD_SENTINEL%/*}" && touch "$SSHD_SENTINEL"; fi; fi'
+    )
+    return _step_block_checked("bootstrap_openssh", [body], "test -x /usr/sbin/sshd")
+
+
+def _build_ensure_rtunnel_step(*, skip_curl: bool) -> list[str]:
+    body = (
+        'if { [ ! -f "$RTUNNEL_SENTINEL" ] && [ ! -f "$BOOTSTRAP_SENTINEL" ]; } || [ ! -x "$RTUNNEL_BIN" ]; then '
+        'if [ ! -x "$RTUNNEL_BIN" ] && [ -n "${RTUNNEL_BIN_PATH:-}" ] && [ -x "$RTUNNEL_BIN_PATH" ]; then RTUNNEL_BIN="$RTUNNEL_BIN_PATH"; fi; '
+    )
     if skip_curl:
-        return (
+        body += (
             'if [ ! -x "$RTUNNEL_BIN" ]; then '
             'echo "ERROR: rtunnel binary not found at $RTUNNEL_BIN '
-            '(no curl fallback for offline notebooks)" >&2; fi'
+            '(no curl fallback for offline notebooks)" >&2; fi; '
         )
-    return (
-        'if [ ! -x "$RTUNNEL_BIN" ] && [ "$_INET" = 1 ]; then curl -fsSL '
-        "--connect-timeout 10 --max-time 30 "
-        '"$RTUNNEL_DOWNLOAD_URL" -o "$RTUNNEL_BIN.tgz" && '
-        'tar -xzf "$RTUNNEL_BIN.tgz" -C /tmp && chmod +x "$RTUNNEL_BIN" '
-        "2>/dev/null; fi"
-    )
+    else:
+        body += (
+            'if [ ! -x "$RTUNNEL_BIN" ] && [ "$_INET" = 1 ]; then curl -fsSL '
+            "--connect-timeout 10 --max-time 30 "
+            '"$RTUNNEL_DOWNLOAD_URL" -o "$RTUNNEL_BIN.tgz" && '
+            'tar -xzf "$RTUNNEL_BIN.tgz" -C /tmp && chmod +x "$RTUNNEL_BIN" '
+            "2>/dev/null; fi; "
+        )
+    body += 'if [ -x "$RTUNNEL_BIN" ]; then mkdir -p "${RTUNNEL_SENTINEL%/*}" && touch "$RTUNNEL_SENTINEL"; fi; fi'
+    return _step_block_checked("ensure_rtunnel_bin", [body], 'test -x "$RTUNNEL_BIN"')
 
 
-def _inet_probe_command() -> str:
-    return (
-        "_INET=0; timeout 3 bash -c 'exec 3<>/dev/tcp/archive.ubuntu.com/80' 2>/dev/null && _INET=1"
-    )
-
-
-def _build_openssh_bootstrap_cmd(*, curl_rtunnel_block: str) -> str:
-    return (
-        'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x "$RTUNNEL_BIN" ] '
-        "|| [ ! -x /usr/sbin/sshd ]; then "
-        f"{_inet_probe_command()}; "
-        "if [ ! -x /usr/sbin/sshd ]; then "
-        'if [ -n "${SSHD_DEB_DIR:-}" ] && ls "$SSHD_DEB_DIR"/*.deb >/dev/null 2>&1; then '
-        'dpkg -i "$SSHD_DEB_DIR"/*.deb >/dev/null 2>&1 || true; '
-        'elif [ -z "${SSHD_DEB_DIR:-}" ] && [ "$_INET" = 1 ]; then '
-        "export DEBIAN_FRONTEND=noninteractive; "
-        "timeout 30 apt-get -o Acquire::Retries=0 -o Acquire::http::Timeout=10 "
-        "update -qq && "
-        "timeout 30 apt-get install -y -qq openssh-server; fi; fi; "
-        f"{curl_rtunnel_block}; "
-        'if [ -x /usr/sbin/sshd ] && [ -x "$RTUNNEL_BIN" ]; then '
-        'touch "$BOOTSTRAP_SENTINEL"; else rm -f "$BOOTSTRAP_SENTINEL"; fi; fi'
-    )
-
-
-def _build_ensure_rtunnel_cmd(*, curl_rtunnel_block: str) -> str:
-    return (
-        'if [ ! -x "$RTUNNEL_BIN" ] && [ -n "${RTUNNEL_BIN_PATH:-}" ] '
-        '&& [ -x "$RTUNNEL_BIN_PATH" ]; then RTUNNEL_BIN="$RTUNNEL_BIN_PATH"; fi; '
-        f"{curl_rtunnel_block}"
-    )
-
-
-def _build_start_sshd_cmd() -> str:
+def _build_start_sshd_step() -> list[str]:
     ssh_listener_check = _build_ssh_listener_check()
-    return (
+    body = (
         f"if [ -x /usr/sbin/sshd ] && ! {ssh_listener_check}; then "
         "mkdir -p /run/sshd && chmod 0755 /run/sshd; "
         "ssh-keygen -A >/dev/null 2>&1 || true; "
@@ -236,11 +301,12 @@ def _build_start_sshd_cmd() -> str:
         "-o PasswordAuthentication=no -o PubkeyAuthentication=yes "
         ">/dev/null 2>&1 & fi"
     )
+    return _step_block_checked("start_sshd", [body], ssh_listener_check)
 
 
-def _build_start_dropbear_cmd() -> str:
+def _build_start_dropbear_step(dropbear_host_key: str) -> list[str]:
     ssh_listener_check = _build_ssh_listener_check()
-    return (
+    body = (
         f"if ! {ssh_listener_check}; then "
         'if [ -n "${DROPBEAR_DEB_DIR:-}" ] || [ -n "${APT_MIRROR_URL:-}" ]; then '
         'DB_BIN=""; '
@@ -254,9 +320,11 @@ def _build_start_dropbear_cmd() -> str:
         'if [ -z "$DB_BIN" ] && [ -n "${DROPBEAR_DEB_DIR:-}" ] && '
         'ls "$DROPBEAR_DEB_DIR"/*.deb >/dev/null 2>&1; then '
         'dpkg -i "$DROPBEAR_DEB_DIR"/*.deb >/dev/null 2>&1 || true; '
-        "[ -x /usr/sbin/dropbear ] && DB_BIN=/usr/sbin/dropbear; fi; "
+        "if [ -x /usr/sbin/dropbear ] && /usr/sbin/dropbear -V >/dev/null 2>&1; then "
+        "DB_BIN=/usr/sbin/dropbear; fi; fi; "
         'if [ -z "$DB_BIN" ] || [ ! -x "$DB_BIN" ]; then '
-        "[ -x /usr/sbin/dropbear ] && DB_BIN=/usr/sbin/dropbear; fi; "
+        "if [ -x /usr/sbin/dropbear ] && /usr/sbin/dropbear -V >/dev/null 2>&1; then "
+        "DB_BIN=/usr/sbin/dropbear; fi; fi; "
         'if { [ -z "$DB_BIN" ] || [ ! -x "$DB_BIN" ]; } && [ -n "${APT_MIRROR_URL:-}" ]; then '
         'DISTRO_ID=$(. /etc/os-release 2>/dev/null && echo "${ID:-}"); '
         'MIRROR_DISTRO="${DISTRO_ID:-ubuntu}"; '
@@ -280,32 +348,69 @@ def _build_start_dropbear_cmd() -> str:
         "export DEBIAN_FRONTEND=noninteractive; "
         "timeout 60 apt-get update -qq >/dev/null 2>&1 || true; "
         "dpkg --remove --force-remove-reinstreq openssh-server >/dev/null 2>&1 || true; "
+        "dpkg --remove --force-remove-reinstreq dropbear-bin >/dev/null 2>&1 || true; "
         "timeout 60 apt-get install -y -qq dropbear-bin >/dev/null 2>&1 || true; "
         "for _f in /etc/apt/sources.list.bak /etc/apt/sources.list.d/*.list.bak "
         "/etc/apt/sources.list.d/*.sources.bak; do "
         '[ -f "$_f" ] && mv "$_f" "${_f%.bak}" 2>/dev/null; done; '
-        "[ -x /usr/sbin/dropbear ] && DB_BIN=/usr/sbin/dropbear; fi; "
+        "if [ -x /usr/sbin/dropbear ] && /usr/sbin/dropbear -V >/dev/null 2>&1; then "
+        "DB_BIN=/usr/sbin/dropbear; fi; fi; "
         'if [ -n "$DB_BIN" ] && [ -x "$DB_BIN" ]; then '
         'DB_KEY=""; '
         '[ -n "${DROPBEAR_DEB_DIR:-}" ] && [ -x "$DROPBEAR_DEB_DIR/usr/bin/dropbearkey" ] '
-        '&& DB_KEY="$DROPBEAR_DEB_DIR/usr/bin/dropbearkey"; '
-        '[ -z "$DB_KEY" ] && DB_KEY=$(which dropbearkey 2>/dev/null || true); '
-        'if [ ! -f /tmp/dropbear_ed25519_host_key ] && [ -n "$DB_KEY" ] && [ -x "$DB_KEY" ]; then '
-        '"$DB_KEY" -t ed25519 -f /tmp/dropbear_ed25519_host_key >/dev/null 2>&1; fi; '
-        "if [ -f /tmp/dropbear_ed25519_host_key ]; then "
-        '"$DB_BIN" -E -s -g -p "127.0.0.1:$SSH_PORT" '
-        "-r /tmp/dropbear_ed25519_host_key -P /tmp/dropbear.pid "
-        "2>>/tmp/dropbear.log & fi; fi; fi; fi"
+        '&& BUNDLE_DB_KEY="$DROPBEAR_DEB_DIR/usr/bin/dropbearkey" || BUNDLE_DB_KEY=""; '
+        "DB_KEY=$(command -v dropbearkey 2>/dev/null || true); "
+        '[ -z "$DB_KEY" ] && DB_KEY="$BUNDLE_DB_KEY"; '
+        f'mkdir -p "$(dirname "{dropbear_host_key}")" 2>/dev/null || true; '
+        f'if [ ! -s "{dropbear_host_key}" ] && [ -n "$DB_KEY" ] && [ -x "$DB_KEY" ]; then '
+        f'"$DB_KEY" -t ed25519 -f "{dropbear_host_key}" >/dev/null 2>&1 || true; fi; '
+        f'if [ -s "{dropbear_host_key}" ]; then '
+        '__inspire_start_daemon /tmp/dropbear.log "$DB_BIN" -E -s -g -p "127.0.0.1:$SSH_PORT" '
+        f'-r "{dropbear_host_key}" -P /tmp/dropbear.pid; '
+        "fi; fi; fi; fi"
+    )
+    return _step_block_checked("start_dropbear", [body], ssh_listener_check)
+
+
+def _build_start_rtunnel_step() -> list[str]:
+    rtunnel_process_check = _build_rtunnel_process_check()
+    body = (
+        f'if [ -x "$RTUNNEL_BIN" ] && ! {rtunnel_process_check}; then '
+        '__inspire_start_daemon /tmp/rtunnel-server.log "$RTUNNEL_BIN" "$SSH_PORT" "$PORT"; '
+        "fi"
+    )
+    return _step_block_checked(
+        "start_rtunnel",
+        [body],
+        rtunnel_process_check,
     )
 
 
-def _build_start_rtunnel_cmd() -> str:
-    return (
-        'if [ -x "$RTUNNEL_BIN" ] && ! ps -ef | '
-        'grep -Eq "[r]tunnel .*([[:space:]]|:)$PORT([[:space:]]|$)"; then '
-        'nohup "$RTUNNEL_BIN" "$SSH_PORT" "$PORT" '
-        ">/tmp/rtunnel-server.log 2>&1 & fi"
-    )
+def _build_setup_script_step() -> list[str]:
+    return [
+        '__INSPIRE_STEP="run_setup_script"',
+        '__inspire_mark START "run_setup_script"',
+        'if [ -f "$SETUP_SCRIPT" ]; then',
+        'if { [ ! -f "$SSHD_SENTINEL" ] && [ ! -f "$RTUNNEL_SENTINEL" ] && [ ! -f "$BOOTSTRAP_SENTINEL" ]; } || [ ! -x "$RTUNNEL_BIN" ]; then',
+        "set +e",
+        '"$__INSPIRE_BASH" "$SETUP_SCRIPT" "$DROPBEAR_DEB_DIR" "$RTUNNEL_BIN_PATH" "$SSH_PORT" "$PORT" >/tmp/setup_ssh.log 2>&1;',
+        "_step_rc=$?",
+        "set -e",
+        'if [ $_step_rc -eq 0 ] && [ -x "$RTUNNEL_BIN" ]; then',
+        'mkdir -p "${SSHD_SENTINEL%/*}" "${RTUNNEL_SENTINEL%/*}" && touch "$SSHD_SENTINEL" "$RTUNNEL_SENTINEL" "$BOOTSTRAP_SENTINEL";',
+        '  __inspire_mark OK "run_setup_script"',
+        "else",
+        'rm -f "$SSHD_SENTINEL" "$RTUNNEL_SENTINEL" "$BOOTSTRAP_SENTINEL";',
+        "  _step_out=$(tail -80 /tmp/setup_ssh.log 2>/dev/null || true)",
+        '  [ -n "$_step_out" ] || _step_out="setup script exited with code $_step_rc"',
+        "  __inspire_fail $_step_rc $LINENO "
+        '\'"$__INSPIRE_BASH" "$SETUP_SCRIPT" "$DROPBEAR_DEB_DIR" "$RTUNNEL_BIN_PATH" "$SSH_PORT" "$PORT"\' '
+        '"$_step_out"',
+        "  exit $_step_rc",
+        "fi; fi;",
+        "else true; fi",
+        '__INSPIRE_STEP="setup"',
+    ]
 
 
 def _build_ssh_listener_check() -> str:
@@ -318,13 +423,28 @@ def _build_ssh_listener_check() -> str:
     )
 
 
-def _build_ssh_server_status_cmd(*, include_sshd_marker: bool) -> str:
+def _build_verify_ssh_listener_step(*, include_sshd_marker: bool) -> list[str]:
     status_check = _build_ssh_listener_check()
-    parts: list[str] = []
+    body = ""
     if include_sshd_marker:
-        parts.append(f'if [ ! -x /usr/sbin/sshd ]; then echo "{SSHD_MISSING_MARKER}"; fi')
-    parts.append(f'if {status_check}; then true; else echo "{SSH_SERVER_MISSING_MARKER}"; fi')
-    return "; ".join(parts)
+        body += f'if [ ! -x /usr/sbin/sshd ]; then echo "{SSHD_MISSING_MARKER}"; fi; '
+    body += f'if {status_check}; then true; else echo "{SSH_SERVER_MISSING_MARKER}"; fi'
+    return _step_block("verify_ssh_listener", [body])
+
+
+def _build_rtunnel_process_check() -> str:
+    return 'ps -efww | grep -Eq "[r]tunnel[^[:space:]]*[[:space:]].*([[:space:]]|:)$PORT([[:space:]]|$)"'
+
+
+def _build_verify_rtunnel_process_step() -> list[str]:
+    rtunnel_process_check = _build_rtunnel_process_check()
+    body = (
+        f"if {rtunnel_process_check}; then "
+        'echo "INSPIRE_RTUNNEL_STATUS=running"; '
+        "else "
+        'echo "INSPIRE_RTUNNEL_STATUS=not_running"; fi'
+    )
+    return _step_block("verify_rtunnel_process", [body])
 
 
 def build_rtunnel_setup_commands(
@@ -335,8 +455,6 @@ def build_rtunnel_setup_commands(
     ssh_runtime: Optional[SshRuntimeConfig] = None,
     contents_api_filename: Optional[str] = None,
 ) -> list[str]:
-    import shlex
-
     if ssh_runtime is None:
         ssh_runtime = resolve_ssh_runtime_config()
 
@@ -346,11 +464,61 @@ def build_rtunnel_setup_commands(
     )
     rtunnel_download_url = ssh_runtime.rtunnel_download_url or DEFAULT_RTUNNEL_DOWNLOAD_URL
 
+    host_key_dir = str(getattr(ssh_runtime, "host_key_dir", "") or "").strip()
+    dropbear_host_key = (
+        posixpath.join(host_key_dir, "dropbear_ed25519_host_key")
+        if host_key_dir
+        else "/tmp/dropbear_ed25519_host_key"
+    )
+
     cmd_lines = [
+        "__INSPIRE_STEP=setup",
+        "__INSPIRE_TRACE=/tmp/inspire-rtunnel-setup-trace.log",
+        ': > "$__INSPIRE_TRACE" 2>/dev/null || true',
+        'exec 9>>"$__INSPIRE_TRACE" 2>/dev/null || true',
+        "if { : >&9; } 2>/dev/null; then BASH_XTRACEFD=9; fi",
+        '__INSPIRE_BASH="$(if [ -x /bin/bash ]; then printf %s /bin/bash; else command -v bash 2>/dev/null || printf %s bash; fi)"',
+        '__INSPIRE_BASE64="$(if [ -x /usr/bin/base64 ]; then printf %s /usr/bin/base64; else command -v base64 2>/dev/null || printf %s base64; fi)"',
+        'export PATH="${PATH:-}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"',
+        "PS4='+ inspire:${LINENO}:${__INSPIRE_STEP:-setup}: '",
+        '__inspire_mark() { echo "INSPIRE_STEP_$1=$2"; }',
+        (
+            "__inspire_start_daemon() { "
+            'local _log="$1"; shift; '
+            "if command -v setsid >/dev/null 2>&1; then "
+            'setsid nohup "$@" </dev/null >>"$_log" 2>&1 & disown; '
+            'else nohup "$@" </dev/null >>"$_log" 2>&1 & disown; fi; }'
+        ),
+        '__inspire_b64_err() { printf "%s" "$1" | head -c 10000 | "$__INSPIRE_BASE64" -w0; }',
+        '__inspire_trace_b64() { tail -80 "$__INSPIRE_TRACE" 2>/dev/null | head -c 20000 | "$__INSPIRE_BASE64" -w0; }',
+        (
+            "__inspire_fail() { "
+            'local _rc="$1" _line="$2" _cmd="${3:-}" _err="${4:-}" '
+            "_cmd_b64 _err_b64 _trace_b64; "
+            "set +x; "
+            '_cmd_b64=$(__inspire_b64_err "$_cmd"); '
+            '_err_b64=$(__inspire_b64_err "$_err"); '
+            "_trace_b64=$(__inspire_trace_b64); "
+            'echo "INSPIRE_STEP_FAILED=${__INSPIRE_STEP:-setup}|line=$_line|rc=$_rc|cmd=$_cmd_b64|err=$_err_b64|trace=$_trace_b64"; '
+            "}"
+        ),
+        (
+            "__inspire_err_trap() { "
+            'local _rc="$1" _line="$2" _cmd="$3"; '
+            'trap - ERR; __inspire_fail "$_rc" "$_line" "$_cmd" ""; '
+            'exit "$_rc"; '
+            "}"
+        ),
+        'trap \'__inspire_err_trap "$?" "$LINENO" "$BASH_COMMAND"\' ERR',
+        "set -Eeuo pipefail",
+        "set -x",
+        "",
         f"PORT={port}",
         f"SSH_PORT={ssh_port}",
         _build_key_setup_line(ssh_public_key),
         f"BOOTSTRAP_SENTINEL={BOOTSTRAP_SENTINEL}",
+        f'SSHD_SENTINEL="{SSHD_SENTINEL}"',
+        f'RTUNNEL_SENTINEL="{RTUNNEL_SENTINEL}"',
     ]
 
     cmd_lines.append(rtunnel_download_url_shell_snippet())
@@ -375,54 +543,32 @@ def build_rtunnel_setup_commands(
     if plan.bootstrap_mode == "dropbear" and ssh_runtime.apt_mirror_url:
         cmd_lines.append(f"APT_MIRROR_URL={shlex.quote(ssh_runtime.apt_mirror_url)}")
 
-    curl_rtunnel_block = _build_curl_rtunnel_block(skip_curl=plan.skip_curl)
-    openssh_bootstrap_cmd = _build_openssh_bootstrap_cmd(curl_rtunnel_block=curl_rtunnel_block)
-    ensure_rtunnel_cmd = _build_ensure_rtunnel_cmd(curl_rtunnel_block=curl_rtunnel_block)
-    start_sshd_cmd = _build_start_sshd_cmd()
-    start_dropbear_cmd = _build_start_dropbear_cmd()
-    start_rtunnel_cmd = _build_start_rtunnel_cmd()
+    cmd_lines.append('RTUNNEL_URL="$RTUNNEL_DOWNLOAD_URL"')
+    cmd_lines.extend(_build_probe_inet_step())
 
     if plan.bootstrap_mode == "dropbear":
         setup_script = ssh_runtime.setup_script
         if setup_script:
             cmd_lines.append(f"SETUP_SCRIPT={shlex.quote(setup_script)}")
-            cmd_lines.append('RTUNNEL_URL="$RTUNNEL_DOWNLOAD_URL"')
             cmd_lines.append(
                 '[ -f "$SETUP_SCRIPT" ] || echo "WARN: setup script not found: $SETUP_SCRIPT '
                 '(falling back to dropbear bootstrap)"'
             )
-            cmd_lines.append(
-                'if [ -f "$SETUP_SCRIPT" ]; then '
-                'if [ ! -f "$BOOTSTRAP_SENTINEL" ] || [ ! -x "$RTUNNEL_BIN" ]; then '
-                'bash "$SETUP_SCRIPT" "$DROPBEAR_DEB_DIR" "$RTUNNEL_BIN_PATH" '
-                '"$SSH_PORT" "$PORT" >/tmp/setup_ssh.log 2>&1; '
-                'if [ $? -eq 0 ] && [ -x "$RTUNNEL_BIN" ]; then touch "$BOOTSTRAP_SENTINEL"; '
-                'else rm -f "$BOOTSTRAP_SENTINEL"; fi; fi; '
-                "else true; fi"
-            )
+            cmd_lines.extend(_build_setup_script_step())
             cmd_lines.append("tail -40 /tmp/setup_ssh.log 2>/dev/null || true")
         else:
-            cmd_lines.append('RTUNNEL_URL="$RTUNNEL_DOWNLOAD_URL"')
-            cmd_lines.append(ensure_rtunnel_cmd)
-        cmd_lines.append(start_dropbear_cmd)
-        cmd_lines.append(start_rtunnel_cmd)
-        cmd_lines.append(_build_ssh_server_status_cmd(include_sshd_marker=False))
+            cmd_lines.extend(_build_ensure_rtunnel_step(skip_curl=plan.skip_curl))
+        cmd_lines.extend(_build_start_dropbear_step(dropbear_host_key))
+        cmd_lines.extend(_build_start_rtunnel_step())
+        cmd_lines.extend(_build_verify_ssh_listener_step(include_sshd_marker=False))
     else:
-        cmd_lines.extend(
-            [
-                'RTUNNEL_URL="$RTUNNEL_DOWNLOAD_URL"',
-                openssh_bootstrap_cmd,
-                start_sshd_cmd,
-                start_rtunnel_cmd,
-                _build_ssh_server_status_cmd(include_sshd_marker=True),
-            ]
-        )
+        cmd_lines.extend(_build_bootstrap_openssh_step(sshd_deb_dir=ssh_runtime.sshd_deb_dir))
+        cmd_lines.extend(_build_ensure_rtunnel_step(skip_curl=plan.skip_curl))
+        cmd_lines.extend(_build_start_sshd_step())
+        cmd_lines.extend(_build_start_rtunnel_step())
+        cmd_lines.extend(_build_verify_ssh_listener_step(include_sshd_marker=True))
 
-    cmd_lines.append(
-        'if ps -ef | grep -Eq "[r]tunnel .*([[:space:]]|:)$PORT([[:space:]]|$)"; then '
-        'echo "INSPIRE_RTUNNEL_STATUS=running"; '
-        'else echo "INSPIRE_RTUNNEL_STATUS=not_running"; fi'
-    )
+    cmd_lines.extend(_build_verify_rtunnel_process_step())
     cmd_lines.append(f"echo {SETUP_DONE_MARKER}")
 
     return cmd_lines
@@ -430,7 +576,10 @@ def build_rtunnel_setup_commands(
 
 __all__ = [
     "BOOTSTRAP_SENTINEL",
+    "SSHD_SENTINEL",
+    "RTUNNEL_SENTINEL",
     "SETUP_DONE_MARKER",
+    "STEP_FAILED_PREFIX",
     "SSHD_MISSING_MARKER",
     "SSH_SERVER_MISSING_MARKER",
     "RtunnelSetupPlan",

@@ -35,6 +35,8 @@ def create_training_job_smart(
     max_running_time_ms: Optional[str] = None,
     shm_gi: Optional[int] = None,
     auto_fault_tolerance: bool = False,
+    keep_alive_on_success: Optional[int] = None,
+    keep_alive_on_fail: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Create training job with smart resource matching."""
     api._check_authentication()
@@ -56,7 +58,7 @@ def create_training_job_smart(
     # Get recommended configuration
     try:
         spec_id, compute_group_id = api.resource_manager.get_recommended_config(
-            resource, prefer_location
+            resource, prefer_location, workspace_id=workspace_id
         )
     except ValueError as e:
         raise ValidationError(f"Resource configuration error: {str(e)}") from e
@@ -99,6 +101,10 @@ def create_training_job_smart(
 
     if auto_fault_tolerance:
         payload["auto_fault_tolerance"] = True
+    if keep_alive_on_success is not None:
+        payload["reserve_on_success_ms"] = str(keep_alive_on_success * 1000)
+    if keep_alive_on_fail is not None:
+        payload["reserve_on_fail_ms"] = str(keep_alive_on_fail * 1000)
 
     try:
         result = api._make_request("POST", api.endpoints.TRAIN_JOB_CREATE, payload)
@@ -118,7 +124,7 @@ def create_training_job_smart(
                 api.resource_manager.refresh_workspace_specs(workspace_id)
                 # Get new recommended config with refreshed specs
                 spec_id, compute_group_id = api.resource_manager.get_recommended_config(
-                    resource, prefer_location
+                    resource, prefer_location, workspace_id=workspace_id
                 )
                 # Update payload with new spec_id
                 framework_item["spec_id"] = spec_id

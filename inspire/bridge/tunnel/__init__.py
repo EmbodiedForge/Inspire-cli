@@ -24,6 +24,8 @@ from .rtunnel import (
     get_rtunnel_path,
 )
 from .ssh import (
+    SSHProbeAttempt,
+    SSHProbeResult,
     _get_proxy_command,
     _test_ssh_connection,
     generate_all_ssh_configs,
@@ -33,13 +35,24 @@ from .ssh import (
     install_all_ssh_configs,
     install_ssh_config,
     is_tunnel_available,
+    probe_ssh_connection,
+    probe_tunnel_available,
 )
 from .scp import run_scp_transfer
+from .connection_pool import (
+    ConnectionPool,
+    close_connection_pool,
+    get_connection_pool,
+    is_paramiko_available,
+)
 from .ssh_exec import (
     build_ssh_process_env,
     get_ssh_command_args,
     run_ssh_command,
+    run_ssh_command_detached,
+    run_ssh_command_pooled,
     run_ssh_command_streaming,
+    run_ssh_command_streaming_pooled,
 )
 from .sync import sync_via_ssh, sync_via_ssh_bundle
 
@@ -53,6 +66,8 @@ __all__ = [
     "TunnelError",
     "TunnelNotAvailableError",
     "has_internet_for_gpu_type",
+    "SSHProbeAttempt",
+    "SSHProbeResult",
     # Config
     "load_tunnel_config",
     "save_tunnel_config",
@@ -61,6 +76,11 @@ __all__ = [
     "_ensure_rtunnel_binary",
     "_get_rtunnel_download_url",
     "get_rtunnel_path",
+    # Connection pool
+    "ConnectionPool",
+    "close_connection_pool",
+    "get_connection_pool",
+    "is_paramiko_available",
     # SSH helpers
     "_get_proxy_command",
     "_test_ssh_connection",
@@ -68,9 +88,14 @@ __all__ = [
     "get_ssh_command_args",
     "get_tunnel_status",
     "is_tunnel_available",
+    "probe_ssh_connection",
+    "probe_tunnel_available",
     "run_scp_transfer",
     "run_ssh_command",
+    "run_ssh_command_detached",
+    "run_ssh_command_pooled",
     "run_ssh_command_streaming",
+    "run_ssh_command_streaming_pooled",
     # ssh-config
     "generate_all_ssh_configs",
     "generate_ssh_config",

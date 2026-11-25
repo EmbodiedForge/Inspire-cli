@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import concurrent.futures
 import hashlib
 import json
 import os
 import time
 import click
+import tomlkit
 
 from inspire.cli.context import (
+    EXIT_CONFIG_ERROR,
+    EXIT_GENERAL_ERROR,
     Context,
     EXIT_API_ERROR,
     pass_context,
@@ -20,8 +24,10 @@ from inspire.cli.utils.notebook_cli import (
     require_web_session,
     resolve_json_output,
 )
+from inspire.cli.utils import project_order as project_order_utils
 from inspire.platform.web import browser_api as browser_api_module
 from inspire.platform.web.session.models import SESSION_CACHE_DIR, normalize_account_for_cache
+from inspire.config import Config, ConfigError
 
 _ZERO_WORKSPACE_ID = "ws-00000000-0000-0000-0000-000000000000"
 _PROJECT_LIST_MAX_WORKERS = 16
@@ -41,6 +47,7 @@ def _project_to_dict(proj: browser_api_module.ProjectInfo) -> dict:
         "project_id": proj.project_id,
         "name": proj.name,
         "workspace_id": proj.workspace_id,
+        "workspace_ids": proj.workspace_ids or [proj.workspace_id],
         "budget": proj.budget,
         "remain_budget": proj.remain_budget,
         "member_remain_budget": proj.member_remain_budget,
@@ -51,7 +58,7 @@ def _project_to_dict(proj: browser_api_module.ProjectInfo) -> dict:
     }
 
 
-def _unique_workspace_ids(values: list[str | None]) -> list[str]:
+def _unique_workspace_ids(values: Iterable[str | None]) -> list[str]:
     unique: list[str] = []
     seen: set[str] = set()
     for value in values:
@@ -71,10 +78,19 @@ def _merge_projects(
     *,
     seen: set[str],
 ) -> None:
+    existing_by_id = {project.project_id: project for project in projects}
     for project in additional:
-        if project.project_id not in seen:
+        existing = existing_by_id.get(project.project_id)
+        if existing is None:
             seen.add(project.project_id)
+            existing_by_id[project.project_id] = project
             projects.append(project)
+            continue
+        if not existing.workspace_ids and existing.workspace_id:
+            existing.workspace_ids = [existing.workspace_id]
+        for workspace_id in project.workspace_ids or [project.workspace_id]:
+            if workspace_id and workspace_id not in existing.workspace_ids:
+                existing.workspace_ids.append(workspace_id)
 
 
 def _collect_workspace_projects(
@@ -224,6 +240,7 @@ def _project_info_to_dict(project: browser_api_module.ProjectInfo) -> dict:
         "project_id": project.project_id,
         "name": project.name,
         "workspace_id": project.workspace_id,
+        "workspace_ids": project.workspace_ids or [project.workspace_id],
         "budget": project.budget,
         "remain_budget": project.remain_budget,
         "member_remain_budget": project.member_remain_budget,
@@ -248,6 +265,12 @@ def _project_info_from_dict(data: dict) -> browser_api_module.ProjectInfo:
         project_id=str(data.get("project_id", "")),
         name=str(data.get("name", "")),
         workspace_id=str(data.get("workspace_id", "")),
+        workspace_ids=[
+            str(workspace_id)
+            for workspace_id in data.get("workspace_ids", [])
+            if str(workspace_id).strip()
+        ]
+        or [str(data.get("workspace_id", ""))],
         budget=_float(data.get("budget")),
         remain_budget=_float(data.get("remain_budget")),
         member_remain_budget=_float(data.get("member_remain_budget")),
@@ -416,30 +439,11 @@ def list_projects_cmd(
     try:
         workspace_ids = session.all_workspace_ids
         if workspace_ids is None:
-            # Workspace discovery never happened (stale session or login
-            # method that doesn't support it).  Try using workspace IDs
-            # from the config; if none are configured, fall back to the
-            # session's single workspace_id.
-            from inspire.config import Config as _Cfg
+            from inspire.platform.web.browser_api.workspaces import try_enumerate_workspaces
 
-            try:
-                _cfg, _ = _Cfg.from_files_and_env(
-                    require_credentials=False, require_target_dir=False
-                )
-                cfg_candidates = [
-                    getattr(_cfg, "workspace_cpu_id", None),
-                    getattr(_cfg, "workspace_gpu_id", None),
-                    getattr(_cfg, "workspace_internet_id", None),
-                ]
-                cfg_workspaces = getattr(_cfg, "workspaces", None)
-                if isinstance(cfg_workspaces, dict):
-                    cfg_candidates.extend(cfg_workspaces.values())
-                cfg_ws = _unique_workspace_ids(cfg_candidates)
-            except Exception:
-                cfg_ws = []
-            workspace_ids = cfg_ws or _unique_workspace_ids(
-                [getattr(session, "workspace_id", None)]
-            )
+            candidates = [str(item.get("id") or "") for item in try_enumerate_workspaces(session)]
+            candidates.append(str(getattr(session, "workspace_id", "") or ""))
+            workspace_ids = _unique_workspace_ids(candidates)
         else:
             workspace_ids = _unique_workspace_ids(list(workspace_ids))
         if not workspace_ids:
@@ -565,7 +569,173 @@ def list_projects_cmd(
     results = [_project_to_dict(p) for p in projects]
 
     if json_output:
-        click.echo(json_formatter.format_json({"projects": results, "total": len(results)}))
+        click.echo(json_formatter.format_json({"items": results, "total": len(results)}))
         return
 
     click.echo(human_formatter.format_project_list(results))
+
+
+@click.command("use")
+@click.argument("project_name")
+@click.option(
+    "--workdir",
+    "-w",
+    type=click.Path(),
+    help="Working directory for the project",
+)
+@pass_context
+def use_project_cmd(
+    ctx: Context,
+    project_name: str,
+    workdir: str | None,
+) -> None:
+    """Quickly set the active project.
+
+    Sets the project as the first item in project_order, making it the
+    default project for subsequent commands.
+
+    \b
+    Examples:
+        inspire project use my-project
+        inspire project use "CQ项目-科研驾驶舱"
+        inspire project use my-project --workdir /path/to/workdir
+    """
+    from inspire.cli.utils.output import emit_success
+
+    try:
+        config, _ = Config.from_files_and_env(require_credentials=False)
+        projects = project_order_utils.fetch_current_account_projects(config)
+        resolved = project_order_utils.resolve_project_ref(project_name, projects=projects)
+        current_order = [
+            entry
+            for entry in project_order_utils.normalize_project_order(
+                project_order_utils.read_project_order(),
+                projects=projects,
+            )
+            if entry != resolved.project_id
+        ]
+        current_order.insert(0, resolved.project_id)
+        project_path = project_order_utils.project_config_path()
+        doc = project_order_utils.load_toml_doc(project_path)
+        if "defaults" not in doc or not isinstance(doc["defaults"], dict):
+            doc["defaults"] = tomlkit.table()
+        doc["defaults"]["project_order"] = current_order
+
+        if workdir:
+            if "projects" not in doc:
+                doc["projects"] = tomlkit.table()
+            if resolved.project_id not in doc["projects"]:
+                doc["projects"][resolved.project_id] = tomlkit.table()
+            doc["projects"][resolved.project_id]["workdir"] = workdir
+
+        project_path.parent.mkdir(parents=True, exist_ok=True)
+        project_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+
+        emit_success(
+            ctx,
+            text=f'Project "{resolved.name or resolved.project_id}" is now active',
+            payload={
+                "project": resolved.project_id,
+                "project_name": resolved.name,
+                "workdir": workdir,
+            },
+        )
+
+    except ConfigError as e:
+        _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
+    except Exception as e:
+        _handle_error(ctx, "Error", str(e), EXIT_GENERAL_ERROR)
+
+
+@click.command("init")
+@click.argument("project_name", required=False)
+@click.option(
+    "--workdir",
+    "-w",
+    type=click.Path(),
+    default=".",
+    help="Working directory for the project (default: current directory)",
+)
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    help="Overwrite existing config if present",
+)
+@pass_context
+def init_project_cmd(
+    ctx: Context,
+    project_name: str | None,
+    workdir: str,
+    force: bool,
+) -> None:
+    """Initialize a lightweight project config.
+
+    Creates ./.inspire/config.toml with minimal configuration.
+    Uses current directory name as project name if not specified.
+
+    \b
+    Examples:
+        inspire project init                    # Use current dir name
+        inspire project init my-project         # Specify project name
+        inspire project init --workdir /path    # Set different workdir
+        inspire project init --force            # Overwrite existing
+    """
+    from pathlib import Path
+    import tomlkit
+    from inspire.config import PROJECT_CONFIG_DIR
+    from inspire.cli.utils.output import emit_success, emit_info
+
+    try:
+        # Auto-detect project name from directory if not provided
+        if not project_name:
+            project_name = Path.cwd().name
+            emit_info(ctx, f'Using current directory name: "{project_name}"')
+
+        project_path = Path.cwd() / PROJECT_CONFIG_DIR / "config.toml"
+
+        # Check if config already exists
+        if project_path.exists() and not force:
+            _handle_error(
+                ctx,
+                "ConfigError",
+                f"Project config already exists: {project_path}",
+                EXIT_CONFIG_ERROR,
+                hint="Use --force to overwrite",
+            )
+            return
+
+        # Create fresh config
+        doc = tomlkit.document()
+        doc.add(tomlkit.comment("Inspire CLI Project Configuration"))
+        doc.add(tomlkit.nl())
+
+        # Add defaults section for future project-level defaults.
+        doc["defaults"] = tomlkit.table()
+
+        # Add project-specific workdir
+        doc["projects"] = tomlkit.table()
+        doc["projects"][project_name] = tomlkit.table()
+        if workdir != ".":
+            doc["projects"][project_name]["workdir"] = workdir
+        else:
+            doc["projects"][project_name]["workdir"] = str(Path.cwd())
+
+        # Write config
+        project_path.parent.mkdir(parents=True, exist_ok=True)
+        project_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+
+        emit_success(
+            ctx,
+            text=f'Project "{project_name}" initialized',
+            payload={
+                "project": project_name,
+                "config_path": str(project_path),
+                "workdir": workdir if workdir != "." else str(Path.cwd()),
+            },
+        )
+
+    except ConfigError as e:
+        _handle_error(ctx, "ConfigError", str(e), EXIT_CONFIG_ERROR)
+    except Exception as e:
+        _handle_error(ctx, "Error", str(e), EXIT_GENERAL_ERROR)
