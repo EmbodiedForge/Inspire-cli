@@ -1,124 +1,55 @@
 # Inspire CLI
 
-Command-line interface for the Inspire HPC training platform.
+Inspire CLI is a command-line client for the Inspire HPC training platform. Use it to
+submit and monitor workloads, inspect GPU availability, and move code and checkpoints
+between your machine and notebooks. The global `--json` flag provides structured output
+for scripts and agents.
 
-**What this is.** The tool we wrote for our own daily work on the platform: submitting training
-jobs, keeping code and checkpoints moving, and getting a shell into notebooks the platform does
-not officially hand out. It is not a platform SDK, not a replacement for the web app, and not a
-coverage-driven client for every Inspire endpoint. A command earns its place by removing a
-foot-gun we actually hit or saving time we actually spend.
+You need an authorized Inspire account to run platform commands. See the
+[security notice](#security-compliance-notice) before using SSH or tunnels.
 
-**Relationship to `qzcli`.** They grew up around the same time and overlap deliberately. Use
-whichever fits your workflow. This one is optimised for scriptable output (`--json` on every
-command), repo-driven job iteration, and SSH/Jupyter bridges into notebooks.
-
-**Support.** Maintained by the people who use it, in daily use; there is no support desk. Read
-the [Security Compliance Notice](#security-compliance-notice) before touching the SSH features -
-one of them crosses a line the platform cares about.
+[Install](#installation) · [Quick start](#quick-start) · [Commands](#commands) · [Changelog](CHANGELOG.md)
 
 ## Installation
 
+You need Python 3.10 or later and [uv](https://docs.astral.sh/uv/getting-started/installation/).
+
 ```bash
-# Recommended for agent hosts: includes the browser extra used by `api eval`.
+uv tool install git+https://github.com/EmbodiedForge/Inspire-cli.git
+inspire --version
+```
+
+For `inspire api eval` or Playwright login, install the browser extra and Chromium.
+
+```bash
 uv tool install --force --refresh 'inspire-cli[browser] @ git+https://github.com/EmbodiedForge/Inspire-cli.git'
 "$(uv tool dir)/inspire-cli/bin/playwright" install chromium
-
-# CLI-only (no browser extra, so `api eval` and Playwright login are unavailable):
-uv tool install git+https://github.com/EmbodiedForge/Inspire-cli.git
 ```
-
-### Local Development
-
-```bash
-git clone https://github.com/EmbodiedForge/Inspire-cli.git inspire-cli
-cd inspire-cli
-uv sync --frozen --dev     # runtime and development dependencies from the lockfile
-uv run --frozen pre-commit install
-uv run inspire --help      # run the working tree without installing anything
-```
-
-Do **not** `uv tool install -e .` this project. An editable install rewrites the shared
-`inspire` binary the moment anyone edits the tree. Install a snapshot instead, and note that
-`--refresh` is required or a cached wheel from an older tree gets reused:
-
-```bash
-uv tool install --force --refresh .
-```
-
-Run the public checks with the versions in the lockfile:
-
-```bash
-uv run --frozen ruff check .
-uv run --frozen black --check .
-uv run --frozen pytest
-```
-
-## Zsh Completion
-
-`inspire` uses Click's native shell completion. On `zsh`, the clean setup is the
-standard `fpath + compinit` flow, the same model many mature CLIs use.
-
-1. Make sure your `~/.zshrc` adds a personal completion directory before `compinit`:
-
-```zsh
-fpath=($HOME/.zsh/completions $fpath)
-autoload -Uz compinit
-compinit
-```
-
-2. Generate the completion function once:
-
-```bash
-mkdir -p ~/.zsh/completions
-_INSPIRE_COMPLETE=zsh_source inspire > ~/.zsh/completions/_inspire
-```
-
-3. Reload your shell:
-
-```bash
-exec zsh
-```
-
-Notes:
-- `oh-my-zsh` is not required.
-- Completion stays local-config-driven through Click `shell_complete=` hooks.
-- For local development, you can replace `inspire` with `uv run inspire` when generating `_inspire`.
 
 ## Quick Start
 
-### 1. Auto-discover your platform
+Register your account and run discovery from the project directory. Replace
+`YOUR_PLATFORM_USERNAME` with your Inspire login. The alias `lab` is local to your machine.
 
 ```bash
 inspire config account register lab \
-  --username YOUR_USERNAME \
-  --base-url https://your-platform.com
-inspire --account lab init --discover --force --yes
+  --username YOUR_PLATFORM_USERNAME \
+  --base-url https://qz.sii.edu.cn
+inspire --account lab init --discover
 ```
 
-This logs into one explicit account, refreshes its live platform catalog, and
-writes the selected account into the current project's `.inspire/config.toml`.
-Global TOML keeps stable Workspace and Project name selectors. Rebuildable IDs,
-Compute Groups, Workspace Specs, and refresh diagnostics are stored separately
-under `~/.local/state/inspire-cli/accounts/lab/discovery.json`.
+Discovery saves the workspace and project catalog for this account and writes the project
+configuration to `.inspire/config.toml`. It can prompt for a password and save it in your local
+global configuration. See [credential handling](#credential-handling) for storage details.
+If CAS requires verification in Chrome, [import the browser session](#restore-a-qz-browser-session)
+and rerun discovery.
 
-Set your password as an env var to avoid repeated prompts:
-```bash
-export INSPIRE_PASSWORD="your_password"
-```
-
-### 2. Verify
+Verify authentication and inspect the platform before submitting workloads.
 
 ```bash
-inspire config show    # Check all values resolved
-inspire config check   # Validate API auth
-```
-
-### 3. Start using
-
-```bash
-inspire resources list          # View GPU availability
-inspire notebook create --name dev --resource 4xCPU --wait
-inspire notebook ssh <id>       # SSH into notebook (auto-installs tunnel)
+inspire --account lab config check
+inspire --account lab resources list
+inspire --account lab --json job list --active
 ```
 
 ## Commands
@@ -184,7 +115,7 @@ resource lives under.
 
 ```bash
 inspire status img-probe            # by name
-inspire status 76f01301             # by ID prefix
+inspire status <id-prefix>          # by ID prefix
 inspire exec img-probe -- pwd       # runs remotely; prints /inspire/hdd/project/...
 inspire resolve img-probe --type notebook --verify
 ```
@@ -231,8 +162,8 @@ inspire sync --check
 # --allow-dirty only accepts local dirty state; Bridge-side dirty files still block sync.
 # --force can reset diverged remote history, but it does not override the remote dirty audit.
 
-# Stream local stdin to remote command (no heredoc quoting hacks)
-inspire bridge exec --bridge mybridge --stdin -- bash -s < scripts/watch_eval.sh
+# Send your local script to a remote shell
+inspire bridge exec --bridge mybridge --stdin -- bash -s < ./watch_eval.sh
 
 # Set up SSH tunnel to a notebook
 inspire notebook ssh <notebook-id> --save-as mybridge
@@ -658,20 +589,81 @@ inspire bridge exec --explain -- python train.py
 | `INSPIRE_NOTEBOOK_PROJECT_ID` | Notebook-specific default project ID |
 | `INSPIRE_APT_MIRROR_URL` | APT mirror URL for offline notebook SSH bootstrap |
 
+## Local Development
+
+```bash
+git clone https://github.com/EmbodiedForge/Inspire-cli.git inspire-cli
+cd inspire-cli
+uv sync --frozen --dev     # runtime and development dependencies from the lockfile
+uv run --frozen pre-commit install
+uv run --frozen inspire --help      # run the working tree without installing anything
+```
+
+Do **not** `uv tool install -e .` this project. An editable install rewrites the shared
+`inspire` binary the moment anyone edits the tree. Install a snapshot instead, and note that
+`--refresh` is required or a cached wheel from an older tree gets reused:
+
+```bash
+uv tool install --force --refresh .
+```
+
+Run the public checks with the versions in the lockfile:
+
+```bash
+uv run --frozen ruff check .
+uv run --frozen black --check .
+uv run --frozen pytest
+```
+
+## Zsh Completion
+
+`inspire` uses Click's native shell completion. On `zsh`, the clean setup is the
+standard `fpath + compinit` flow, the same model many mature CLIs use.
+
+1. Make sure your `~/.zshrc` adds a personal completion directory before `compinit`:
+
+```zsh
+fpath=($HOME/.zsh/completions $fpath)
+autoload -Uz compinit
+compinit
+```
+
+2. Generate the completion function once:
+
+```bash
+mkdir -p ~/.zsh/completions
+_INSPIRE_COMPLETE=zsh_source inspire > ~/.zsh/completions/_inspire
+```
+
+3. Reload your shell:
+
+```bash
+exec zsh
+```
+
+Notes:
+- `oh-my-zsh` is not required.
+- Completion stays local-config-driven through Click `shell_complete=` hooks.
+- For local development, you can replace `inspire` with `uv run inspire` when generating `_inspire`.
+
 ## Documentation
 
-The public mirror ships the CLI, its built-in skills, and standalone regression tests. Run `inspire skills list` to find workflow guides.
+Run `inspire skills list` to find the built-in workflow guides.
 
 ### Restore a QZ browser session
 
-From a source checkout, log in to QZ in Chrome and complete any requested verification. Export the browser storage state to a private file, then import it under the configured account alias.
+Log in to QZ in Chrome and complete any requested verification. Save the session with
+Playwright storage state or `agent-browser state save`. From a source checkout, import that
+file under the configured account alias.
 
 ```bash
 uv run --frozen python scripts/debug_web_session.py import-state /path/to/state.json --account lab
 uv run --frozen python scripts/debug_web_session.py refresh --account lab
 ```
 
-The state export contains session cookies. Keep it out of version control and remove the export after import. The refresh command renews the existing session through SSO cookies. If the platform requires another login, complete it in the browser.
+The export contains session cookies. Keep it out of version control and remove the file after
+import. Refresh renews the session using the existing SSO cookies. Complete any new login
+the platform requests in the browser.
 
 For anything command-specific, `--help` is the reference and is generated from the same tree you
 installed: `inspire job --help`, then `inspire <command> --help`.
